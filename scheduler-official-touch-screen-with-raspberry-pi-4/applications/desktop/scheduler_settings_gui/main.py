@@ -276,147 +276,92 @@ class ControlApp(QMainWindow):
 
 
         # ---------------- Tahajjud Section ----------------
-        self.tahajjud_frame, tahajjud_layout, tahajjud_title = self.create_arabic_section("صلاة التهجد")
-
-        tahajjud_layout = self.tahajjud_frame.layout()
-
-        self.tahajjud_chk = QCheckBox("تشغيل نداء التهجد")
-        self.tahajjud_chk.setChecked(self.config["Settings"].getboolean(TAHAJJUD_ENABLE))
-        self.tahajjud_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
-        self.tahajjud_chk.setLayoutDirection(Qt.RightToLeft)
-        tahajjud_layout.addWidget(self.tahajjud_chk)
-
-
-        self.tahajjud_spin = self.create_spinbox(
-            self.config["Settings"].get(TAHAJJUD_TIME, DEFAULTS_INT[TAHAJJUD_TIME])
-        )
-        tahajjud_form = QFormLayout()
-        self.add_spinbox_row(tahajjud_form, "وقت صلاة التهجد قبل صلاة الفجر (دقيقة)", self.tahajjud_spin)
-        tahajjud_layout.addLayout(tahajjud_form)
-
-        # --- Calculated Tahajjud time (HH:MM) ---
-        self.tahajjud_time_label = QLabel("وقت صلاة التهجد: --")
-        self.tahajjud_time_label.setStyleSheet("font-size: 15px; color: #555;")
-        tahajjud_layout.addWidget(self.tahajjud_time_label)
-
-
-        self.tahajjud_audio_list = self.create_checkable_audio_list(TAHAJJUD_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.tahajjud_frame,
+            self.tahajjud_chk,
+            self.tahajjud_spin,
+            self.tahajjud_time_label,
             self.tahajjud_audio_list,
-            "tahajjud_audio_checked"
+            tahajjud_form
+        ) = self.build_time_audio_section(
+            "صلاة التهجد",
+            TAHAJJUD_ENABLE,
+            TAHAJJUD_TIME,
+            DEFAULTS_INT[TAHAJJUD_TIME],
+            TAHAJJUD_AUDIO_DIR,
+            "tahajjud_audio_checked",
+            "تشغيل نداء التهجد",
+            "وقت صلاة التهجد قبل صلاة الفجر (دقيقة)"
         )
-        tahajjud_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        tahajjud_layout.addWidget(self.tahajjud_audio_list)
-        self.link_checkbox_to_list(self.tahajjud_chk, self.tahajjud_audio_list)
 
         main_layout.addWidget(self.tahajjud_frame)
 
+
         # ---------------- Duha Section ----------------
-        self.duha_frame, duha_layout, duha_title = self.create_arabic_section("صلاة الضحى")
-
-        duha_layout = self.duha_frame.layout()
-
-        self.duha_chk = QCheckBox("تفعيل نداء الضحى")
-        self.duha_chk.setChecked(self.config["Settings"].getboolean(DUHA_ENABLE))
-        self.duha_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
-        self.duha_chk.setLayoutDirection(Qt.RightToLeft)
-        duha_layout.addWidget(self.duha_chk)
-
-        self.duha_spin = self.create_spinbox(
-            self.config["Settings"].get(DUHA_TIME, DEFAULTS_INT[DUHA_TIME])
-        )
-        duha_form = QFormLayout()
-        self.add_spinbox_row(duha_form, "وقت صلاة الضحى قبل صلاة الظهر (دقيقة)", self.duha_spin)
-        duha_layout.addLayout(duha_form)
-
-        # --- Calculated Duha time (HH:MM) ---
-        self.duha_time_label = QLabel("وقت صلاة الضحى: --")
-        self.duha_time_label.setStyleSheet("font-size: 15px; color: #555;")
-        duha_layout.addWidget(self.duha_time_label)
-
-        self.duha_audio_list = self.create_checkable_audio_list(DUHA_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.duha_frame,
+            self.duha_chk,
+            self.duha_spin,
+            self.duha_time_label,
             self.duha_audio_list,
-            "duha_audio_checked"
+            duha_form
+        ) = self.build_time_audio_section(
+            "صلاة الضحى",
+            DUHA_ENABLE,
+            DUHA_TIME,
+            DEFAULTS_INT[DUHA_TIME],
+            DUHA_AUDIO_DIR,
+            "duha_audio_checked",
+            "تفعيل نداء الضحى",
+            "وقت صلاة الضحى قبل صلاة الظهر (دقيقة)"
         )
-        duha_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        duha_layout.addWidget(self.duha_audio_list)
-        self.link_checkbox_to_list(self.duha_chk, self.duha_audio_list)
 
         main_layout.addWidget(self.duha_frame)
 
+
         # ---------------- ATHKAR ALSABAH Section ----------------
-        self.athkar_elsabah_frame, athkar_elsabah_layout, athkar_elsabah_title = self.create_arabic_section("أذكار الصباح")
-
-        
-        athkar_elsabah_layout = self.athkar_elsabah_frame.layout()
-
-        self.athkar_elsabah_chk = QCheckBox("تفعيل أذكار الصباح")
-        self.athkar_elsabah_chk.setChecked(self.config["Settings"].getboolean(ATHKAR_ELSABAH_ENABLE))
-        self.athkar_elsabah_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
-        self.athkar_elsabah_chk.setLayoutDirection(Qt.RightToLeft)
-        athkar_elsabah_layout.addWidget(self.athkar_elsabah_chk)
-
-        self.athkar_elsabah_spin = self.create_spinbox(
-            self.config["Settings"].get(ATHKAR_ELSABAH_TIME, DEFAULTS_INT[ATHKAR_ELSABAH_TIME])
-        )
-        athkar_elsabah_form = QFormLayout()
-        self.add_spinbox_row(athkar_elsabah_form, "وقت أذكار الصباح بعد صلاة الفجر (دقيقة)", self.athkar_elsabah_spin)
-        athkar_elsabah_layout.addLayout(athkar_elsabah_form)
-
-        # --- Calculated Athkar El-Sabah time (HH:MM) ---
-        self.athkar_elsabah_time_label = QLabel("وقت أذكار الصباح: --")
-        self.athkar_elsabah_time_label.setStyleSheet("font-size: 15px; color: #555;")
-        athkar_elsabah_layout.addWidget(self.athkar_elsabah_time_label)
-
-
-        self.athkar_elsabah_audio_list = self.create_checkable_audio_list(ATHKAR_ELSABAH_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.athkar_elsabah_frame,
+            self.athkar_elsabah_chk,
+            self.athkar_elsabah_spin,
+            self.athkar_elsabah_time_label,
             self.athkar_elsabah_audio_list,
-            "athkar_elsabah_audio_checked"
+            athkar_elsabah_form
+        ) = self.build_time_audio_section(
+            "أذكار الصباح",
+            ATHKAR_ELSABAH_ENABLE,
+            ATHKAR_ELSABAH_TIME,
+            DEFAULTS_INT[ATHKAR_ELSABAH_TIME],
+            ATHKAR_ELSABAH_AUDIO_DIR,
+            "athkar_elsabah_audio_checked",
+            "تفعيل أذكار الصباح",
+            "وقت أذكار الصباح بعد صلاة الفجر (دقيقة)"
         )
-        athkar_elsabah_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        athkar_elsabah_layout.addWidget(self.athkar_elsabah_audio_list)
-        # Enable/disable list based on checkbox
-        self.link_checkbox_to_list(self.athkar_elsabah_chk, self.athkar_elsabah_audio_list)
 
         main_layout.addWidget(self.athkar_elsabah_frame)
 
+
         # ---------------- ATHKAR ELMASA Section ----------------
-        self.athkar_elmasa_frame, athkar_elmasa_layout, athkar_elmasa_title = self.create_arabic_section("أذكار المساء")
-
-        athkar_elmasa_layout = self.athkar_elmasa_frame.layout()
-
-        self.athkar_elmasa_chk = QCheckBox("تفعيل أذكار المساء")
-        self.athkar_elmasa_chk.setChecked(self.config["Settings"].getboolean(ATHKAR_ELMASA_ENABLE))
-        self.athkar_elmasa_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
-        self.athkar_elmasa_chk.setLayoutDirection(Qt.RightToLeft)
-        athkar_elmasa_layout.addWidget(self.athkar_elmasa_chk)
-
-        self.athkar_elmasa_spin = self.create_spinbox(
-            self.config["Settings"].get(ATHKAR_ELMASA_TIME, DEFAULTS_INT[ATHKAR_ELMASA_TIME])
-        )
-        athkar_elmasa_form = QFormLayout()
-        self.add_spinbox_row(athkar_elmasa_form, "وقت أذكار المساء بعد صلاة المغرب (دقيقة)", self.athkar_elmasa_spin)
-        athkar_elmasa_layout.addLayout(athkar_elmasa_form)
-
-        # --- Calculated Athkar El-Masa time (HH:MM) ---
-        self.athkar_elmasa_time_label = QLabel("وقت أذكار المساء: --")
-        self.athkar_elmasa_time_label.setStyleSheet("font-size: 15px; color: #555;")
-        athkar_elmasa_layout.addWidget(self.athkar_elmasa_time_label)
-
-        self.athkar_elmasa_audio_list = self.create_checkable_audio_list(ATHKAR_ELMASA_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.athkar_elmasa_frame,
+            self.athkar_elmasa_chk,
+            self.athkar_elmasa_spin,
+            self.athkar_elmasa_time_label,
             self.athkar_elmasa_audio_list,
-            "athkar_elmasa_audio_checked"
+            athkar_elmasa_form
+        ) = self.build_time_audio_section(
+            "أذكار المساء",
+            ATHKAR_ELMASA_ENABLE,
+            ATHKAR_ELMASA_TIME,
+            DEFAULTS_INT[ATHKAR_ELMASA_TIME],
+            ATHKAR_ELMASA_AUDIO_DIR,
+            "athkar_elmasa_audio_checked",
+            "تفعيل أذكار المساء",
+            "وقت أذكار المساء بعد صلاة المغرب (دقيقة)"
         )
-        athkar_elmasa_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        athkar_elmasa_layout.addWidget(self.athkar_elmasa_audio_list)
-        # Enable/disable list based on checkbox
-        self.link_checkbox_to_list(self.athkar_elmasa_chk, self.athkar_elmasa_audio_list)
-
 
         main_layout.addWidget(self.athkar_elmasa_frame)
+
 
         # ---------------- Quran Section ----------------
         self.cron_frame = self.create_section_frame("توقيت قراءة سور مختارة من القرآن الكريم", font_family="Amiri", font_size=25, bold=True)
@@ -580,51 +525,41 @@ class ControlApp(QMainWindow):
         h = minutes // 60
         m = minutes % 60
         return f"{h:02d}:{m:02d}"
-    
-    def get_today_sunrise_dhuhr(self):
-        """
-        Returns (sunrise_minutes, dhuhr_minutes) for today
-        from إدخال-مواقيت-الصلاة-للمستخدم.csv
-        """
+
+    def load_today_prayer_row(self):
         from datetime import datetime
 
         today = datetime.now()
-        month = today.month
-        day = today.day
 
         with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-
             for row in reader:
-                if int(row["Month"]) == month and int(row["Day"]) == day:
-                    sunrise = self.time_to_minutes(row["Sunrise"])
-                    dhuhr = self.time_to_minutes(row["Dhuhr"])
-                    return sunrise, dhuhr
+                if int(row["Month"]) == today.month and int(row["Day"]) == today.day:
+                    return row
 
-        raise ValueError("لم يتم العثور على مواقيت الصلاة لليوم الحالي")
+        raise ValueError("Prayer times not found for today")
+
+    
+    def get_today_sunrise_dhuhr(self):
+        row = self.load_today_prayer_row()
+        sunrise = self.time_to_minutes(row["Sunrise"])
+        dhuhr = self.time_to_minutes(row["Dhuhr"])
+        return sunrise, dhuhr
+
 
         # --- Read today's prayer times from CSV ---
     def get_today_prayer_times(self):
-        from datetime import datetime
+        row = self.load_today_prayer_row()
 
-        today = datetime.now()
-        month, day = today.month, today.day
+        return {
+            "fajr": self.time_to_minutes(row["Fajr"]),
+            "sunrise": self.time_to_minutes(row["Sunrise"]),
+            "dhuhr": self.time_to_minutes(row["Dhuhr"]),
+            "asr": self.time_to_minutes(row["Asr"]),
+            "maghrib": self.time_to_minutes(row["Maghrib"]),
+            "isha": self.time_to_minutes(row["Isha"]),
+        }
 
-        with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if int(row["Month"]) == month and int(row["Day"]) == day:
-                    return {
-                        "fajr": self.time_to_minutes(row["Fajr"]),
-                        "sunrise": self.time_to_minutes(row["Sunrise"]),
-                        "dhuhr": self.time_to_minutes(row["Dhuhr"]),
-                        "asr": self.time_to_minutes(row["Asr"]),
-                        "maghrib": self.time_to_minutes(row["Maghrib"]),
-                        "isha": self.time_to_minutes(row["Isha"]),
-                    }
-
-
-        raise ValueError("Prayer times not found for today")
 
 
     def update_all_time_labels(self):
@@ -673,11 +608,11 @@ class ControlApp(QMainWindow):
             U = self.duha_spin.value()  # user minutes before Dhuhr
 
             # -------- Case 1: too close to Dhuhr --------
-            if U < 30:
+            if U < 20:
                 arabic_warning(
                     self,
                     "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة من صلاة الظهر"
+                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة من صلاة الظهر"
                 )
                 self.duha_spin.setValue(self.last_valid_duha)
                 return
@@ -686,14 +621,14 @@ class ControlApp(QMainWindow):
             sunrise, dhuhr = self.get_today_sunrise_dhuhr()
 
             duha_time = dhuhr - U
-            min_after_sunrise = sunrise + 30
+            min_after_sunrise = sunrise + 20
 
             # -------- Case 2: too close to sunrise --------
             if duha_time <= min_after_sunrise:
                 arabic_warning(
                     self,
                     "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة بعد طلوع الشمس"
+                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة بعد طلوع الشمس"
                 )
                 self.duha_spin.setValue(self.last_valid_duha)
                 return
@@ -905,6 +840,47 @@ class ControlApp(QMainWindow):
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         return frame
 
+    def build_time_audio_section(
+        self,
+        title,
+        enable_key,
+        time_key,
+        default_time,
+        audio_dir,
+        audio_cfg_key,
+        checkbox_text,
+        spin_label_text
+    ):
+        frame, layout, _ = self.create_arabic_section(title)
+
+        chk = QCheckBox(checkbox_text)
+        chk.setChecked(self.config["Settings"].getboolean(enable_key))
+        chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
+        chk.setLayoutDirection(Qt.RightToLeft)
+        layout.addWidget(chk)
+
+        spin = self.create_spinbox(
+            self.config["Settings"].get(time_key, default_time)
+        )
+
+        form = QFormLayout()
+        self.add_spinbox_row(form, spin_label_text, spin)
+        layout.addLayout(form)
+
+        time_label = QLabel("--")
+        time_label.setStyleSheet("font-size: 15px; color: #555;")
+        layout.addWidget(time_label)
+
+        audio_list = self.create_checkable_audio_list(audio_dir)
+        self.load_audio_checked_state(audio_list, audio_cfg_key)
+
+        layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
+        layout.addWidget(audio_list)
+
+        self.link_checkbox_to_list(chk, audio_list)
+
+        return frame, chk, spin, time_label, audio_list, form
+
     def create_arabic_section(self, title_text, font_family="DejaVu Sans", font_size=25, bold=True):
         """
         Create a QFrame section with a styled Arabic title label.
@@ -1099,11 +1075,11 @@ class ControlApp(QMainWindow):
 
     def save_settings(self, show_message=True):
         # --- Validation for Duha ---
-        if self.duha_spin.value() <= 30:
+        if self.duha_spin.value() <= 20:
             arabic_warning(
                 self,
                 "تنبيه",
-                "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة"
+                "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة"
             )
             return False  # indicate save failed
 
@@ -1275,21 +1251,21 @@ class ControlApp(QMainWindow):
 
             U = self.duha_spin.value()
 
-            if U < 30:
+            if U < 20:
                 arabic_warning(
                     self,
                     "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة من صلاة الظهر"
+                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة من صلاة الظهر"
                 )
                 self.unlock_button()
                 return
 
             sunrise, dhuhr = self.get_today_sunrise_dhuhr()
-            if (dhuhr - U) <= (sunrise + 30):
+            if (dhuhr - U) <= (sunrise + 20):
                 arabic_warning(
                     self,
                     "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة بعد طلوع الشمس"
+                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة بعد طلوع الشمس"
                 )
                 self.unlock_button()
                 return

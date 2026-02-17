@@ -99,22 +99,22 @@ class AdhanCounter(QWidget):
         self.layout.addWidget(self.title)
         self.layout.addWidget(self.prayerName)
 
-        # --------- COUNTDOWN VERTICAL SCALE (ONLY CHANGE) ---------
+        # --------- COUNTDOWN CONFIG ---------
         self.countdown.setFont(QFont("Lateef", 160, QFont.Bold))
         self.countdown.setAttribute(Qt.WA_TranslucentBackground)
         self.countdown.setStyleSheet("background: transparent; color: white;")
 
-
         scene = QGraphicsScene(self)
-        proxy = QGraphicsProxyWidget()
-        proxy.setWidget(self.countdown)
-        proxy.setTransform(QTransform().scale(1.0, 1.35))  # vertical only
+        self.proxy = QGraphicsProxyWidget()
+        self.proxy.setWidget(self.countdown)
+        
+        # Set Initial Transform (Standard V1 Look)
+        self.proxy.setTransform(QTransform().scale(1.0, 1.35))
 
         view = QGraphicsView(scene)
-        scene.addItem(proxy)
-
+        scene.addItem(self.proxy)
+        view.setAlignment(Qt.AlignCenter) 
         view.setStyleSheet("background: transparent; border: none;")
-        view.setAlignment(Qt.AlignCenter)
         view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
@@ -124,8 +124,6 @@ class AdhanCounter(QWidget):
         scene.setBackgroundBrush(Qt.transparent)
         view.setBackgroundBrush(Qt.transparent)
         view.setAttribute(Qt.WA_TranslucentBackground)
-        view.setStyleSheet("background: transparent; border: none;")
-
         # ----------------------------------------------------------
 
         self.setLayout(self.layout)
@@ -177,11 +175,31 @@ class AdhanCounter(QWidget):
             self.setStyleSheet("background:#808080;color:white;")
             return
 
+        # =========================================================
+        # 1. ESTABLISH BASELINE (Exact Version 1 Settings)
+        # =========================================================
+        # We reset these every second so normal cases look normal.
+        
+        # Text
         if next_p == "الشروق":
-            self.title.setText("الوقت المتبقي ل ")
+            title_text = "الوقت المتبقي ل "
         else:
-            self.title.setText("الوقت المتبقي لأذان")
+            title_text = "الوقت المتبقي لأذان"
+            
+        # Fonts (V1 Sizes)
+        title_font_size = 30
+        prayer_font_size = 70 
+        
+        # Positioning & Scale
+        proxy_pos_y = 0  # Center (No offset)
+        proxy_scale_y = 1.35 # Standard V1 Stretch
+        
+        # Background
+        bg = "#333333" # Standard Gray
 
+        # =========================================================
+        # 2. CALCULATE TIME
+        # =========================================================
         remaining = int((next_t - now).total_seconds())
         hours = remaining // 3600
         minutes = (remaining % 3600) // 60
@@ -191,24 +209,75 @@ class AdhanCounter(QWidget):
         label = next_p
         if now.date() != next_t.date():
             label += " (غداً)"
-        self.prayerName.setText(label)
 
         since_prev = (now - prev_t).total_seconds()
 
-        # --- LOGIC FOR BACKGROUND COLOR ---
-        
-        # 1. Green: Post-Athan (except Sunrise itself)
-        if 0 <= since_prev <= 1800 and prev_p != "الشروق":
-            bg = "#006600"  # Darker Green
-        
-        # 2. Red: Pre-Athan or Sunrise warning
+        # =========================================================
+        # 3. CONDITIONAL LOGIC (Only override if needed)
+        # =========================================================
+
+        # A. Green: Post-Athan (0 to 20 mins) - Standard Layout
+        if 0 <= since_prev <= 1200 and prev_p != "الشروق":
+            bg = "#006600" # Dark Green
+
+        # B. Red: Pre-Athan Warning (Last 20 mins)
         elif 0 < remaining <= 1200:
-            bg = "#990000"  # Darker Red
+            bg = "#990000" # Dark Red
+            
+            # --- SPECIAL CASE 1: Pre-Dhuhr Warning ---
+            if next_p == "الظهر":
+                title_text = "(الوقت مكروه لصلاة الضحى)" + "<br>" + "الوقت المتبقي لأذان"
+                # Override Layout for this specific case only
+                title_font_size = 30
+                prayer_font_size = 55  # Shrink prayer name
+                proxy_pos_y = -30      # Shift counter up
+                # Scale remains 1.35
+
+        # C. Orange: Between Sunrise (+20mins)
+        elif prev_p == "الشروق" and next_p == "الظهر" and 0 <= since_prev <= 1200:
+            bg = "#BF360C" # Dark Orange
+            title_text = "(الوقت مكروه لصلاة الضحى)" + "<br>" + "الوقت المتبقي لصلاة"
+            label = "الضحى"
+
+            # -----------------------------------
+            # NEW: Count to Sunrise + 20 minutes
+            # -----------------------------------
+            sunrise_str = prayersByDate.get(key_for_date(now), {}).get("الشروق")
+            if sunrise_str:
+                sunrise_dt = build_datetime(now, sunrise_str)
+                duha_end = sunrise_dt + timedelta(minutes=20)
+
+                remaining = int((duha_end - now).total_seconds())
+                if remaining < 0:
+                    remaining = 0
+
+                hours = remaining // 3600
+                minutes = (remaining % 3600) // 60
+
+                self.countdown.setText(f"{hours:02d}:{minutes:02d}")
+
+            # Override Layout for this specific case only
+            title_font_size = 30
+            prayer_font_size = 55   # Shrink prayer name
+            proxy_pos_y = -30       # Shift counter up
+            # Scale remains 1.35
+
+        # =========================================================
+        # 4. APPLY SETTINGS
+        # =========================================================
         
-        # 3. Default
-        else:
-            bg = "#333333"  # Darker Gray
+        self.title.setText(title_text)
+        self.prayerName.setText(label)
         
+        # Apply Fonts
+        self.title.setFont(QFont("Lateef", title_font_size))
+        self.prayerName.setFont(QFont("Lateef", prayer_font_size))
+        
+        # Apply Graphics Transform & Position
+        self.proxy.setPos(0, proxy_pos_y)
+        self.proxy.setTransform(QTransform().scale(1.0, proxy_scale_y))
+        
+        # Apply Colors
         self.setStyleSheet(f"background:{bg};color:white;")
 
     # -------------------------
@@ -234,4 +303,3 @@ if __name__ == "__main__":
     window = AdhanCounter()
     window.show()
     sys.exit(app.exec_())
-
