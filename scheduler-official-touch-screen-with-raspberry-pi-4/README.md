@@ -1,4 +1,4 @@
-# Islamic Prayer Scheduler (Raspberry Pi)
+# Islamic Prayer Scheduler (Official Raspberry Pi touch screen)
 
 This project provides an Islamic prayer time scheduler designed to run on a Raspberry Pi with a touchscreen. Follow the steps below to properly set up and run the application.
 
@@ -13,6 +13,7 @@ The following hardware components are required to run the Islamic Prayer Schedul
 - **Official Raspberry Pi USB-C Power Supply** (5.1V / 3A)
 - **DSI Ribbon Cable** (for connecting the touchscreen display to the Raspberry Pi)
 - **SSD or SD card** (at least 32GB)
+- **Bluetooth speaker**
 
 ## Prerequisites
 - Internet connection
@@ -57,6 +58,14 @@ It should look like the diagram below:
   1. Open **File Manager**.  
   2. Go to **Edit → Preferences**.  
   3. Check the option **"Don't ask options on launch executable file"**.
+
+- **Rotate the display inverted:** 
+There is a bug in Rapberry pi screen and the case that it would not set properly until the screen rotated 180 degree, this bug is not resolved till I wrote this doc 
+  1. Click on the Raspberry Pi icon on the desktop.  
+  2. Navigate to **Preferences → Raspberry Pi Configuration  → Control Centre → Screens**.  
+  3. Click **DSI-1** next to **Orientation**.  
+  4. Click **inverted** to save.  
+
 ---
 
 ### Step 1: Update the System
@@ -90,11 +99,15 @@ mv scheduler-official-touch-screen-with-raspberry-pi-4 scheduler
 ```
 ---
 
-### Step 5: Copy Scheduler to Desktop
+### Step 5: Copy Scheduler directory to Raspberry Desktop Dir
 
 Run:
 ```
 cp -r scheduler ~/Desktop/
+```
+or
+```
+scp -r scheduler <username>@<ip-address>:~/Desktop
 ```
 ---
 
@@ -243,7 +256,7 @@ change the execution permission
 ```code
 sudo chmod +x /usr/local/bin/bt-autoconnect.sh
 ```
-Add this line to crontab:
+Add this line to crontab (if it's not existed):
 ```code
 crontab -e # then add this line:
 @reboot /usr/local/bin/bt-autoconnect.sh
@@ -326,7 +339,7 @@ Reboot the system:
 ```
 sudo reboot
 ```
-Check now:
+Check
 ```
 ihms@raspberrypi:~ $ sudo hwclock -r; date
 2026-01-17 19:15:13.583498+01:00
