@@ -49,8 +49,8 @@ It should look like the diagram below:
 
 - **Enable SSH:**  
   1. Click on the Raspberry Pi icon on the desktop.  
-  2. Navigate to **Preferences → Raspberry Pi Configuration → Interfaces**.  
-  3. Click **Enable** next to SSH.  
+  2. Navigate to **Preferences → Raspberry Pi Configuration  → Control Centre → Interfaces**.  
+  3. Click **Enable** next to **SSH**.  
   4. Click **OK** to save.  
 
 - **Enable Executable Files:**  
@@ -183,6 +183,155 @@ After completing all steps, the Islamic Prayer Scheduler will be fully configure
 - Update the CSV file whenever prayer times change.
 - Re-run the initialization script if major configuration changes are made.
 
+---
+
+## Optional setups:
+### I- Bluetooth setup for a specific output device:
+
+#### 1- Pair to a specific bluetooh device
+##### Install required python pacakge:
+```
+sudo apt install -y pi-bluetooth bluez blueman
+```
+
+##### Add bluetooh to startup menu:
+```
+sudo systemctl enable bluetooth
+sudo systemctl start bluetooth
+sudo systemctl status bluetooth
+```
+
+##### Check if bluetoohctl works:
+```
+bluetoothctl list
+```
+if not, then
+```
+sudo rfkill list all
+sudo rfkill unblock bluetooth
+sudo rfkill list
+
+sudo hciconfig hci0 up
+```
+Then it should work:
+```
+bluetoothctl
+
+power on
+agent on
+default-agent
+scan on
+pair 08:EB:ED:05:62:A3 # replace it with bluetooh MAC ID
+trust 08:EB:ED:05:62:A3 # replace it with bluetooh MAC ID
+connect 08:EB:ED:05:62:A3 # replace it with bluetooh MAC ID
+```
+
+#### 2- Reconnect to the paired bluetooth speaker after OS reboot
+
+##### Note: Replace AA:BB:CC:DD:EE:FF with the paired speaker bluetooth mac address
+
+Create this script
+```code
+sudo tee /usr/local/bin/bt-autoconnect.sh > /dev/null <<'EOF'
+#!/bin/bash
+bluetoothctl <<'BLUETOOTHEOF'
+connect AA:BB:CC:DD:EE:FF
+BLUETOOTHEOF
+EOF
+```
+change the execution permission
+```code
+sudo chmod +x /usr/local/bin/bt-autoconnect.sh
+```
+Add this line to crontab:
+```code
+crontab -e # then add this line:
+@reboot /usr/local/bin/bt-autoconnect.sh
+```
+
+### II- Add Real-Time Clock (RTC) to raspberry:
+The reason of adding RTC is to keep the time clock of the raspberry synced even if there is 
+no internet connection (as it's rely on NTP for time sync)
+
+#### Purchase RTC and connect it to Raspberry
+[RTC Hardware Connection Diagram](assets/raspberry-pi-4-with-raspberry-7-inches-touch-screen-with-RTC.png)
+
+#### Enable RTC from OS:
+  1. Click on the Raspberry Pi icon on the desktop.  
+  2. Navigate to **Preferences → Raspberry Pi Configuration → Control Centre → Interfaces**.  
+  3. Click **Enable** next to **I2C**.  
+  4. Click **OK** to save. 
+
+#### OS Configuration:
+
+Check the ouptput similar to this:
+```
+ihms@raspberrypi:~ $ sudo i2cdetect -y 1
+     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+00:                         -- -- -- -- -- -- -- -- 
+10: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+30: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+40: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+50: -- -- -- -- -- -- -- 57 -- -- -- -- -- -- -- -- 
+60: -- -- -- -- -- -- -- -- 68 -- -- -- -- -- -- -- 
+70: -- -- -- -- -- -- -- --                         
+```
+
+Add this config to config.txt:
+```
+sudo cp /boot/firmware/config.txt /boot/firmware/config.txt.bak
+echo 'dtoverlay=i2c-rtc,ds3231' | sudo tee -a /boot/firmware/config.txt
+```
+
+Reboot the system:
+```
+sudo reboot
+```
+
+Check the time now, the output should be similar to the below one:
+```
+ihms@raspberrypi:~ $ timedatectl
+               Local time: Sat 2026-01-17 19:13:24 CET
+           Universal time: Sat 2026-01-17 18:13:24 UTC
+                 RTC time: Sat 2026-01-17 18:13:24
+                Time zone: Europe/Berlin (CET, +0100)
+System clock synchronized: yes
+              NTP service: active
+          RTC in local TZ: no
+```
+
+Install needed packages:
+```
+sudo apt install -y i2c-tools util-linux-extra
+sudo apt purge fake-hwclock -y
+```
+
+Reboot the system:
+```
+sudo reboot
+```
+
+Sync the RTC time from haredware clock
+```
+$ sudo hwclock -r; date
+2026-01-17 19:15:13.583498+01:00
+Sat Jan 17 07:15:14 PM CET 2026
+
+sudo hwclock --systohc
+```
+
+
+Reboot the system:
+```
+sudo reboot
+```
+Check now:
+```
+ihms@raspberrypi:~ $ sudo hwclock -r; date
+2026-01-17 19:15:13.583498+01:00
+Sat Jan 17 07:15:14 PM CET 2026
+```
 ---
 
 ## License
