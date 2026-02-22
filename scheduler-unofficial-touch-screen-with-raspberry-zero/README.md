@@ -131,7 +131,7 @@ Once the file is ready, copy it to your Desktop using the following exact filena
 The filename must match exactly, including Arabic characters.
 
 ##### Note:
-If you are in **Berlin**, you can use this time file for **2026**:
+If you are in **Berlin**, you can use this prayer-time file for **2026**:
 ```
 cp config/default-prayers-time.csv ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
 ```
