@@ -96,9 +96,13 @@ The system is built on two main pillars:
 
 1. Clone this repository
 
-2. Copy one of the scheduler directories to your Raspberry Pi.
+2. Choose one of these directories based on your hardware choice.
+   - scheduler-official-touch-screen-with-raspberry-pi-4
+   - scheduler-unofficial-touch-screen-with-raspberry-zero
 
-3. Follow the instructions in the README.md file inside the selected scheduler directory to complete the setup.
+3. Copy one of the scheduler directories to your Raspberry Pi.
+
+4. Follow the instructions in the README.md file inside the selected scheduler directory to complete the setup.
 
 ---
 
