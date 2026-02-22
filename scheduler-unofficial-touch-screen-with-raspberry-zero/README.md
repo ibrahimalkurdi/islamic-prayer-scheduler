@@ -99,6 +99,15 @@ scp -r scheduler <username>@<ip-address>:~/Desktop
 ```
 ---
 
+##### Note:
+If you want a sample of audio files, you can [download this file](https://www.dropbox.com/scl/fi/0xk2h8m4s69tiay82r1n4/islamic-prayer-scheduler-audio.zip?rlkey=lpryt444zxazpfflccy04n4ep&st=2fzzwisr&dl=1) and replace it with your auido directory
+```
+cd ~/Desktop/scheduler
+mv audio audio.bak
+cp islamic-prayer-scheduler-audio.zip ./
+unzip islamic-prayer-scheduler-audio.zip
+```
+
 ### Step 6: Add Prayer Times (CSV File)
 
 Create a CSV file containing prayer times for your city and country using the following format:
