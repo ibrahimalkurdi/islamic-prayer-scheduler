@@ -113,6 +113,12 @@ scp -r scheduler <username>@<ip-address>:~/Desktop
 
 ##### Note:
 If you want a sample of audio files, you can [download this file](https://www.dropbox.com/scl/fi/0xk2h8m4s69tiay82r1n4/islamic-prayer-scheduler-audio.zip?rlkey=lpryt444zxazpfflccy04n4ep&st=2fzzwisr&dl=1) and replace it with your auido directory
+```
+cd ~/Desktop/scheduler
+mv audio audio.bak
+cp islamic-prayer-scheduler-audio.zip ./
+unzip islamic-prayer-scheduler-audio.zip
+```
 
 ### Step 6: Add Prayer Times (CSV File)
 
@@ -348,6 +354,7 @@ ihms@raspberrypi:~ $ sudo hwclock -r; date
 2026-01-17 19:15:13.583498+01:00
 Sat Jan 17 07:15:14 PM CET 2026
 ```
+
 
 
 
