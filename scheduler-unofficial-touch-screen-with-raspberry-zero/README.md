@@ -249,9 +249,3 @@ Add this line to crontab (if it's not existed):
 crontab -e # then add this line:
 @reboot /usr/local/bin/bt-autoconnect.sh
 ```
-
----
-
-## License
-
-Specify your project license here.
