@@ -139,7 +139,14 @@ Once the file is ready, copy it to your Desktop using the following exact filena
 ```
 ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
 ```
-IMPORTANT: The filename must match exactly, including Arabic characters.
+##### IMPORTANT: 
+The filename must match exactly, including Arabic characters.
+
+##### Note:
+If you are in **Berlin**, you can use this time file for 2026:
+```
+cp config/default-prayers-time.csv ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
+```
 
 ---
 
@@ -354,6 +361,7 @@ ihms@raspberrypi:~ $ sudo hwclock -r; date
 2026-01-17 19:15:13.583498+01:00
 Sat Jan 17 07:15:14 PM CET 2026
 ```
+
 
 
 
