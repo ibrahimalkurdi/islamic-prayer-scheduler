@@ -345,11 +345,7 @@ ihms@raspberrypi:~ $ sudo hwclock -r; date
 2026-01-17 19:15:13.583498+01:00
 Sat Jan 17 07:15:14 PM CET 2026
 ```
----
 
-## License
-
-Specify your project license here.
 
 
 
