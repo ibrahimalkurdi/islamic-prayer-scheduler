@@ -89,6 +89,63 @@ else
 fi
 
 #######################################
+# Disable Wi-Fi power management
+#######################################
+
+echo "Configuring Wi-Fi power management..."
+
+# Disable NetworkManager Wi-Fi powersave
+WIFI_CONF="/etc/NetworkManager/conf.d/wifi-powersave.conf"
+
+if [[ -f "$WIFI_CONF" ]]; then
+    if grep -q "wifi.powersave *= *2" "$WIFI_CONF"; then
+        echo "Wi-Fi powersave already disabled in NetworkManager"
+    else
+        echo "Updating Wi-Fi powersave setting..."
+        echo -e "[connection]\nwifi.powersave = 2" | sudo tee "$WIFI_CONF" > /dev/null
+    fi
+else
+    echo "Creating Wi-Fi powersave config..."
+    echo -e "[connection]\nwifi.powersave = 2" | sudo tee "$WIFI_CONF" > /dev/null
+fi
+
+# Disable SDIO runtime power management
+CMDLINE_FILE="/boot/firmware/cmdline.txt"
+
+if grep -q "sdio_disable_runtime_pm=1" "$CMDLINE_FILE"; then
+    echo "SDIO runtime power management already disabled"
+else
+    echo "Disabling SDIO runtime power management..."
+    sudo sed -i '1 s/$/ sdio_disable_runtime_pm=1/' "$CMDLINE_FILE"
+fi
+
+# Configure brcmfmac driver options
+BRCM_CONF="/etc/modprobe.d/brcmfmac.conf"
+
+NEED_WRITE=false
+
+if [[ -f "$BRCM_CONF" ]]; then
+    if ! grep -q "roamoff=1" "$BRCM_CONF"; then
+        NEED_WRITE=true
+    fi
+    if ! grep -q "feature_disable=0x82000" "$BRCM_CONF"; then
+        NEED_WRITE=true
+    fi
+else
+    NEED_WRITE=true
+fi
+
+if [[ "$NEED_WRITE" = true ]]; then
+    echo "Configuring brcmfmac Wi-Fi driver..."
+    sudo tee "$BRCM_CONF" > /dev/null <<EOF
+options brcmfmac roamoff=1
+options brcmfmac feature_disable=0x82000
+EOF
+else
+    echo "brcmfmac Wi-Fi settings already configured"
+fi
+
+#######################################
 # Desktop shortcuts
 #######################################
 cd "$HOME/Desktop"
@@ -152,4 +209,3 @@ else
 fi
 
 echo "==== Scheduler setup completed successfully ===="
-

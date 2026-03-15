@@ -159,6 +159,7 @@ class AthanScheduler:
             logger.info(f"Executed {event['type']} with audio: {audio_files}")
         except Exception as e:
             logger.error(f"Failed to execute {event['type']}: {e}")
+
     def run(self):
         logger.info("Scheduler started.")
         while True:
@@ -177,18 +178,10 @@ class AthanScheduler:
                 # Calculate seconds from scheduled event
                 delay = (now - event["datetime"]).total_seconds()
     
-                # If event is scheduled for this minute (0 <= delay < 60)
-                if 0 <= delay < 60:
-                    # Try to execute at every second until it succeeds
-                    for sec_offset in range(60 - int(delay)):
-                        now = datetime.now()
-                        current_second = now.second
-                        target_second = event["datetime"].second  # usually 0
-                        if current_second == target_second:
-                            logger.info(f"Triggering {event['type']} at {now}")
-                            self.execute_athan(event)
-                            break  # stop checking once executed
-                        time.sleep(1)  # check every second
+                # Allow small tolerance window to retry if it is not detected
+                if 0 <= delay < 180:   # 3 minutes safety window
+                    logger.info(f"Triggering {event['type']} at {now} (delay={delay:.2f}s)")
+                    self.execute_athan(event)
 
             # Reload schedule at midnight (Fixed Indentation: Moved inside the while loop)
             if now.hour == 0 and now.minute == 0 and now.second < 10:
