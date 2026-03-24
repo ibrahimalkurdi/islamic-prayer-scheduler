@@ -5,8 +5,11 @@ BASE_DIR="$HOME/Desktop/scheduler"
 FONT_DIR="/usr/local/share/fonts/amiri"
 AUTOSTART_DIR="$HOME/.config/autostart"
 DONE_DIR="$BASE_DIR/var/setup_done"
-SERVICE_NAME="audio_event_scheduler.service"
-SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
+SYSTEMCTL_OS_CONFIG_DIR="/etc/systemd/system"
+AUDIO_EVENT_SCHEDULER_SERVICE_NAME="audio_event_scheduler.service"
+AUDIO_EVENT_SCHEDULER_SERVICE_PATH="$SYSTEMCTL_OS_CONFIG_DIR/$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
+WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME="wifi_connectivity_resolver.service"
+WIFI_CONNECTIVITY_RESOLVER_SERVICE_PATH="$SYSTEMCTL_OS_CONFIG_DIR/$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
 
 USER_PRAYERS_CSV="$HOME/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv"
 DEFAULT_PRAYERS_CSV="$BASE_DIR/config/default-prayers-time.csv"
@@ -81,7 +84,11 @@ fi
 #######################################
 if [[ ! -f "$DONE_DIR/settings_applied" ]]; then
     echo "Applying settings..."
-    sudo cp "$BASE_DIR/config/systemd/$SERVICE_NAME" "$SERVICE_PATH"
+    
+    # Copy both systemd service files
+    sudo cp "$BASE_DIR/config/systemd/$AUDIO_EVENT_SCHEDULER_SERVICE_NAME" "$AUDIO_EVENT_SCHEDULER_SERVICE_PATH"
+    sudo cp "$BASE_DIR/config/systemd/$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME" "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_PATH"
+    
     bash "$BASE_DIR/config/scripts/apply_settings.sh"
     touch "$DONE_DIR/settings_applied"
 else
@@ -178,19 +185,29 @@ else
 fi
 
 #######################################
-# Systemd service
+# Systemd services
 #######################################
-if [[ ! -f "$SERVICE_PATH" ]]; then
-    echo "Installing systemd service..."
-    sudo systemctl daemon-reload
+echo "Configuring systemd services..."
+
+# Always reload daemon to ensure systemd sees any newly copied or updated unit files
+sudo systemctl daemon-reload
+
+# 1. Audio Event Scheduler
+if ! systemctl is-enabled --quiet "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"; then
+    sudo systemctl enable "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
 fi
 
-if ! systemctl is-enabled --quiet "$SERVICE_NAME"; then
-    sudo systemctl enable "$SERVICE_NAME"
+if ! systemctl is-active --quiet "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"; then
+    sudo systemctl start "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
 fi
 
-if ! systemctl is-active --quiet "$SERVICE_NAME"; then
-    sudo systemctl start "$SERVICE_NAME"
+# 2. Wi-Fi Connectivity Resolver
+if ! systemctl is-enabled --quiet "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"; then
+    sudo systemctl enable "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
+fi
+
+if ! systemctl is-active --quiet "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"; then
+    sudo systemctl start "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
 fi
 
 #######################################
