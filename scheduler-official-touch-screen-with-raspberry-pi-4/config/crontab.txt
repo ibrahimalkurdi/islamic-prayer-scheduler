@@ -2,3 +2,4 @@
 00 00 * * * echo  > /home/ihms/Desktop/scheduler/logs/audio_event_scheduler.log
 00 00 * * * echo  > /home/ihms/Desktop/scheduler/logs/play_audio.log
 00 00 * * * echo '[]' > /home/ihms/Desktop/scheduler/config/executed-events.json
+00 00 * * * echo  > /home/ihms/Desktop/scheduler/logs/wifi_connectivity_resolver.log
