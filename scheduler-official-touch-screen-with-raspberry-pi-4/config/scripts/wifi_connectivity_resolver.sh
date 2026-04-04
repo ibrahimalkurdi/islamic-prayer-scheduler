@@ -19,15 +19,24 @@ SYSTEMCTL="/bin/systemctl"
 MODPROBE="/sbin/modprobe"
 IP="/usr/sbin/ip"
 IW="/usr/sbin/iw"
+JOURNALCTL="/usr/bin/journalctl"
+DMESG="/bin/dmesg"
 
 # Comman variable
 INTERFACE=$(sudo $NMCLI -t -f DEVICE,TYPE device status | awk -F: '$2=="wifi"{print $1}' | head -n1)
 ROUTER=$(sudo $IP route show default dev "$INTERFACE" | awk '{print $3}' | head -n1)
 INTERNET="8.8.8.8"
+HEALTHY_TICKS=0
+FIRST_RUN=1
+MY_IP=$(hostname -I | awk '{print $1}')
 
 ###########################
 # --- Helper Functions ---
 ###########################
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
 if [ -z "$INTERFACE" ]; then
     log "ERROR: No WiFi interface detected"
     exit 1
@@ -55,10 +64,6 @@ if command -v ethtool > /dev/null; then
     # making SSH much more responsive and preventing the "stale" hang.
     sudo ethtool -K "$INTERFACE" gso off gro off tso off > /dev/null 2>&1
 fi
-
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-}
 
 status_text() {
     if [ "$1" -eq 0 ]; then echo "up"; else echo "down"; fi
@@ -92,19 +97,25 @@ check_connectivity() {
 
     # 3. If healthy, "Wake Up" the entire subnet
     if [ $PING_RESULT -eq 0 ]; then
-        # Ping the dynamic broadcast address once
-        # This forces the Router to announce the Pi to the ThinkPad
-        if [ -n "$BROADCAST" ]; then
-            sudo $PING -W1 -c1 -b "$BROADCAST" > /dev/null 2>&1
+        HEALTHY_TICKS=$((HEALTHY_TICKS + 1))
+
+        if [ $HEALTHY_TICKS -eq 1 ] && [ $FIRST_RUN -eq 0 ]; then
+            log "Connectivity restored — router is reachable again"
+        fi
+        FIRST_RUN=0
+
+        if [ $((HEALTHY_TICKS % 6)) -eq 0 ]; then
+            sudo arping -q -c 2 -I "$INTERFACE" -U -s "$MY_IP" "$MY_IP" > /dev/null 2>&1
+            sudo arping -q -c 1 -I "$INTERFACE" "$ROUTER" > /dev/null 2>&1
         fi
         
         # Keep your existing arping logic here as well
-        MY_IP=$(hostname -I | awk '{print $1}')
         sudo arping -c 1 -I "$INTERFACE" -U -s "$MY_IP" "$MY_IP" > /dev/null 2>&1
         
         return 0
     fi
 
+    HEALTHY_TICKS=0  # reset on failure
     return $PING_RESULT
 }
 
@@ -116,8 +127,8 @@ recover_network() {
         log "WiFi interface state: DOWN"
         log "Attempting to reconnect interface"
         sudo $NMCLI device connect $INTERFACE
-        return 0
         log "=================================================="
+        return 0
     fi
 
     # -------- RX packet watchdog --------
@@ -135,8 +146,8 @@ recover_network() {
         sudo $NMCLI device disconnect $INTERFACE
         sleep 3
         sudo $NMCLI device connect $INTERFACE
-        return 0
         log "=================================================="
+        return 0
     fi
 
     # -------- DHCP / IP change detection --------
@@ -170,7 +181,6 @@ recover_network() {
             log "WARNING: Internet (8.8.8.8) is unreachable, but local WiFi to router is UP. Skipping WiFi recovery to avoid loops."
         fi
         return 0
-        log "=================================================="
     fi
 
     # -------- Problem detected --------
@@ -223,8 +233,8 @@ recover_network() {
     sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         log "Recovery successful after WiFi reconnect"
-        exit 0
         log "=================================================="
+        return 0
     fi
 
     # -------- Recovery step 2 --------
@@ -234,8 +244,8 @@ recover_network() {
     sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         log "Recovery successful after NetworkManager restart"
-        exit 0
         log "=================================================="
+        return 0
     fi
 
     # -------- Recovery step 3 --------
