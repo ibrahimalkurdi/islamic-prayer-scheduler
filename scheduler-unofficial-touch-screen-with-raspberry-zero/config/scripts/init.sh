@@ -10,6 +10,7 @@ AUDIO_EVENT_SCHEDULER_SERVICE_NAME="audio_event_scheduler.service"
 AUDIO_EVENT_SCHEDULER_SERVICE_PATH="$SYSTEMCTL_OS_CONFIG_DIR/$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
 WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME="wifi_connectivity_resolver.service"
 WIFI_CONNECTIVITY_RESOLVER_SERVICE_PATH="$SYSTEMCTL_OS_CONFIG_DIR/$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
+PIPEWIRE_CONFIG_FILE="$BASE_DIR/config/pipewire-pulse.conf"
 
 USER_PRAYERS_CSV="$HOME/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv"
 DEFAULT_PRAYERS_CSV="$BASE_DIR/config/default-prayers-time.csv"
@@ -151,6 +152,23 @@ EOF
 else
     echo "brcmfmac Wi-Fi settings already configured"
 fi
+
+#######################################
+# Configure PipeWire audio
+#######################################
+echo "Configuring PipeWire audio..."
+
+if [[ ! -f "$PIPEWIRE_CONFIG_FILE" ]]; then
+    echo "ERROR: PipeWire config file not found at $PIPEWIRE_CONFIG_FILE"
+    exit 1
+fi
+
+sudo mkdir -p /etc/pipewire
+sudo cp "$PIPEWIRE_CONFIG_FILE" /etc/pipewire/
+
+echo "Restarting PipeWire services..."
+systemctl --user restart pipewire pipewire-pulse
+echo "PipeWire configured and restarted successfully"
 
 #######################################
 # Desktop shortcuts
