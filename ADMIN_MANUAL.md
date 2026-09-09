@@ -438,7 +438,7 @@ ssh <device>.local 'crontab -l | grep check_updates'
 
 | must be | why |
 |---|---|
-| `PIN=` empty | a unit shipped pinned never updates again, silently. The Settings app's **تثبيت الإصدار المحدد** button sets a pin — if you used it while preparing the device, clear it before handover |
+| `PIN=` empty | a unit shipped pinned never updates again, silently. The Settings app's **تثبيت الإصدار المحدد** button sets a pin — if you used it while preparing the device, tick **اتباع الإصدار المركزي عند التحديث التلقائي** before handover |
 | `ENABLED=true` | otherwise the nightly check does nothing |
 | `VARIANT` matching the board | it is cross-checked against the hardware every run |
 | `installed_version` matching what is actually installed | the updater compares against this string, so a wrong value means either a needless reinstall or, worse, a device that thinks it is current and never moves |
@@ -470,11 +470,18 @@ actually happened rather than assuming success.
 | **تثبيت الإصدار المحدد** | writes `PIN=<chosen>` to `update.conf`, then `--target <chosen>` |
 | **الرجوع إلى الإصدار السابق** | `--rollback`. Greyed out with "(لا يوجد)" when no backup is retained; otherwise it names the version it would restore |
 | **تحديث تلقائي يومي** | writes `ENABLED=true` or `ENABLED=false` |
+| **اتباع الإصدار المركزي عند التحديث التلقائي** | ticked = `PIN` empty, so the nightly check follows `VERSIONS.json`. Unticking pins the device to the version it is running. Installing a chosen version above unticks it |
 
 Installing a chosen version **pins** as well as installs. Without the pin, that night's
 check would pull the device straight back to whatever `VERSIONS.json` names — the opposite
-of what choosing a particular version means. To hand a device back to central control,
-clear `PIN=` in `update.conf`.
+of what choosing a particular version means.
+
+Tick **اتباع الإصدار المركزي عند التحديث التلقائي** to hand the device back to central
+control; it writes `PIN=` and nothing else. This matters most on a device you are
+preparing for someone: pinning it while you test and forgetting to clear the pin ships a
+unit that silently never updates again, and once it is in a home you may have no SSH to
+fix it with. The checkbox reflects `PIN`, so it also tells you at a glance whether a device
+is under central control.
 
 The app writes `update.conf` in place, rewriting one line at a time, so anything you set
 by hand — `EXTRA_EXCLUDE`, a custom URL — survives.

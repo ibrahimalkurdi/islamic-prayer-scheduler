@@ -47,13 +47,28 @@ chk("ENABLED=false written", "ENABLED=false" in open(CONF, encoding="utf-8").rea
 w.update_auto_chk.setChecked(True)
 chk("ENABLED=true written", "ENABLED=true" in open(CONF, encoding="utf-8").read(), True)
 
-print("4. choosing nothing is refused, not silently ignored")
+print("4. the follow-central checkbox is the only way back from a pin")
+# Test 2 left the device pinned, which is exactly the state a device being prepared for
+# someone ends up in - and the state it must not ship in.
+w.refresh_update_status()
+chk("a pinned device shows unticked", w.update_follow_chk.isChecked(), False)
+w.update_follow_chk.setChecked(True)
+chk("ticking clears PIN", "PIN=\n" in open(CONF, encoding="utf-8").read(), True)
+chk("and it stays ticked after a refresh", w.update_follow_chk.isChecked(), True)
+# Unticking has to pin to something; the installed version is the only safe choice.
+installed = w.read_update_status().get("installed", "")
+w.update_follow_chk.setChecked(False)
+chk("unticking pins to the installed version",
+    f"PIN={installed}" in open(CONF, encoding="utf-8").read(), True)
+w.update_follow_chk.setChecked(True)
+
+print("5. choosing nothing is refused, not silently ignored")
 seen.clear()
 w.update_version_combo.setCurrentIndex(0)
 w.install_selected_version()
 chk("an error was shown", seen and seen[-1][0], "error")
 
-print("5. status text reflects the device after all of that")
+print("6. status text reflects the device after all of that")
 w.refresh_update_status()
 print("   ", w.update_status_label.text().replace("\n", " | "))
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))

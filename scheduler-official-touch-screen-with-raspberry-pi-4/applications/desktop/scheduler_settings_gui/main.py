@@ -1291,6 +1291,16 @@ class ControlApp(QMainWindow):
         self.update_auto_chk.stateChanged.connect(self.save_update_enabled)
         layout.addWidget(self.update_auto_chk)
 
+        # Ticked means PIN is empty, so the nightly check follows VERSIONS.json. Installing
+        # a chosen version above sets PIN and unticks this; without a control to put it
+        # back, a device pinned while being prepared would be freed only over SSH - which
+        # is not available once it is in someone's home.
+        self.update_follow_chk = QCheckBox("اتباع الإصدار المركزي عند التحديث التلقائي")
+        self.update_follow_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
+        self.update_follow_chk.setLayoutDirection(Qt.RightToLeft)
+        self.update_follow_chk.stateChanged.connect(self.save_update_follow)
+        layout.addWidget(self.update_follow_chk)
+
         self.refresh_update_status()
         return frame
 
@@ -1358,6 +1368,10 @@ class ControlApp(QMainWindow):
         self.update_auto_chk.setChecked(bool(status.get("enabled", True)))
         self.update_auto_chk.blockSignals(False)
 
+        self.update_follow_chk.blockSignals(True)
+        self.update_follow_chk.setChecked(not pinned)
+        self.update_follow_chk.blockSignals(False)
+
     def write_update_conf(self, key, value):
         """update.conf is plain shell, and the updater sources it - so a value is
         rewritten in place rather than the file regenerated, which would lose anything
@@ -1377,6 +1391,24 @@ class ControlApp(QMainWindow):
         except OSError as error:
             arabic_error(self, "تعذر حفظ إعدادات التحديث", str(error))
             return False
+
+    def save_update_follow(self):
+        if self.update_follow_chk.isChecked():
+            self.write_update_conf("PIN", "")
+            self.refresh_update_status()
+            return
+        # Unticking has to pin to something, and the only version this device is known to
+        # work on is the one it is running.
+        installed = self.read_update_status().get("installed", "")
+        if not installed or installed == "unknown":
+            arabic_error(self, "تعذر تثبيت الإصدار",
+                         "الإصدار المثبَّت غير معروف. اختر إصدارًا من القائمة أعلاه وثبِّته.")
+            self.update_follow_chk.blockSignals(True)
+            self.update_follow_chk.setChecked(True)
+            self.update_follow_chk.blockSignals(False)
+            return
+        self.write_update_conf("PIN", installed)
+        self.refresh_update_status()
 
     def save_update_enabled(self):
         self.write_update_conf("ENABLED", "true" if self.update_auto_chk.isChecked() else "false")
