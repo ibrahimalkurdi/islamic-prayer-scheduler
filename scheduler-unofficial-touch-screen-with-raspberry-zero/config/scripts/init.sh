@@ -2,6 +2,8 @@
 set -e
 
 BASE_DIR="$HOME/Desktop/scheduler"
+CONFIG_DIR="$BASE_DIR/config"
+SCRIPTS_DIR="$CONFIG_DIR/scripts"
 FONT_DIR="/usr/local/share/fonts/amiri"
 AUTOSTART_DIR="$HOME/.config/autostart"
 DONE_DIR="$BASE_DIR/var/setup_done"
@@ -15,7 +17,7 @@ PIPEWIRE_CONFIG_FILE="$BASE_DIR/config/pipewire-pulse.conf"
 USER_PRAYERS_CSV="$HOME/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv"
 DEFAULT_PRAYERS_CSV="$BASE_DIR/config/default-prayers-time.csv"
 
-mkdir -p "$DONE_DIR"
+mkdir -p "$DONE_DIR" "$BASE_DIR/var/update/rollback"
 
 echo "==== Scheduler setup started ===="
 
@@ -63,22 +65,44 @@ else
 fi
 
 #######################################
-# Replace hardcoded home directory (run once)
+# Update settings for this device
 #######################################
-if [[ ! -f "$DONE_DIR/home_replaced" ]]; then
-    echo "Replacing hardcoded home directory paths..."
+# Which build this device takes, worked out from the board itself so a card cloned from
+# the other device does not inherit the wrong answer. check_updates.sh re-checks this
+# against the hardware on every run and refuses a release meant for the other variant.
+UPDATE_CONF="$CONFIG_DIR/update.conf"
+PI_MODEL="$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0')"
+case "$PI_MODEL" in
+    *"Raspberry Pi Zero"*)                                      DEVICE_VARIANT="zero" ;;
+    *"Raspberry Pi 4"*|*"Raspberry Pi 5"*|*"Compute Module 4"*) DEVICE_VARIANT="pi4" ;;
+    *) DEVICE_VARIANT="" ;;
+esac
 
-    cd "$BASE_DIR"
-    grep -rl "/home/ihms" . || true
-
-    find . -type f -exec sed -i "s|/home/ihms|$HOME|g" {} +
-    find . -type f -exec sed -i "s|ihms|$USER|g" {} +
-
-    touch "$DONE_DIR/home_replaced"
-    cd -
+if [[ -f "$UPDATE_CONF" ]]; then
+    echo "Update settings already present"
+elif [[ ! -f "$CONFIG_DIR/update.conf.example" ]]; then
+    echo "WARNING: update.conf.example is missing - skipping update settings"
 else
-    echo "Home directory replacement already done"
+    if [[ -z "$DEVICE_VARIANT" ]]; then
+        echo "WARNING: cannot place this board from '$PI_MODEL' - defaulting to zero."
+        echo "         Correct VARIANT in $UPDATE_CONF if that is wrong."
+        DEVICE_VARIANT="zero"
+    fi
+    echo "Creating $UPDATE_CONF (VARIANT=$DEVICE_VARIANT)"
+    sed "s/^VARIANT=.*/VARIANT=$DEVICE_VARIANT/" \
+        "$CONFIG_DIR/update.conf.example" > "$UPDATE_CONF"
 fi
+
+#######################################
+# Point the tree at this device's user
+#######################################
+# The logic lives in its own script because check_updates.sh needs it too - it runs it
+# over a freshly downloaded tree in staging, before any of it is copied into place.
+#
+# No longer run-once guarded. It skips any file that does not carry the template user, so
+# running it every time costs nothing, and every downloaded update arrives carrying the
+# template user again - a guard here would leave those files pointing at the wrong home.
+bash "$SCRIPTS_DIR/set_device_user.sh" "$BASE_DIR"
 
 #######################################
 # Apply settings script (run once)

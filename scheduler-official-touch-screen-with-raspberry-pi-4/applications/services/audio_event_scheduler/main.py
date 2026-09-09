@@ -10,7 +10,9 @@ import configparser
 # ──────────────────────────────────────────────────────────────
 # Paths
 # ──────────────────────────────────────────────────────────────
-MAIN_DIR = "/home/ihms/Desktop/scheduler"
+# Resolved dynamically (not hardcoded) so an updated copy of this file always matches
+# the real user - systemd sets $HOME from the service's User= entry automatically.
+MAIN_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "scheduler")
 CONFIG_DIR = os.path.join(MAIN_DIR, "config")
 SCRIPTS_DIR = os.path.join(MAIN_DIR, "config","scripts")
 LOG_DIR = os.path.join(MAIN_DIR, "logs")
@@ -18,6 +20,7 @@ LOG_DIR = os.path.join(MAIN_DIR, "logs")
 SETTINGS_INI_FILE = os.path.join(CONFIG_DIR, "config.ini")
 PRAYER_PYTHON_MAP_FILE = os.path.join(CONFIG_DIR, "prayer_times_map.py")
 EXECUTED_EVENTS_FILE = os.path.join(CONFIG_DIR, "executed-events.json")
+MUTE_FLAG_FILE = os.path.join(MAIN_DIR, "var", "mute.flag")
 AUDIO_EVENT_SCHEDULER_LOG_FILE = os.path.join(LOG_DIR, "audio_event_scheduler.log")
 PLAYER_APP_SCRIPT_FILE = os.path.join(SCRIPTS_DIR, "play_audio.sh")
 
@@ -44,6 +47,7 @@ def get_audio_for_event(event_type):
         "asr": "asr_audio_checked",
         "maghrib": "maghrib_audio_checked",
         "isha": "isha_audio_checked",
+        "sunrise": "sunrise_audio_checked",
         "tahajjud": "tahajjud_audio_checked",
         "duha": "duha_audio_checked",
         "athkar_elsabah": "athkar_elsabah_audio_checked",
@@ -53,8 +57,19 @@ def get_audio_for_event(event_type):
     key = key_map.get(event_type.lower())
     return config["Settings"].get(key, "") if key else ""
 
+def is_muted():
+    """Toggled by the mute button in the prayer GUI. The flag holds the epoch second the
+    mute lapses; it is read per event rather than cached, so both muting and the expiry
+    take effect without restarting this service."""
+    try:
+        with open(MUTE_FLAG_FILE) as flag:
+            expiry = int(flag.read().strip())
+    except (OSError, ValueError):
+        return False
+    return time.time() < expiry
+
 def load_skipped_events():
-    skipped = ["sunrise"]
+    skipped = []
     if not os.path.exists(SETTINGS_INI_FILE): return skipped
     config = configparser.ConfigParser()
     config.read(SETTINGS_INI_FILE)
@@ -62,6 +77,7 @@ def load_skipped_events():
     # Check prayers
     mapping = {"enable_prayer_fajr":"Fajr", "enable_prayer_dhuhr":"Dhuhr", "enable_prayer_asr":"Asr", 
                "enable_prayer_maghrib":"Maghrib", "enable_prayer_isha":"Isha", "enable_tahajjud_prayer":"Tahajjud",
+               "enable_prayer_sunrise":"Sunrise",
                "enable_duha_prayer":"Duha", "enable_athkar_elsabah":"Athkar_elsabah", "enable_athkar_elmasa":"Athkar_elmasa"}
     
     for key, label in mapping.items():
@@ -147,6 +163,15 @@ class AthanScheduler:
 
     def execute_athan(self, event):
         eid = f"{event['datetime'].strftime('%Y-%m-%d_%H:%M')}_{event['type']}"
+
+        # Marked executed rather than left pending: once its moment has passed the event
+        # should not fire late just because the mute was lifted a minute afterwards.
+        if is_muted():
+            self.executed_events.add(eid)
+            self.save_executed_events()
+            logger.info(f"Skipped {event['type']} (muted)")
+            return
+
         audio_files = get_audio_for_event(event["type"])
         
         # ALWAYS send two parameters: [script, event_type, audio_list]

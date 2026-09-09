@@ -1,0 +1,49 @@
+# Update settings for this device.
+#
+# Copy to config/update.conf to use it. init.sh creates one automatically on a fresh
+# install; this file is here so you can see every knob in one place.
+#
+# config/update.conf is never overwritten by an update - it is on the updater's
+# deny-list along with config.ini, your prayer times and your audio.
+
+# Which build this device takes. Written by init.sh, and cross-checked against the
+# hardware on every run - if this says pi4 and the board is a Zero, the update is
+# refused before anything is downloaded. That is what stops a card cloned from the
+# other device installing the wrong software.
+#   pi4   Raspberry Pi 4 with the official touch screen
+#   zero  Raspberry Pi Zero with the unofficial screen
+VARIANT=pi4
+
+# Set to false to leave this device where it is. The daily cron check does nothing;
+# "تحديث الآن" in the Settings app still works, because pressing a button is a
+# decision to update.
+ENABLED=true
+
+# Hold this device on one version. Empty means follow VERSIONS.json in the repo, which
+# is what decides the version for every device that is not pinned. Set it to a version and the device moves to exactly that - downwards too,
+# so this is also how you go back to a version that worked.
+#   PIN=1.0.3
+PIN=
+
+# How an update is applied. Empty means do what the release asks for.
+#   changed  copy only the files whose contents differ; leave anything else alone
+#   full     also delete files under the updated paths that the release no longer has
+# Releases that rename or remove files ask for "full" themselves; override here only
+# to be more conservative than the release wants.
+APPLY_MODE=
+
+# Paths this device keeps no matter what a release says - for a script you have edited
+# by hand and do not want replaced. Space-separated, relative to the scheduler folder.
+# This can only ever protect more than the release does, never less.
+#   EXTRA_EXCLUDE="config/scripts/play_audio.sh config/pipewire-pulse.conf"
+EXTRA_EXCLUDE=
+
+# Where releases come from, and where the version pointer lives. Only worth changing to
+# test the updater against a local directory - curl reads file:// URLs, so no server is
+# needed:
+#   UPDATE_POINTER_URL="file:///home/pi/fake-releases/VERSIONS.json"
+#   UPDATE_API_URL="file:///home/pi/fake-releases/index.json"
+#   UPDATE_DOWNLOAD_URL="file:///home/pi/fake-releases"
+#UPDATE_POINTER_URL=
+#UPDATE_API_URL=
+#UPDATE_DOWNLOAD_URL=

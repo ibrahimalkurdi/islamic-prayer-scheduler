@@ -4,7 +4,9 @@ import configparser
 import os
 
 # ===== CONFIGURATION =====
-MAIN_DIR = "/home/ihms/Desktop/scheduler"
+# Resolved dynamically (not hardcoded) - this is invoked non-elevated from
+# apply_settings.sh, so $HOME already matches the real user.
+MAIN_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "scheduler")
 CONFIG_DIR = os.path.join(MAIN_DIR, "config")
 
 SETTINGS_INI_FILE = os.path.join(CONFIG_DIR, "config.ini")
@@ -43,9 +45,16 @@ def calculate_tahajjud(fajr_time):
     fajr_dt = datetime.strptime(fajr_time, '%H:%M')
     return (fajr_dt - timedelta(minutes=tahajjud_time)).strftime('%H:%M')
 
-def calculate_athkar_elsabah(fajr_time):
-    fajr_dt = datetime.strptime(fajr_time, '%H:%M')
-    return (fajr_dt + timedelta(minutes=athkar_elsabah_time)).strftime('%H:%M')
+def calculate_athkar_elsabah(row):
+    """Athkar Elsabah must land strictly between Fajr and Dhuhr. The configured value
+    is a single number applied to every day, but the Fajr->Dhuhr duration varies
+    across the year, so clamp per-day: a value that fits today can't push Athkar past
+    Dhuhr on a day whose duration is shorter."""
+    fajr_dt = datetime.strptime(row['Fajr'], '%H:%M')
+    dhuhr_dt = datetime.strptime(row['Dhuhr'], '%H:%M')
+    day_max = int((dhuhr_dt - fajr_dt).total_seconds() // 60) - 1
+    minutes = min(athkar_elsabah_time, max(1, day_max))
+    return (fajr_dt + timedelta(minutes=minutes)).strftime('%H:%M')
 
 def calculate_duha(dhuhr_time):
     dhuhr_dt = datetime.strptime(dhuhr_time, '%H:%M')
@@ -56,7 +65,7 @@ def calculate_athkar_elmasa(maghrib_time):
     return (maghrib_dt + timedelta(minutes=athkar_elmasa_time)).strftime('%H:%M')
 
 # ===== APPLY CALCULATIONS =====
-df['Athkar_elsabah'] = df['Fajr'].apply(calculate_athkar_elsabah)
+df['Athkar_elsabah'] = df.apply(calculate_athkar_elsabah, axis=1)
 df['Duha'] = df['Dhuhr'].apply(calculate_duha)
 df['Athkar_elmasa'] = df['Maghrib'].apply(calculate_athkar_elmasa)
 df['Tahajjud'] = df['Fajr'].apply(calculate_tahajjud)

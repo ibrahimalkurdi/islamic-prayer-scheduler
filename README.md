@@ -104,6 +104,11 @@ The system is built on two main pillars:
 
 4. Follow the instructions in the README.md file inside the selected scheduler directory to complete the setup.
 
+5. To publish updates to devices already in the field, and to roll one back, see
+   [ADMIN_MANUAL.md](ADMIN_MANUAL.md). [`VERSIONS.json`](VERSIONS.json) is the one file
+   that decides which version each device runs — publishing a release does not deploy it,
+   editing that file does.
+
 ---
 
 ## Target Platform

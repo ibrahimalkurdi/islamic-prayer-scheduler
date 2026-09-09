@@ -266,3 +266,103 @@ Add this line to crontab (if it's not existed):
 crontab -e # then add this line:
 @reboot /usr/local/bin/bt-autoconnect.sh
 ```
+
+---
+
+## Updates
+
+Devices update themselves from GitHub Releases. `init.sh` installs a daily cron check at
+02:00, which sits between the latest Isha and the earliest Fajr all year — and the
+updater skips itself anyway while any audio is playing, so an athan is never cut off.
+
+### What an update does and does not touch
+
+A release only replaces the paths its own manifest names. Your settings, your prayer
+times, and your audio are never overwritten — they are protected three times over: the
+packager refuses to put them in the archive, the manifest excludes them, and the updater
+carries a deny-list no release can override.
+
+| kept, always | replaced |
+|---|---|
+| `audio/` — your MP3s | `applications/` |
+| `config/config.ini` — your settings | `config/scripts/`, `config/systemd/` |
+| `config/update.conf` | fonts, icons, presets |
+| the generated CSVs and `prayer_times_map.py` | the `.desktop` entries, `crontab.txt` |
+| `logs/`, `var/` | |
+
+After installing, the updater rebuilds the prayer map from **your** CSV, restarts both
+apps, and runs `config/scripts/health_check.sh`. If that fails it puts the previous
+version back automatically and restarts again, so a bad release cannot leave a
+wall-mounted screen dead.
+
+### Controlling updates on a device
+
+From the Settings app, under **تحديثات البرنامج**: install now, pick a specific version,
+roll back to the previous one, or turn the daily check off. Or edit
+`config/update.conf` directly:
+
+```sh
+VARIANT=zero        # pi4 | zero - cross-checked against the board on every run
+ENABLED=true        # false = never update this device
+PIN=                # empty = follow the newest release; 1.0.3 = hold on exactly 1.0.3
+APPLY_MODE=         # empty = obey the release; changed | full
+EXTRA_EXCLUDE=      # paths this device keeps whatever a release says
+```
+
+`PIN` moves a device in either direction, so it is also how you go back to a version that
+worked. `EXTRA_EXCLUDE` protects a file you have edited by hand without pinning the whole
+device to an old version.
+
+By hand on the device:
+
+```bash
+cd ~/Desktop/scheduler/config/scripts
+bash check_updates.sh --status      # what is installed, what happened last time
+bash check_updates.sh --list        # every published version for this device
+bash check_updates.sh --now         # update to the target now
+bash check_updates.sh --target 1.0.3
+bash check_updates.sh --rollback
+bash health_check.sh                # is this device actually working?
+```
+
+The log is `logs/check_updates.log`.
+
+### Two builds, never mixed
+
+The two device builds are different software, so every release belongs to exactly one and
+tags are prefixed accordingly — `pi4-v1.1.0`, `zero-v1.0.2`.
+
+| variant | tree | hardware |
+|---|---|---|
+| `pi4` | `scheduler-official-touch-screen-with-raspberry-pi-4` | Raspberry Pi 4 + official DSI screen |
+| `zero` | `scheduler-unofficial-touch-screen-with-raspberry-zero` | Raspberry Pi Zero + unofficial screen |
+
+Before downloading anything, a device checks the release's variant against `VARIANT` in
+`update.conf` **and** against `/proc/device-tree/model`. Any disagreement aborts and says
+which of the three disagreed — so a card cloned from the other device cannot install the
+wrong build.
+
+### Publishing a release
+
+From the repo, on a clean tree:
+
+```bash
+tools/make_release.sh zero 1.0.2
+```
+
+It exports the subtree at HEAD, strips every state file, then **proves** none survived
+before building — that check is what stands between a release and shipping someone's
+settings to every device. It writes `dist/scheduler-zero-1.0.2.tar.gz`, `SHA256SUMS` and
+`version.json`, then prints the `gh release create` command to publish them. Add notes to
+`version.json` first if you want them shown.
+
+Set `"apply_mode": "full"` in `version.json` for a release that renames or removes files;
+`changed` (the default) only copies what differs and leaves anything else alone.
+
+If a release changes a systemd unit, the updater applies everything else and reports
+`needs_attention` — the Settings app shows a banner asking for `init.sh` to be run. That
+step needs root, and granting it to the automatic path would be a root grant in all but
+name for something that changes almost never.
+
+---
+

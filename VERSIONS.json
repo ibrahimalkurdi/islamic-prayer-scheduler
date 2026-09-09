@@ -1,0 +1,19 @@
+{
+  "_comment": "The version each device runs, and what an update is allowed to replace on it. This file - not the release list - is what devices read. Publishing a release does not roll it out; editing this file does. Moving a version back rolls that fleet back on its next check. See ADMIN_MANUAL.md section 8b.",
+
+  "_format_version": "The version to install, or \"\" for none yet. Devices upgrade OR downgrade to reach it. A device with PIN set in its own config/update.conf ignores this.",
+  "_format_paths": "exclude: paths this hardware keeps, on top of whatever the release already protects. include: extra paths this hardware takes, on top of what the release ships. Both are additions to the release's own lists, never a replacement. Paths are relative to ~/Desktop/scheduler/ and a trailing slash means a directory.",
+  "_format_shorthand": "A variant with no path rules can be written as just the version string: \"zero\": \"1.0.3\".",
+
+  "pi4": {
+    "version": "",
+    "exclude": [],
+    "include": []
+  },
+
+  "zero": {
+    "version": "",
+    "exclude": [],
+    "include": []
+  }
+}

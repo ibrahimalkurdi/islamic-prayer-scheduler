@@ -4,6 +4,8 @@ import os
 import configparser
 import subprocess
 import csv
+import json
+import re
 
 
 from PyQt5.QtWidgets import (
@@ -23,9 +25,10 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QFrame,
     QListWidget,
-    QListWidgetItem
+    QListWidgetItem,
+    QComboBox
 )
-from PyQt5.QtCore import Qt, QTimer, QSize
+from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QFontMetrics, QIcon
 
 # ---------- ADD THIS ----------
@@ -47,6 +50,16 @@ QURAN_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "quran")
 APPLY_SETTINGS_SCRIPT_FILE = os.path.join(MAIN_DIR, "config", "scripts", "apply_settings.sh")
 APPLY_SETTINGS_LOG_FILE = os.path.join(MAIN_DIR, "logs", "apply_settings.log")
 PRAYER_CSV_FILE = os.path.join(DESKTOP_DIR, "إدخال-مواقيت-الصلاة-للمستخدم.csv")
+
+# ---- updates ----
+SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
+CHECK_UPDATES_SCRIPT_FILE = os.path.join(SCRIPTS_DIR, "check_updates.sh")
+UPDATE_CONF_FILE = os.path.join(MAIN_DIR, "config", "update.conf")
+# Generous: an update downloads, installs, restarts both apps and waits for them to
+# settle before it will call itself finished. Still bounded, so a wedged step cannot
+# leave the button disabled forever with no popup and no way to retry.
+UPDATE_TIMEOUT_SECONDS = 600
+UPDATE_LIST_TIMEOUT_SECONDS = 30
 
 # ---- per-prayer audio directories (NEW) ----
 PRAYER_AUDIO_DIRS = {
@@ -173,6 +186,33 @@ def arabic_confirm(parent, title, text):
     return msg.exec_() == QMessageBox.Yes
 
 # ---------------- Main App ----------------
+class UpdateWorker(QThread):
+    """Runs check_updates.sh off the UI thread, so the touchscreen stays responsive and
+    the popup reports what actually happened instead of assuming success."""
+
+    finished_result = pyqtSignal(bool, str)
+
+    def __init__(self, args, parent=None):
+        super().__init__(parent)
+        self.args = args
+
+    def run(self):
+        success = False
+        output = ""
+        try:
+            result = subprocess.run(
+                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, *self.args],
+                capture_output=True, text=True, timeout=UPDATE_TIMEOUT_SECONDS
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            success = result.returncode == 0
+        except subprocess.TimeoutExpired:
+            output = f"انتهت المهلة بعد {UPDATE_TIMEOUT_SECONDS} ثانية"
+        except OSError as error:
+            output = str(error)
+        self.finished_result.emit(success, output.strip())
+
+
 class ControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -476,6 +516,9 @@ class ControlApp(QMainWindow):
 
         main_layout.addWidget(self.cron_frame)
 
+        # ---------------- Updates Section ----------------
+        main_layout.addWidget(self.build_updates_section())
+
         # ---------------- Buttons ----------------
         btn_layout = QVBoxLayout()
         btn_layout.setSpacing(15)
@@ -562,6 +605,224 @@ class ControlApp(QMainWindow):
 
 
     # ---------------- Helpers ----------------
+    def build_updates_section(self):
+        """Version, and the three things anyone would want to do about it: take the
+        newest one, go to a particular one, or go back to the one that worked."""
+        frame = self.create_section_frame(
+            "تحديثات البرنامج", font_family="Rasheeq", font_size=38, bold=True
+        )
+        layout = frame.layout()
+
+        self.update_status_label = QLabel("")
+        self.update_status_label.setStyleSheet("font-size: 22px; padding: 4px;")
+        self.update_status_label.setWordWrap(True)
+        layout.addWidget(self.update_status_label)
+
+        # Only shown when an update landed something that needs root - a changed systemd
+        # unit. The update itself is applied; this is the part a person has to finish.
+        self.update_attention_label = QLabel("")
+        self.update_attention_label.setStyleSheet(
+            "font-size: 18px; padding: 6px; color: #7a4b00;"
+            " background-color: #fff3cd; border: 1px solid #ffe08a; border-radius: 6px;"
+        )
+        self.update_attention_label.setWordWrap(True)
+        self.update_attention_label.hide()
+        layout.addWidget(self.update_attention_label)
+
+        self.update_now_btn = QPushButton("تحديث الآن")
+        self.update_now_btn.setStyleSheet(self.update_button_style("#198754"))
+        self.update_now_btn.setMinimumHeight(60)
+        self.update_now_btn.clicked.connect(self.run_update_now)
+        layout.addWidget(self.update_now_btn)
+
+        version_row = QHBoxLayout()
+        self.update_version_combo = QComboBox()
+        self.update_version_combo.setLayoutDirection(Qt.RightToLeft)
+        self.update_version_combo.setStyleSheet("font-size: 22px; padding: 5px;")
+        self.update_version_combo.setFixedHeight(50)
+        self.update_version_combo.addItem("اختر إصدارًا…", "")
+        version_row.addWidget(self.update_version_combo, 1)
+
+        self.update_refresh_btn = QPushButton("جلب الإصدارات")
+        self.update_refresh_btn.setStyleSheet(self.update_button_style("#6c757d"))
+        self.update_refresh_btn.setMinimumHeight(50)
+        self.update_refresh_btn.clicked.connect(self.load_available_versions)
+        version_row.addWidget(self.update_refresh_btn)
+        layout.addLayout(version_row)
+
+        self.update_pin_btn = QPushButton("تثبيت الإصدار المحدد")
+        self.update_pin_btn.setStyleSheet(self.update_button_style("#0d6efd"))
+        self.update_pin_btn.setMinimumHeight(60)
+        self.update_pin_btn.clicked.connect(self.install_selected_version)
+        layout.addWidget(self.update_pin_btn)
+
+        self.update_rollback_btn = QPushButton("الرجوع إلى الإصدار السابق")
+        self.update_rollback_btn.setStyleSheet(self.update_button_style("#dc3545"))
+        self.update_rollback_btn.setMinimumHeight(60)
+        self.update_rollback_btn.clicked.connect(self.run_update_rollback)
+        layout.addWidget(self.update_rollback_btn)
+
+        self.update_auto_chk = QCheckBox("تحديث تلقائي يومي")
+        self.update_auto_chk.setStyleSheet("font-size: 22px; padding: 5px; font-weight: bold;")
+        self.update_auto_chk.setLayoutDirection(Qt.RightToLeft)
+        self.update_auto_chk.stateChanged.connect(self.save_update_enabled)
+        layout.addWidget(self.update_auto_chk)
+
+        self.refresh_update_status()
+        return frame
+
+    def update_button_style(self, colour):
+        return (
+            f"QPushButton {{ background-color: {colour}; color: white;"
+            " font-size: 22px; font-weight: bold; border: none; border-radius: 8px;"
+            " padding: 8px; }"
+            "QPushButton:disabled { background-color: #adb5bd; }"
+        )
+
+    # -------------------------
+    # Update helpers
+    # -------------------------
+    def read_update_status(self):
+        try:
+            result = subprocess.run(
+                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, "--status"],
+                capture_output=True, text=True, timeout=20
+            )
+            return json.loads(result.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return {}
+
+    def refresh_update_status(self):
+        status = self.read_update_status()
+        installed = status.get("installed") or "غير معروف"
+        pinned = status.get("pinned") or ""
+        rollback_to = status.get("rollback_to") or ""
+
+        lines = [f"الإصدار المثبَّت: {installed}"]
+        if pinned:
+            lines.append(f"مثبَّت على الإصدار: {pinned}")
+        outcome = {
+            "updated": "آخر عملية: تم التحديث بنجاح",
+            "up_to_date": "آخر فحص: البرنامج محدَّث",
+            "rolled_back": "آخر عملية: تم الرجوع إلى الإصدار السابق",
+            "no_release": "آخر فحص: لا يوجد إصدار منشور",
+            "error": "آخر عملية: فشلت",
+        }.get(status.get("last_result", ""), "")
+        if outcome:
+            checked = status.get("last_checked", "").replace("T", " ")
+            lines.append(f"{outcome}  ({checked})" if checked else outcome)
+        message = status.get("last_message")
+        if message and status.get("last_result") == "error":
+            lines.append(message)
+        self.update_status_label.setText("\n".join(lines))
+
+        attention = status.get("needs_attention")
+        if attention:
+            self.update_attention_label.setText(
+                "هذا التحديث يحتاج إلى إكمال يدوي — شغّل init.sh على الجهاز.\n"
+                f"({attention})"
+            )
+            self.update_attention_label.show()
+        else:
+            self.update_attention_label.hide()
+
+        self.update_rollback_btn.setEnabled(bool(rollback_to))
+        self.update_rollback_btn.setText(
+            f"الرجوع إلى الإصدار {rollback_to}" if rollback_to
+            else "الرجوع إلى الإصدار السابق (لا يوجد)"
+        )
+        self.update_auto_chk.blockSignals(True)
+        self.update_auto_chk.setChecked(bool(status.get("enabled", True)))
+        self.update_auto_chk.blockSignals(False)
+
+    def write_update_conf(self, key, value):
+        """update.conf is plain shell, and the updater sources it - so a value is
+        rewritten in place rather than the file regenerated, which would lose anything
+        the owner had set by hand."""
+        try:
+            with open(UPDATE_CONF_FILE, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            text = ""
+        line = f"{key}={value}"
+        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
+        text = pattern.sub(line, text) if pattern.search(text) else (text.rstrip("\n") + f"\n{line}\n")
+        try:
+            with open(UPDATE_CONF_FILE, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            return True
+        except OSError as error:
+            arabic_error(self, "تعذر حفظ إعدادات التحديث", str(error))
+            return False
+
+    def save_update_enabled(self):
+        self.write_update_conf("ENABLED", "true" if self.update_auto_chk.isChecked() else "false")
+
+    def load_available_versions(self):
+        self.update_refresh_btn.setEnabled(False)
+        self.update_refresh_btn.setText("جارٍ الجلب…")
+        QApplication.processEvents()
+        versions = []
+        try:
+            result = subprocess.run(
+                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, "--list"],
+                capture_output=True, text=True, timeout=UPDATE_LIST_TIMEOUT_SECONDS
+            )
+            versions = [v.strip() for v in result.stdout.splitlines() if v.strip()]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self.update_refresh_btn.setEnabled(True)
+        self.update_refresh_btn.setText("جلب الإصدارات")
+
+        self.update_version_combo.clear()
+        if not versions:
+            self.update_version_combo.addItem("تعذر جلب الإصدارات", "")
+            arabic_error(self, "تعذر جلب الإصدارات",
+                         "تأكد من اتصال الجهاز بالإنترنت ثم أعد المحاولة.")
+            return
+        self.update_version_combo.addItem("اختر إصدارًا…", "")
+        for version in reversed(versions):
+            self.update_version_combo.addItem(version, version)
+
+    def start_update(self, args, busy_text):
+        for button in (self.update_now_btn, self.update_pin_btn, self.update_rollback_btn):
+            button.setEnabled(False)
+        self.update_now_btn.setText(busy_text)
+        self.update_worker = UpdateWorker(args)
+        self.update_worker.finished_result.connect(self.on_update_finished)
+        self.update_worker.start()
+
+    def run_update_now(self):
+        self.start_update(["--now"], "جارٍ التحديث…")
+
+    def install_selected_version(self):
+        version = self.update_version_combo.currentData()
+        if not version:
+            arabic_error(self, "لم يتم اختيار إصدار",
+                         "اضغط «جلب الإصدارات» ثم اختر إصدارًا من القائمة.")
+            return
+        # Pinned as well as installed: without the pin the daily check would pull the
+        # device straight back to the newest release, which is the opposite of what
+        # choosing a particular version means.
+        self.write_update_conf("PIN", version)
+        self.start_update(["--target", version], f"جارٍ التثبيت {version}…")
+
+    def run_update_rollback(self):
+        self.start_update(["--rollback"], "جارٍ الرجوع…")
+
+    def on_update_finished(self, success, output):
+        self.update_now_btn.setText("تحديث الآن")
+        for button in (self.update_now_btn, self.update_pin_btn):
+            button.setEnabled(True)
+        self.refresh_update_status()
+
+        tail = "\n".join(output.splitlines()[-6:]) if output else ""
+        if success:
+            arabic_info(self, "التحديثات", tail or "تمت العملية بنجاح")
+        else:
+            arabic_error(self, "فشلت عملية التحديث",
+                         tail or "راجع سجل logs/check_updates.log على الجهاز.")
+
     def create_bold_label(self, text):
         lbl = QLabel(text)
         lbl.setStyleSheet("font-size: 22px")

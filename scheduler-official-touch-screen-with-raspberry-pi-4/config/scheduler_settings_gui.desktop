@@ -3,7 +3,6 @@ Version=1.0
 Type=Application
 Name=ضبط إعدادات البرامج
 Comment=Touchscreen Application
-#Exec=env DISPLAY=:0 QT_QPA_PLATFORM=xcb python3 /home/ihms/Desktop/my_app/app.py
 Exec=python3 /home/ihms/Desktop/scheduler/applications/desktop/scheduler_settings_gui/main.py
 Icon=athan-settings-app
 Terminal=false

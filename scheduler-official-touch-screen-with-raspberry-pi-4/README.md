@@ -145,8 +145,13 @@ The filename must match exactly, including Arabic characters.
 ##### Note:
 If you are in **Berlin**, you can use this prayer-time file for **2026**:
 ```
-cp config/default-prayers-time.csv ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
+cp config/prayers-config/default-prayers-time.csv ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
 ```
+
+##### Note:
+This step is optional. If no file is present, `init.sh` (Step 7) creates one for you
+from `config/prayers-config/default-prayers-time.csv`, and the Scheduler Settings app
+can change it later at any time — see **Changing prayer times from the app** below.
 
 ---
 
@@ -158,19 +163,29 @@ bash ~/Desktop/scheduler/config/scripts/init.sh
 ```
 ---
 
-### Step 8: Configure Cron Jobs
+### Step 8: Verify Cron Jobs (Check Step)
 
-1. View the cron configuration file:
-```
-   cat ~/Desktop/scheduler/config/crontab.txt
-```
+`init.sh` (Step 7) installs these for you from `~/Desktop/scheduler/config/crontab.txt`.
+No manual editing is needed.
 
-2. Open the crontab editor:
+To verify:
 ```
-   crontab -e
+crontab -l
 ```
 
-3. Copy and paste the contents of crontab.txt into the editor, then save and exit.
+The scheduler's jobs appear between these markers:
+```
+# >>> scheduler jobs (managed by init.sh) >>>
+...
+# <<< scheduler jobs (managed by init.sh) <<<
+```
+
+Re-running `init.sh` replaces that block rather than appending a second copy, so edits to
+`crontab.txt` take effect on the next run. Any cron lines you add outside the markers are
+left untouched.
+
+Note: the `@reboot` Bluetooth job is installed only once
+`/usr/local/bin/bt-autoconnect.sh` exists - see the Bluetooth section below.
 
 ### Step 9: Verify Scheduler Service (Check Step)
 
@@ -198,6 +213,243 @@ Once launched, the applications should appear similar to the images shown below:
 
 
 
+### The Prayer Time app
+
+The app opens on the **countdown** view: the prayer being counted down to — `صلاة العصر`,
+`صلاة المغرب` and so on — above the time remaining until it, on a background that turns
+green, orange or red as that prayer approaches.
+
+الشروق is shown on its own as `الشروق`, since it is neither a صلاة nor has an أذان. When
+the next prayer falls tomorrow, a small `(غداً)` appears above the name.
+
+<p align="center">
+  <img src="assets/screenshot-countdown.png" alt="Countdown view" width="600" />
+</p>
+
+Four buttons sit in the top-left corner:
+
+| Button | Action |
+|---|---|
+| ✖ | Close the app |
+| ⛶ | Toggle fullscreen |
+| ☰ / ◷ | Switch between the countdown and the daily prayer table |
+| 🔊 / 🔇 | Mute or unmute all audio |
+
+#### Daily prayer table
+
+Tap **☰** for the whole day at a glance — الفجر, الشروق, الضحى, الظهر, العصر, المغرب and
+العشاء — with the running period highlighted and a badge counting down the time left in it.
+
+<p align="center">
+  <img src="assets/screenshot-daily-prayers.png" alt="Daily prayer table" width="600" />
+</p>
+
+The colours use the same 20-minute rule as the countdown view:
+
+| Colour | Meaning |
+|---|---|
+| Green | the first 20 minutes after the athan |
+| Red | the last 20 minutes before the next athan |
+| Orange | مكروه — nafl prayer is discouraged right now |
+| Beige | the rest of the period (the countdown view shows plain grey here) |
+
+**مكروه** is shown beside the time during the two windows the countdown view also warns
+about: from الشروق until الضحى opens, and the zawal stretch just before الظهر. In those
+two windows the countdown view shows `(الوقت مكروه لصلاة الضحى)` above the prayer name.
+
+The countdown treats الشروق → الظهر as **الضحى's own period**, matching this table: the
+first 20 minutes after sunrise are الشروق on orange (مكروه), then الضحى runs to الظهر —
+green for its first 20 minutes, red for the zawal at the end.
+
+Tap the date to open a calendar and look at another day. The table returns to today by
+itself after 10 minutes, and while left open it follows the calendar over midnight.
+
+<p align="center">
+  <img src="assets/screenshot-date-picker.png" alt="Date picker" width="600" />
+</p>
+
+#### Muting the athan
+
+Tap **🔊** to silence every scheduled athan, athkar and Quran playback. The icon turns
+into a red **🔇**, and anything playing at that moment stops immediately.
+
+The mute lifts **by itself after one hour**, or right away if you tap the icon again.
+
+<p align="center">
+  <img src="assets/screenshot-daily-prayers-muted.png" alt="Muted state" width="600" />
+</p>
+
+It works by writing the expiry time into `~/Desktop/scheduler/var/mute.flag`. The
+scheduler service and the player script both read that file, so the mute still applies —
+and still expires on time — even if the app is closed while it is active.
+
+---
+
+## Changing prayer times from the app
+
+`~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv` is always the reference file the apps read.
+You can edit it by hand at any time (Step 6 format), or let the **Scheduler Settings GUI**
+fill it for you:
+
+1. Open the Scheduler Settings app. The **"ملف مواقيت الصلاة الحالي"** section shows the
+   reference file, when it was last updated, and which source it came from.
+2. Tap **"تغيير ملف مواقيت الصلاة"** to pick a different source. The dropdown lists:
+   - files found on the Desktop — including any **Al Awail** export named `<city>-<year>.csv`
+     (e.g. `damascus-2026.csv`), which is converted automatically on selection;
+   - or, via the browse toggle, the ready-made presets in `config/prayers-config/`.
+3. If the reference file is missing or invalid when the app starts, this picker appears
+   first and must be completed before the settings screen opens.
+
+Picking a new source **overwrites** the reference file. If it may contain hand edits, the
+app asks for confirmation first. Raw Al Awail exports are archived to
+`config/prayers-config/raw-imports/` when imported.
+
+## Sunrise (الشروق) notification
+
+A short notification can be played at sunrise, separately from the five athans.
+
+- Put the audio in `~/Desktop/scheduler/audio/shorooq/`.
+- Enable or disable it in the Scheduler Settings app under **إعدادات تنبيه الشروق**, where
+  you can also tick which files to play.
+
+<p align="center">
+  <img src="assets/screenshot-settings-sunrise.png" alt="Sunrise notification settings" width="520" />
+</p>
+
+With nothing ticked, every file in the folder is played — the same behaviour as the other
+prayers. Sunrise never interrupts an athan that is still playing.
+
+## Daylight saving
+
+Many published prayer-time tables bake daylight-saving changes into fixed dates, which
+are only correct for the year they were produced for. The **التوقيت الصيفي** section in
+the Scheduler Settings app keeps them right automatically.
+
+Tick **تفعيل التوقيت الصيفي** and choose your country (and city, for countries with more
+than one timezone). The timezone is used **only** to decide when daylight saving starts
+and ends — prayer times themselves always come from your CSV — so pick the region your
+prayer times were calculated for. It is off by default, which suits regions with no
+daylight saving such as Syria and Saudi Arabia.
+
+When enabled, each time the settings are applied the app:
+
+1. detects any daylight-saving changes already present in your file,
+2. compares them with what the chosen timezone actually does this year,
+3. leaves the file alone if they already match, or writes a corrected copy to
+   `config/prayers-config/dst/<name>_DST_<year>.csv` if they do not.
+
+Your original file is never modified — unticking the box reverts to it. The corrected
+times feed the athan schedule and are visible in
+`~/Desktop/اوقات-الصلاة-المستخدمةبالتطبيقات.csv`.
+
+A cron entry re-runs this on 1 January, so the transition dates update themselves each
+year without any manual step (see Step 8).
+
+---
+
+## Updates
+
+Devices update themselves from GitHub Releases. `init.sh` installs a daily cron check at
+02:00, which sits between the latest Isha and the earliest Fajr all year — and the
+updater skips itself anyway while any audio is playing, so an athan is never cut off.
+
+### What an update does and does not touch
+
+A release only replaces the paths its own manifest names. Your settings, your prayer
+times, and your audio are never overwritten — they are protected three times over: the
+packager refuses to put them in the archive, the manifest excludes them, and the updater
+carries a deny-list no release can override.
+
+| kept, always | replaced |
+|---|---|
+| `audio/` — your MP3s | `applications/` |
+| `config/config.ini` — your settings | `config/scripts/`, `config/systemd/` |
+| `config/update.conf` | fonts, icons, presets |
+| the generated CSVs and `prayer_times_map.py` | the `.desktop` entries, `crontab.txt` |
+| `logs/`, `var/` | |
+
+After installing, the updater rebuilds the prayer map from **your** CSV, restarts both
+apps, and runs `config/scripts/health_check.sh`. If that fails it puts the previous
+version back automatically and restarts again, so a bad release cannot leave a
+wall-mounted screen dead.
+
+### Controlling updates on a device
+
+From the Settings app, under **تحديثات البرنامج**: install now, pick a specific version,
+roll back to the previous one, or turn the daily check off. Or edit
+`config/update.conf` directly:
+
+```sh
+VARIANT=pi4         # pi4 | zero - cross-checked against the board on every run
+ENABLED=true        # false = never update this device
+PIN=                # empty = follow the newest release; 1.0.3 = hold on exactly 1.0.3
+APPLY_MODE=         # empty = obey the release; changed | full
+EXTRA_EXCLUDE=      # paths this device keeps whatever a release says
+```
+
+`PIN` moves a device in either direction, so it is also how you go back to a version that
+worked. `EXTRA_EXCLUDE` protects a file you have edited by hand without pinning the whole
+device to an old version.
+
+By hand on the device:
+
+```bash
+cd ~/Desktop/scheduler/config/scripts
+bash check_updates.sh --status      # what is installed, what happened last time
+bash check_updates.sh --list        # every published version for this device
+bash check_updates.sh --now         # update to the target now
+bash check_updates.sh --target 1.0.3
+bash check_updates.sh --rollback
+bash health_check.sh                # is this device actually working?
+```
+
+The log is `logs/check_updates.log`.
+
+### Two builds, never mixed
+
+The two device builds are different software, so every release belongs to exactly one and
+tags are prefixed accordingly — `pi4-v1.1.0`, `zero-v1.0.2`.
+
+| variant | tree | hardware |
+|---|---|---|
+| `pi4` | `scheduler-official-touch-screen-with-raspberry-pi-4` | Raspberry Pi 4 + official DSI screen |
+| `zero` | `scheduler-unofficial-touch-screen-with-raspberry-zero` | Raspberry Pi Zero + unofficial screen |
+
+Before downloading anything, a device checks the release's variant against `VARIANT` in
+`update.conf` **and** against `/proc/device-tree/model`. Any disagreement aborts and says
+which of the three disagreed — so a card cloned from the other device cannot install the
+wrong build.
+
+### Publishing a release
+
+From the repo, on a clean tree:
+
+```bash
+tools/make_release.sh pi4 1.1.0
+```
+
+It exports the subtree at HEAD, strips every state file, then **proves** none survived
+before building — that check is what stands between a release and shipping someone's
+settings to every device. It writes `dist/scheduler-pi4-1.1.0.tar.gz`, `SHA256SUMS` and
+`version.json`, then prints the `gh release create` command to publish them. Add notes to
+`version.json` first if you want them shown.
+
+Set `"apply_mode": "full"` in `version.json` for a release that renames or removes files;
+`changed` (the default) only copies what differs and leaves anything else alone.
+
+If a release changes a systemd unit, the updater applies everything else and reports
+`needs_attention` — the Settings app shows a banner asking for `init.sh` to be run. That
+step needs root, and granting it to the automatic path would be a root grant in all but
+name for something that changes almost never.
+
+---
+
+## User manual (Arabic)
+
+A full Arabic guide to every option in both apps — with screenshots, and without
+the installation steps — is in **[USER_MANUAL_AR.md](USER_MANUAL_AR.md)**
+(دليل المستخدم).
+
 ---
 
 ## Completion
@@ -210,7 +462,18 @@ After completing all steps, the Islamic Prayer Scheduler will be fully configure
 
 - Ensure the system date and timezone are correctly set.
 - Update the CSV file whenever prayer times change.
-- Re-run the initialization script if major configuration changes are made.
+- Re-run the initialization script if major configuration changes are made. It is safe to
+  run repeatedly — every step checks whether it has already been done.
+- `init.sh` installs the fonts the apps need from `config/fonts/`: **Amiri** for the Arabic
+  text, and **Noto Sans Symbols2** for the mute icon. If the mute button appears as an
+  empty box, that font is missing — re-run `init.sh`.
+- Audio for each event lives in `~/Desktop/scheduler/audio/<event>/`
+  (`fajr`, `shorooq`, `duha`, `athkar_elsabah`, `dhuhr`, `asr`, `maghrib`,
+  `athkar_elmasa`, `isha`, `tahajjud`, `quran`). Add or remove `.mp3` files there, then
+  pick them in the Scheduler Settings app.
+- After changing any application file, restart what uses it:
+  `sudo systemctl restart audio_event_scheduler.service` for the scheduler, or simply
+  reopen the GUI apps.
 
 ---
 
@@ -259,7 +522,17 @@ connect 08:EB:ED:05:62:A3 # replace it with bluetooh MAC ID
 
 ##### Note: Replace AA:BB:CC:DD:EE:FF with the paired speaker bluetooth mac address
 
-Create this script
+Once the speaker is paired, re-run `init.sh`:
+```code
+bash ~/Desktop/scheduler/config/scripts/init.sh
+```
+
+It reads the paired device's MAC address, writes `/usr/local/bin/bt-autoconnect.sh` with
+it, makes it executable, and adds the `@reboot` job to the crontab. An existing script is
+never overwritten, so a hand-edited MAC address is safe.
+
+To do it by hand instead - or to point the script at a different speaker than the first
+paired one - create it yourself:
 ```code
 sudo tee /usr/local/bin/bt-autoconnect.sh > /dev/null <<'EOF'
 #!/bin/bash
@@ -272,11 +545,7 @@ change the execution permission
 ```code
 sudo chmod +x /usr/local/bin/bt-autoconnect.sh
 ```
-Add this line to crontab (if it's not existed):
-```code
-crontab -e # then add this line:
-@reboot /usr/local/bin/bt-autoconnect.sh
-```
+then run `init.sh` again to pick up the `@reboot` job.
 
 ### II- Add Real-Time Clock (RTC) to raspberry:
 The reason of adding RTC is to keep the time clock of the raspberry synced even if there is 
