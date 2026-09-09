@@ -54,6 +54,22 @@ else
 fi
 
 #######################################
+# Install xdotool
+#######################################
+# health_check.sh uses it to ask whether the countdown actually has a window on the
+# display, which is the only evidence that separates a working app from one that died
+# on a traceback but left a process behind. Without it that check is skipped, and a
+# frozen wall-mounted screen can go unnoticed for a long time - so it is worth the one
+# small package. check_updates.sh rolls an update back when health_check.sh fails, so
+# this is what lets a broken GUI be caught automatically.
+if ! dpkg -s xdotool >/dev/null 2>&1; then
+    echo "Installing xdotool..."
+    sudo apt install -y xdotool
+else
+    echo "xdotool already installed"
+fi
+
+#######################################
 # Install Amiri font
 #######################################
 if [[ ! -d "$FONT_DIR" ]]; then

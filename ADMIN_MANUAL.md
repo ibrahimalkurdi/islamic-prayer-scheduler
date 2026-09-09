@@ -241,12 +241,12 @@ what `VERSIONS.json` names, and you have not touched it.
 
 ### 3.5 Roll it out
 
-Install it on one device by hand first — `--target` does this without changing anything
-for anyone else:
+Install it on **a device you own** by hand first — never on a customer's unit.
+`--target` does this without changing anything for anyone else:
 
 ```bash
-ssh louay.local 'bash ~/Desktop/scheduler/config/scripts/check_updates.sh --target 1.2.0'
-ssh louay.local 'bash ~/Desktop/scheduler/config/scripts/health_check.sh'
+ssh pi-bench.local 'bash ~/Desktop/scheduler/config/scripts/check_updates.sh --target 1.2.0'
+ssh pi-bench.local 'bash ~/Desktop/scheduler/config/scripts/health_check.sh'
 ```
 
 Live with it for as long as you want. When you are satisfied, point the fleet at it —
@@ -385,9 +385,12 @@ Do not push a release to every device at once. The order that limits damage:
 
 1. **The fixture**, off-device — all three suites green.
 2. **Publish the release, but leave `VERSIONS.json` alone.** Nothing installs yet.
-3. **One Pi 4 you can reach physically**, by hand: `bash check_updates.sh --target 1.2.0`,
-   then read the log before trusting cron with it. Only this device has the new version;
-   the pointer still names the old one.
+3. **A Pi 4 you own and can reach physically**, by hand:
+   `bash check_updates.sh --target 1.2.0`, then read the log before trusting cron with it.
+   Only this device has the new version; the pointer still names the old one.
+   **Never a customer's unit** — a device in someone's home is not a test bed, and a
+   failed update there is a visit, not an inconvenience. If you have no spare Pi, the
+   fixture is your only pre-release gate and step 5 should wait longer, not less.
 4. **Watch it for a day.** Confirm the countdown is right, the athan plays, and a
    settings change made in the GUI survived.
 5. **Set `"pi4"` in `VERSIONS.json` and push.** The remaining Pi 4s pick it up overnight
@@ -421,6 +424,34 @@ or stop it updating at all:
 ssh louay.local "sed -i 's/^ENABLED=.*/ENABLED=false/' ~/Desktop/scheduler/config/update.conf"
 ```
 
+### 5.5 Handing over a customer device
+
+A unit you are preparing for someone else is provisioned once and then left to follow
+`VERSIONS.json` unattended. Before it leaves, check the three things that decide whether
+it will ever receive a fix:
+
+```bash
+ssh <device>.local 'grep -E "^(PIN|ENABLED|VARIANT)=" ~/Desktop/scheduler/config/update.conf'
+ssh <device>.local 'cat ~/Desktop/scheduler/var/installed_version'
+ssh <device>.local 'crontab -l | grep check_updates'
+```
+
+| must be | why |
+|---|---|
+| `PIN=` empty | a unit shipped pinned never updates again, silently. The Settings app's **تثبيت الإصدار المحدد** button sets a pin — if you used it while preparing the device, clear it before handover |
+| `ENABLED=true` | otherwise the nightly check does nothing |
+| `VARIANT` matching the board | it is cross-checked against the hardware every run |
+| `installed_version` matching what is actually installed | the updater compares against this string, so a wrong value means either a needless reinstall or, worse, a device that thinks it is current and never moves |
+| the 02:00 cron line present | no cron line, no updates. `init.sh` installs it |
+
+Install the release you want it to ship with using `--target`, **not** by pointing
+`VERSIONS.json` at it — the pointer is a fleet-wide control and every device in the field
+acts on it overnight.
+
+Once a customer device is in the field, treat `VERSIONS.json` as production: editing it is
+a deploy to people's homes, executed unattended at 02:00 while you are asleep. That is
+what §5.2's ordering is protecting.
+
 ---
 
 ## 6. The Settings app on the device
@@ -434,6 +465,7 @@ actually happened rather than assuming success.
 | status text | installed version, the pin if any, and the last run's outcome with its timestamp |
 | amber banner | only appears when an update landed something that needs root — see [§14](#14-things-this-system-deliberately-will-not-do) |
 | **تحديث الآن** | `check_updates.sh --now` |
+| progress dialog | a modal window with an indeterminate bar, shown for the whole run. It has no close button — there is nothing safe to do half way through an update — and it is the only thing on the screen, because `--now` leaves the countdown closed |
 | **جلب الإصدارات** | `--list`, filling the dropdown newest-first |
 | **تثبيت الإصدار المحدد** | writes `PIN=<chosen>` to `update.conf`, then `--target <chosen>` |
 | **الرجوع إلى الإصدار السابق** | `--rollback`. Greyed out with "(لا يوجد)" when no backup is retained; otherwise it names the version it would restore |
@@ -446,6 +478,19 @@ clear `PIN=` in `update.conf`.
 
 The app writes `update.conf` in place, rewriting one line at a time, so anything you set
 by hand — `EXTRA_EXCLUDE`, a custom URL — survives.
+
+**The countdown does not come back by itself here.** Because `--now` leaves it closed
+([§7](#the-two-modes-and-why-the-screen-differs)), the success dialog tells the user the
+step that is left:
+
+> تم التحديث بنجاح.
+> الإصدار المثبَّت الآن: 1.0.1
+> أغلق هذه النافذة، ثم شغّل تطبيق مواقيت الصلاة من سطح المكتب.
+
+If you are walking someone through an update over the phone, that last line is the part to
+read out. A failure dialog leads with
+`لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.` followed by the tail of the log —
+the device is already back on the previous version by the time it appears.
 
 ---
 
@@ -461,13 +506,48 @@ cd ~/Desktop/scheduler/config/scripts
 | command | behaviour |
 |---|---|
 | `bash check_updates.sh` | **cron mode.** Honours `ENABLED`. Resolves the target, updates if it differs. |
-| `bash check_updates.sh --now` | Update to the resolved target now. **Ignores `ENABLED`** — pressing a button is a decision to update. |
+| `bash check_updates.sh --cron` | Identical to the bare form, said out loud. |
+| `bash check_updates.sh --now` | **Settings mode.** Update to the resolved target now. **Ignores `ENABLED`** — pressing a button is a decision to update. |
 | `bash check_updates.sh --target 1.0.3` | Install exactly this version, up or down. Does not write `PIN` (the Settings app writes it separately). |
 | `bash check_updates.sh --rollback` | Restore the retained previous version. Ignores `ENABLED` and the audio guard. |
 | `bash check_updates.sh --list` | Print every published version for this variant, oldest first. Read-only; writes no log. |
 | `bash check_updates.sh --status` | Print the JSON the Settings app reads. Read-only; writes no log. |
 
 Anything else exits 2 with `unknown option`.
+
+### The two modes, and why the screen differs
+
+`--cron` and `--now` decide two things at once: whether `ENABLED` is honoured, and — less
+obviously — **what is on the screen when the update finishes**.
+
+| | `--cron` (or bare) | `--now` |
+|---|---|---|
+| who is watching | nobody; it is 02:00 | somebody, at the fullscreen Settings app |
+| `ENABLED=false` | stops | ignored |
+| after the copy | kills the countdown and **relaunches it on `:0`** | kills the countdown and **leaves it closed** |
+| how the countdown is judged | `health_check.sh` — all seven checks, on the running app | `health_check.sh --no-gui` (checks 2 and 3 skipped), **plus** a fresh offscreen start |
+| who reopens the countdown | the updater | the user, after closing Settings |
+
+The split exists because the countdown is fullscreen and so is the Settings app. An
+interactive update that relaunched the countdown would map it straight over the window the
+user is looking at; closing it — the obvious thing to do — would then make the health check
+find no GUI and roll back a release that was perfectly good. So an interactive run leaves
+it down and proves it a different way:
+
+> `QT_QPA_PLATFORM=offscreen python3 …/prayer_times_gui/main.py` — started on the newly
+> installed code, held for `GUI_VERIFY_SECONDS` (8 by default), scanned for a traceback,
+> then killed. Its output goes to `logs/prayer_times_gui_check.log`, separate from the real
+> app's log, so this run's noise cannot be mistaken for the live app crashing.
+
+That is a **stricter** test than checks 2 and 3, not a weaker one: it starts the app from
+scratch on the new code, where checks 2 and 3 only look at a process that happens to be up
+and could predate the update. What it does not prove is that the app can create a *real* X
+window — a release that broke `xcb` specifically would pass an interactive update, then be
+caught and rolled back at the next cron run.
+
+**Testing the Settings path over SSH: use `--now`.** A bare `bash check_updates.sh` takes
+the cron path, which will put the countdown back on the screen and run the on-screen
+checks — not what the Settings button does, and confusing to debug.
 
 **Which version it aims for**, highest precedence first:
 
@@ -499,6 +579,7 @@ to match it.
 | variable | default | purpose |
 |---|---|---|
 | `HEALTH_SETTLE_SECONDS` | `15` | how long the apps get to settle before being judged |
+| `GUI_VERIFY_SECONDS` | `8` | how long the offscreen countdown must survive to count as started (`--now` only) |
 | `DEVICE_MODEL_FILE` | `/proc/device-tree/model` | where the hardware identity is read from |
 | `UPDATE_POINTER_URL` | `VERSIONS.json` on `main`, via raw.githubusercontent.com | can also be set in `update.conf` |
 | `UPDATE_API_URL` | GitHub releases API | can also be set in `update.conf` |
@@ -717,8 +798,8 @@ completely untouched.
 | 13 | rsync staging → live, per `apply_mode` | restores the backup, restarts, exits 1 |
 | 14 | compare shipped `config/systemd/*.service` against `/etc/systemd/system/` | records `needs_attention`; does not stop the update |
 | 15 | run `apply_settings.sh` — rebuilds the prayer map from this device's own CSV | logs a warning and continues |
-| 16 | restart the athan service and relaunch the GUI | logs a warning |
-| 17 | wait `HEALTH_SETTLE_SECONDS`, run `health_check.sh` | **restores the backup, restarts, verifies again** |
+| 16 | restart the athan service; kill the countdown, and relaunch it on `:0` **only in cron mode** | logs a warning |
+| 17 | wait `HEALTH_SETTLE_SECONDS`, run `health_check.sh` — with `--no-gui` plus an offscreen countdown start in `--now` mode | **restores the backup, restarts, verifies again** |
 | 18 | write `var/installed_version`, clear staging, log success | — |
 
 Step 10 is why the update never needs root. Every payload carries the template user
@@ -726,6 +807,17 @@ Step 10 is why the update never needs root. Every payload carries the template u
 briefly pointing at a home that does not exist. `set_device_user.sh` finds files by
 content, not from a list — the Pi 4 tree resolves `$HOME` at runtime nearly everywhere,
 but the Zero tree spells the path out in thirteen files including both Python apps.
+
+Steps 16 and 17 are the only ones that behave differently between the two modes, and they
+are described in full in [§7](#the-two-modes-and-why-the-screen-differs). In short: a cron
+run puts the countdown back on the screen and checks it there; a Settings-driven run leaves
+it closed — the Settings app is fullscreen and would be covered — and verifies it by
+starting it offscreen instead. Every run logs which mode it took as its first line, so the
+log always says which of the two happened:
+
+```
+[2026-09-10 02:00:04] Run mode: cron (unattended - the countdown is restarted on the screen)
+```
 
 If step 17 fails, `var/installed_version` is deliberately **left alone**, so the next
 nightly run tries the same release again. That is right for a transient failure and wrong
@@ -831,6 +923,7 @@ tail -60 ~/Desktop/scheduler/logs/check_updates.log
 A successful update looks like this:
 
 ```
+[2026-08-26 02:00:03] Run mode: cron (unattended - the countdown is restarted on the screen)
 [2026-08-26 02:00:03] Target 1.2.0 (version pointer)
 [2026-08-26 02:00:03] ==== Updating 1.1.0 -> 1.2.0 (pi4-v1.2.0) ====
 [2026-08-26 02:00:07] Checksum verified
@@ -841,12 +934,37 @@ A successful update looks like this:
 [2026-08-26 02:00:09] Protecting: audio/ var/ logs/ config/config.ini …
 [2026-08-26 02:00:10] Backing up the current version to …/var/update/rollback/1.1.0
 [2026-08-26 02:00:12] Installing 1.2.0...
+[2026-08-26 02:00:14] Restarting the prayer times GUI...
 [2026-08-26 02:00:31] Health check passed
 [2026-08-26 02:00:31] ==== Updated to 1.2.0 ====
 ```
 
 The `Replacing:` and `Protecting:` lines are printed on every run, so any update is
 auditable after the fact.
+
+The **first** line names the mode, which is the thing to read before anything else — the
+two modes end differently on the screen, and a failure often turns out to be a mode
+mismatch rather than a bad release. A Settings-driven run ends differently:
+
+```
+[2026-09-10 14:22:01] Run mode: now (Settings app - the countdown stays closed and is checked offscreen)
+…
+[2026-09-10 14:22:14] Leaving the countdown closed - it is checked offscreen and relaunched by you
+[2026-09-10 14:22:31]   SKIP  GUI checks (--no-gui: countdown is checked offscreen instead)
+[2026-09-10 14:22:40]   countdown starts cleanly on the new code (offscreen check)
+[2026-09-10 14:22:40] Health check passed
+```
+
+If the offscreen check is what failed, the reason is in a **separate** log, and the first
+few lines of the traceback are copied into the main log too:
+
+```bash
+cat ~/Desktop/scheduler/logs/prayer_times_gui_check.log
+```
+
+That file is truncated at the start of every check, so it only ever holds the most recent
+one. It is deliberately not `prayer_times_gui.log` — mixing the two would let this run's
+output be read by check 4 as the live app crashing.
 
 `--status` prints what the Settings app shows:
 
@@ -884,15 +1002,16 @@ erased by an uneventful night.
 time — it only reads.
 
 ```bash
-bash ~/Desktop/scheduler/config/scripts/health_check.sh          # report everything
-bash ~/Desktop/scheduler/config/scripts/health_check.sh --quiet  # only failures
+bash ~/Desktop/scheduler/config/scripts/health_check.sh           # report everything
+bash ~/Desktop/scheduler/config/scripts/health_check.sh --quiet   # only failures
+bash ~/Desktop/scheduler/config/scripts/health_check.sh --no-gui  # skip checks 2 and 3
 ```
 
 | # | check | why |
 |---|---|---|
 | 1 | `audio_event_scheduler.service` is active | without it the device is silent, which is its whole purpose |
-| 2 | the countdown process exists | |
-| 3 | the countdown has a window on `:0` (needs `xdotool`) | a process stuck on a traceback still exists for a moment; a window is the only evidence it is drawing. Skipped cleanly if `xdotool` is not installed |
+| 2 | the countdown process exists | skipped by `--no-gui` |
+| 3 | a window on `:0` belongs to **that** process (needs `xdotool`, which `init.sh` installs) | a process stuck on a traceback still exists for a moment; a window is the only evidence it is drawing. Skipped by `--no-gui`, and cleanly if `xdotool` is somehow absent |
 | 4 | no traceback in the last 40 lines of the GUI log | catches an app relaunching in a loop, which leaves a live process at every instant |
 | 5 | the prayer map parses **and has a row for today** | a map that loads but does not cover today means a silent day and a grey `--:--` screen |
 | 6 | `config.ini` parses and has `[Settings]` | both GUIs read it at startup |
@@ -901,6 +1020,45 @@ bash ~/Desktop/scheduler/config/scripts/health_check.sh --quiet  # only failures
 Exits non-zero on the first failure, naming it. Checks 3 and 4 approach the same failure
 from opposite sides on purpose, so losing `xdotool` degrades the check rather than
 disabling it.
+
+Check 3 matches the window back to the countdown's **own pid**, which matters more than it
+looks. Both apps are `python3`, so searching by window class alone is satisfied by the
+Settings app — and the Settings app is on screen exactly when an update is being driven by
+hand. A class-only check therefore passes while the countdown is closed, which is the
+opposite of useful.
+
+### `--no-gui`
+
+`check_updates.sh` passes this for a Settings-driven update, where the countdown is
+deliberately not on the screen. Checks 2 and 3 are skipped and reported as skipped:
+
+```
+  SKIP  GUI checks (--no-gui: countdown is checked offscreen instead)
+```
+
+Nothing is lost by it — the updater replaces those two with a stricter test of its own,
+starting the countdown offscreen on the newly installed code (see
+[§7](#the-two-modes-and-why-the-screen-differs)). Checks 1 and 4–7 all still run, and
+still roll a bad release back.
+
+You will also see this if you run the script by hand while no countdown is running, with
+no flag at all — check 2 fails, and check 3 reports `SKIP  window check (no GUI process to
+match a window to)` rather than claiming a pass it cannot justify.
+
+`init.sh` installs `xdotool`, so check 3 is live on any device that has been through it.
+If a device predates that, `health_check.sh` prints
+`SKIP  window check (xdotool not installed)` — re-run `init.sh` to fix it. Since
+`check_updates.sh` rolls an update back when this script fails, check 3 is what lets a
+release that leaves the GUI frozen be caught and reverted without anyone looking at the
+screen.
+
+**Run it by hand on a device before trusting the automatic rollback.** It only reads, so
+it is safe at any time, and a failure on a device you know is healthy means every update
+would install and then be reverted:
+
+```bash
+ssh <device>.local 'bash ~/Desktop/scheduler/config/scripts/health_check.sh'
+```
 
 ---
 
@@ -965,6 +1123,10 @@ release notes when you cut one of those.
 | Settings shows `الإصدار المثبَّت: غير معروف` | `var/installed_version` is missing | write the current version into it (§5.1) |
 | `تعذر جلب الإصدارات` | the device cannot reach the GitHub API | check networking; `--list` on the device shows the same failure |
 | Device stays on an old version with no log entries at all | the cron line is missing | `crontab -l` and look for `check_updates`, and re-run `init.sh` |
+| The countdown appeared over the Settings app during an update | the run took the cron path — a bare `bash check_updates.sh` does that | use `--now`, which is what the Settings button runs. The log's first line says which mode it took |
+| An update from Settings fails but the same version installs fine from cron | check 2 or 3 is judging a countdown that is deliberately closed | the device is running a `health_check.sh` that predates `--no-gui`. Confirm with `grep -c no-gui health_check.sh` |
+| `the countdown raised an exception during the offscreen check` | the release genuinely does not start | full traceback in `logs/prayer_times_gui_check.log`; the device is already rolled back |
+| `the countdown exited on its own during the offscreen check` | the app exits before `GUI_VERIFY_SECONDS` without a traceback — often a missing data file rather than broken code | same log. If the app is simply slow to start on that board, raise `GUI_VERIFY_SECONDS` |
 
 ---
 
@@ -980,8 +1142,13 @@ ssh louay.local
 bash ~/Desktop/scheduler/config/scripts/health_check.sh
 tail -60 ~/Desktop/scheduler/logs/check_updates.log
 tail -40 ~/Desktop/scheduler/logs/prayer_times_gui.log
+cat  ~/Desktop/scheduler/logs/prayer_times_gui_check.log   # only the last offscreen check
 systemctl status audio_event_scheduler.service
 ```
+
+If the countdown is not on the screen because you are working over SSH, add `--no-gui` so
+checks 2 and 3 stop masking whatever else is wrong — but never conclude the device is
+healthy from a `--no-gui` pass alone.
 
 **2. Restore the retained backup by hand.** The updater's own restore is just an rsync,
 and you can run it yourself:
@@ -1054,6 +1221,15 @@ the device or your own backup.
   also redirects stdout into the same file, so cron-driven runs appear twice. Cosmetic
   only. To silence it, change the cron line to
   `> /dev/null 2>> …/logs/check_updates.log`, which keeps unexpected crash output.
+- **An interactive update does not prove the countdown can open a real X window.** The
+  offscreen check starts the app and watches it, but never maps anything to `:0` — so a
+  release that broke `xcb` specifically would pass a Settings-driven update. It would be
+  caught and rolled back at the next cron run, which does check the real window. The trade
+  is deliberate: the alternative put the countdown over the Settings app and rolled back
+  good releases.
+- **`--no-gui` is not a general-purpose flag.** It exists for the one case where the
+  countdown is known to be down on purpose. Passing it by hand on a live device hides a
+  genuinely dead GUI.
 - **The fixture's `health_check.sh` is a stub.** Its passes say nothing about whether the
   real checks would pass on real hardware — which is exactly why §5.2 puts a supervised
   device before an unattended fleet.

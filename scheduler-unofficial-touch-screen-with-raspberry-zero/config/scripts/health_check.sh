@@ -3,6 +3,8 @@
 #
 #   health_check.sh            report every check, exit non-zero on the first failure
 #   health_check.sh --quiet    same, but only print failures
+#   health_check.sh --no-gui   skip the two checks that need the countdown on screen,
+#                              for a Settings-driven update where it is deliberately down
 #
 # check_updates.sh runs this after an update and rolls back if it fails, so the checks
 # have to mean something: "the process exists" is not the same as "the screen is right".
@@ -19,7 +21,13 @@ GUI_MAIN="$APP_DIR/desktop/prayer_times_gui/main.py"
 SERVICE="audio_event_scheduler.service"
 
 QUIET=0
-[[ "${1:-}" == "--quiet" ]] && QUIET=1
+NO_GUI=0
+for arg in "$@"; do
+    case "$arg" in
+        --quiet)  QUIET=1 ;;
+        --no-gui) NO_GUI=1 ;;
+    esac
+done
 
 failures=0
 
@@ -33,21 +41,46 @@ else
     fail "$SERVICE is $(systemctl is-active "$SERVICE" 2>&1)"
 fi
 
-# 2. The countdown process.
-if pgrep -f "prayer_times_gui/main.py" > /dev/null; then
-    pass "prayer times GUI is running"
+# 2. The countdown process. Skipped with --no-gui, which check_updates.sh passes for a
+#    Settings-driven update: the countdown is deliberately not on screen there, and it is
+#    verified separately by starting it offscreen, which is a stricter test than looking
+#    at one that happens to be up.
+GUI_PID=""
+if [[ $NO_GUI -eq 1 ]]; then
+    [[ $QUIET -eq 1 ]] || echo "  SKIP  GUI checks (--no-gui: countdown is checked offscreen instead)"
 else
-    fail "prayer times GUI is not running"
+    GUI_PID="$(pgrep -f "prayer_times_gui/main.py" | head -1)"
+    if [[ -n "$GUI_PID" ]]; then
+        pass "prayer times GUI is running"
+    else
+        fail "prayer times GUI is not running"
+    fi
 fi
 
 # 3. The countdown is drawing, not merely running. A window on screen is the only
 #    evidence that separates a working app from one stuck on a traceback, and the app
 #    is fullscreen, so its window is the size of the display.
-if command -v xdotool > /dev/null 2>&1; then
-    if DISPLAY=:0 xdotool search --class "python" > /dev/null 2>&1; then
+#
+#    The window has to be matched back to the countdown's own pid. Searching by class
+#    alone matches any Python window - including the Settings app, which is running
+#    whenever an update is driven from the touchscreen - so a class-only check passes
+#    even when the countdown is closed, which is the opposite of useful.
+if [[ $NO_GUI -eq 1 ]]; then
+    :
+elif [[ -z "$GUI_PID" ]]; then
+    [[ $QUIET -eq 1 ]] || echo "  SKIP  window check (no GUI process to match a window to)"
+elif command -v xdotool > /dev/null 2>&1; then
+    GUI_WINDOW=""
+    for wid in $(DISPLAY=:0 xdotool search --class "python" 2>/dev/null); do
+        if [[ "$(DISPLAY=:0 xdotool getwindowpid "$wid" 2>/dev/null)" == "$GUI_PID" ]]; then
+            GUI_WINDOW="$wid"
+            break
+        fi
+    done
+    if [[ -n "$GUI_WINDOW" ]]; then
         pass "GUI has a window on the display"
     else
-        fail "no GUI window on display :0"
+        fail "no window on display :0 belongs to the GUI process"
     fi
 else
     # Not installed on every image, and not worth pulling in as a dependency just for

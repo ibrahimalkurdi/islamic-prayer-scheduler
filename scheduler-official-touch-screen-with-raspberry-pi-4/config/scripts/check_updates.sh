@@ -34,6 +34,9 @@ LOG_FILE="$MAIN_DIR/logs/check_updates.log"
 LOCK_FILE="$VAR_DIR/player.lock"
 GUI_MAIN="$MAIN_DIR/applications/desktop/prayer_times_gui/main.py"
 GUI_LOG="$MAIN_DIR/logs/prayer_times_gui.log"
+# Kept apart from GUI_LOG so the offscreen check's output cannot be mistaken for the real
+# app's, and so health_check.sh's traceback check does not read this run's noise.
+GUI_VERIFY_LOG="$MAIN_DIR/logs/prayer_times_gui_check.log"
 SERVICE="audio_event_scheduler.service"
 
 # Overridable from update.conf so the whole flow can be pointed at a local directory for
@@ -53,6 +56,9 @@ UPDATER_VERSION="1.0.0"
 # How long to let the apps settle before judging them, and where to read the board's
 # identity. Both overridable so the whole flow can be exercised off-device.
 HEALTH_SETTLE_SECONDS="${HEALTH_SETTLE_SECONDS:-15}"
+# How long the offscreen countdown must stay up to count as started. Long enough to get
+# past widget construction and the first paint, short enough not to stall the dialog.
+GUI_VERIFY_SECONDS="${GUI_VERIFY_SECONDS:-8}"
 DEVICE_MODEL_FILE="${DEVICE_MODEL_FILE:-/proc/device-tree/model}"
 
 # Never replaced, whatever a release asks for. The manifest proposes; this disposes.
@@ -70,10 +76,19 @@ DENY_LIST=(
 # same arguments to the copy, and by then $@ is empty.
 ORIGINAL_ARGS=("$@")
 
+# MODE is two things at once, and both matter:
+#   cron  - unattended. Obeys ENABLED, and the countdown is what the screen is for, so it
+#           goes back up and gets checked on the display.
+#   now   - somebody is looking at the fullscreen Settings app. Putting the countdown back
+#           would map it over that window, so it stays down and is checked offscreen.
+# Bare invocation stays "cron" because that is what the shipped crontab line calls, and
+# devices in the field carry that line. --cron says the same thing out loud; --now is
+# what the Settings app runs, and what to use when testing that path by hand.
 MODE="cron"
 TARGET_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --cron)     MODE="cron" ;;
         --now)      MODE="now" ;;
         --rollback) MODE="rollback" ;;
         --status)   MODE="status" ;;
@@ -275,29 +290,95 @@ fi
 # ---------------------------------------------------------------------------
 # Restart and verify - shared by the update path and the rollback path
 # ---------------------------------------------------------------------------
+# Prove the countdown starts on the code that was just installed, without putting a
+# window on the display. "offscreen" is a real Qt platform plugin - the app constructs
+# its widgets, loads the prayer map and reaches its first paint exactly as it would on
+# screen, but nothing is ever mapped to :0. It is the same plugin the off-device tests
+# use to drive these apps headlessly.
+#
+# This is what lets an interactive update leave the screen alone: the countdown is
+# verified in the background and then killed, and the user relaunches it when they are
+# finished with the Settings app.
+verify_gui_offscreen() {
+    local pid rc=0
+    : > "$GUI_VERIFY_LOG"
+    # Not setsid: $! has to be the python process itself so it can be watched and killed.
+    QT_QPA_PLATFORM=offscreen python3 "$GUI_MAIN" >> "$GUI_VERIFY_LOG" 2>&1 &
+    pid=$!
+    sleep "$GUI_VERIFY_SECONDS"
+
+    if ! kill -0 "$pid" 2>/dev/null; then
+        # It exited on its own inside the settle window, which for a countdown that is
+        # supposed to run forever means it crashed.
+        log "  the countdown exited on its own during the offscreen check"
+        rc=1
+    else
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+
+    if grep -q "Traceback" "$GUI_VERIFY_LOG" 2>/dev/null; then
+        log "  the countdown raised an exception during the offscreen check:"
+        grep -m1 -A4 "Traceback" "$GUI_VERIFY_LOG" >> "$LOG_FILE" 2>/dev/null || true
+        rc=1
+    fi
+
+    [[ $rc -eq 0 ]] && log "  countdown starts cleanly on the new code (offscreen check)"
+    return $rc
+}
+
 restart_apps() {
     log "Restarting the athan service..."
     sudo -n systemctl restart "$SERVICE" 2>>"$LOG_FILE" \
         || log "WARNING: could not restart $SERVICE"
 
-    log "Restarting the prayer times GUI..."
+    # The old countdown process is holding the previous version's code either way, so it
+    # goes. What differs is whether we put it back on the screen.
     pkill -f "prayer_times_gui/main.py" 2>/dev/null || true
     sleep 2
-    # The autostart entry only fires at login, so killing the GUI does not bring it
-    # back - it has to be relaunched with the same environment that entry gives it.
-    DISPLAY=:0 QT_QPA_PLATFORM=xcb setsid python3 "$GUI_MAIN" >> "$GUI_LOG" 2>&1 &
-    disown 2>/dev/null || true
+
+    if [[ "$MODE" == "cron" ]]; then
+        # Nobody is at the screen at 02:00, and the countdown is what the device is for -
+        # so it goes straight back up. The autostart entry only fires at login, so killing
+        # it does not bring it back; it has to be relaunched with that entry's environment.
+        log "Restarting the prayer times GUI..."
+        DISPLAY=:0 QT_QPA_PLATFORM=xcb setsid python3 "$GUI_MAIN" >> "$GUI_LOG" 2>&1 &
+        disown 2>/dev/null || true
+    else
+        # An interactive run is driven from the fullscreen Settings app. Relaunching the
+        # countdown here would map it straight over that window, and closing it - the
+        # natural thing to do - would make the health check find no GUI and roll a good
+        # release back. So it stays down, is verified offscreen instead, and the user
+        # launches it when they are done.
+        log "Leaving the countdown closed - it is checked offscreen and relaunched by you"
+    fi
 }
 
 verify_healthy() {
     log "Waiting for the apps to settle..."
     sleep "$HEALTH_SETTLE_SECONDS"
-    if bash "$SCRIPTS_DIR/health_check.sh" >> "$LOG_FILE" 2>&1; then
-        log "Health check passed"
-        return 0
+
+    local args=()
+    if [[ "$MODE" != "cron" ]]; then
+        # The countdown is deliberately not on the screen during an interactive run, so
+        # the on-screen checks would fail for a reason that says nothing about the
+        # release. verify_gui_offscreen below covers the same ground more strictly - it
+        # starts the app from scratch rather than looking at one that is already up.
+        args+=(--no-gui)
     fi
-    log "Health check FAILED"
-    return 1
+
+    if ! bash "$SCRIPTS_DIR/health_check.sh" "${args[@]+"${args[@]}"}" >> "$LOG_FILE" 2>&1; then
+        log "Health check FAILED"
+        return 1
+    fi
+
+    if [[ "$MODE" != "cron" ]] && ! verify_gui_offscreen; then
+        log "Health check FAILED"
+        return 1
+    fi
+
+    log "Health check passed"
+    return 0
 }
 
 restore_backup() {
@@ -337,6 +418,13 @@ fi
 # ---------------------------------------------------------------------------
 # Should we run at all?
 # ---------------------------------------------------------------------------
+# Named out loud, because the two modes end differently on the screen and a log that
+# does not say which one ran cannot explain what the device did.
+case "$MODE" in
+    cron) log "Run mode: cron (unattended - the countdown is restarted on the screen)" ;;
+    now)  log "Run mode: now (Settings app - the countdown stays closed and is checked offscreen)" ;;
+esac
+
 if [[ "$MODE" == "cron" && "${ENABLED,,}" != "true" ]]; then
     log "Updates are disabled on this device (ENABLED=$ENABLED)"
     exit 0

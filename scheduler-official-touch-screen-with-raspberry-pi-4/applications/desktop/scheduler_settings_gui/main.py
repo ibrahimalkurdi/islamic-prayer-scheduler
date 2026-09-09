@@ -31,7 +31,8 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QComboBox,
-    QDialog
+    QDialog,
+    QProgressBar
 )
 from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QFontMetrics, QIcon
@@ -1406,10 +1407,42 @@ class ControlApp(QMainWindow):
         for version in reversed(versions):
             self.update_version_combo.addItem(version, version)
 
+    def make_update_busy_dialog(self, text):
+        """Owns the screen for the whole update.
+
+        Nothing else appears while an update runs: check_updates.sh leaves the countdown
+        closed for an interactive run and verifies it offscreen instead, so this dialog
+        and its progress bar are the whole of what the user sees.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("تحديث البرنامج")
+        # No close button: there is nothing safe to do half way through an update.
+        dialog.setWindowFlags(
+            Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowStaysOnTopHint
+        )
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("font-size: 20px; padding: 10px;")
+        bar = QProgressBar()
+        # Indeterminate - check_updates.sh reports no progress, only a final result.
+        bar.setRange(0, 0)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(18)
+        layout.addWidget(label)
+        layout.addWidget(bar)
+        dialog.setMinimumWidth(380)
+        return dialog
+
     def start_update(self, args, busy_text):
         for button in (self.update_now_btn, self.update_pin_btn, self.update_rollback_btn):
             button.setEnabled(False)
         self.update_now_btn.setText(busy_text)
+
+        self.update_busy = self.make_update_busy_dialog(busy_text)
+        self.update_busy.show()
+
         self.update_worker = UpdateWorker(args)
         self.update_worker.finished_result.connect(self.on_update_finished)
         self.update_worker.start()
@@ -1433,6 +1466,11 @@ class ControlApp(QMainWindow):
         self.start_update(["--rollback"], "جارٍ الرجوع…")
 
     def on_update_finished(self, success, output):
+        dialog = getattr(self, "update_busy", None)
+        if dialog is not None:
+            dialog.close()
+            self.update_busy = None
+
         self.update_now_btn.setText("تحديث الآن")
         for button in (self.update_now_btn, self.update_pin_btn):
             button.setEnabled(True)
@@ -1440,10 +1478,16 @@ class ControlApp(QMainWindow):
 
         tail = "\n".join(output.splitlines()[-6:]) if output else ""
         if success:
-            arabic_info(self, "التحديثات", tail or "تمت العملية بنجاح")
+            # The installed version is re-read above, so it reflects what actually landed.
+            version = self.read_update_status().get("installed", "") or "—"
+            arabic_info(self, "التحديثات",
+                        "تم التحديث بنجاح.\n\n"
+                        f"الإصدار المثبَّت الآن: {version}\n\n"
+                        "أغلق هذه النافذة، ثم شغّل تطبيق مواقيت الصلاة من سطح المكتب.")
         else:
             arabic_error(self, "فشلت عملية التحديث",
-                         tail or "راجع سجل logs/check_updates.log على الجهاز.")
+                         "لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.\n\n"
+                         + (tail or "راجع سجل logs/check_updates.log على الجهاز."))
 
     def build_daylight_saving_section(self):
         frame = self.create_section_frame(
