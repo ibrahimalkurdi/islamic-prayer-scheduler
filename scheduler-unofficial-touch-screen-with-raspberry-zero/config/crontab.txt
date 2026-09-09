@@ -5,4 +5,4 @@
 00 00 * * * echo  > /home/ihms/Desktop/scheduler/logs/wifi_connectivity_resolver.log
 # Check for a published update. 02:00 sits between the latest Isha and the earliest
 # Fajr all year, and the updater skips itself anyway while any audio is playing.
-00 02 * * * bash /home/ihms/Desktop/scheduler/config/scripts/check_updates.sh >> /home/ihms/Desktop/scheduler/logs/check_updates.log 2>&1
+00 02 * * * bash /home/ihms/Desktop/scheduler/config/scripts/check_updates.sh --cron >> /home/ihms/Desktop/scheduler/logs/check_updates.log 2>&1

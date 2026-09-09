@@ -87,7 +87,7 @@ at it. Rolling the fleet back is the same edit in reverse.
 The daily check is a cron line installed by `init.sh` from `config/crontab.txt`:
 
 ```cron
-00 02 * * * bash $HOME/Desktop/scheduler/config/scripts/check_updates.sh >> $HOME/Desktop/scheduler/logs/check_updates.log 2>&1
+00 02 * * * bash $HOME/Desktop/scheduler/config/scripts/check_updates.sh --cron >> $HOME/Desktop/scheduler/logs/check_updates.log 2>&1
 ```
 
 02:00 sits between the latest Isha and the earliest Fajr all year, and the updater
@@ -506,7 +506,7 @@ cd ~/Desktop/scheduler/config/scripts
 | command | behaviour |
 |---|---|
 | `bash check_updates.sh` | **cron mode.** Honours `ENABLED`. Resolves the target, updates if it differs. |
-| `bash check_updates.sh --cron` | Identical to the bare form, said out loud. |
+| `bash check_updates.sh --cron` | Identical to the bare form, said out loud. This is what the shipped cron line passes. |
 | `bash check_updates.sh --now` | **Settings mode.** Update to the resolved target now. **Ignores `ENABLED`** — pressing a button is a decision to update. |
 | `bash check_updates.sh --target 1.0.3` | Install exactly this version, up or down. Does not write `PIN` (the Settings app writes it separately). |
 | `bash check_updates.sh --rollback` | Restore the retained previous version. Ignores `ENABLED` and the audio guard. |
@@ -1216,7 +1216,9 @@ the device or your own backup.
   know is to ask each device (`--status`).
 - **`config/crontab.txt` is inside the payload**, so a release can change the cron
   schedule — but only `init.sh` installs it. Changing the schedule needs a manual
-  `init.sh` run, and raises no banner.
+  `init.sh` run, and raises no banner. `init.sh` compares the managed block against the
+  file rather than just checking the markers, so re-running it does pick a change up —
+  "Cron jobs already installed" means the two genuinely match.
 - **Cron double-logs.** `log()` writes to both stdout and the log file, and the cron line
   also redirects stdout into the same file, so cron-driven runs appear twice. Cosmetic
   only. To silence it, change the cron line to
