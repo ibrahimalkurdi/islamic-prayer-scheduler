@@ -889,12 +889,39 @@ class ControlApp(QMainWindow):
 
         tail = "\n".join(output.splitlines()[-6:]) if output else ""
         if success:
-            # The installed version is re-read above, so it reflects what actually landed.
-            version = self.read_update_status().get("installed", "") or "—"
-            arabic_info(self, "التحديثات",
-                        "تم التحديث بنجاح.\n\n"
-                        f"الإصدار المثبَّت الآن: {version}\n\n"
-                        "أغلق هذه النافذة، ثم شغّل تطبيق مواقيت الصلاة من سطح المكتب.")
+            # check_updates.sh exits 0 for several outcomes that are not an install:
+            # already current, nothing published, the pointer unreachable. Reporting all
+            # of them as "updated successfully" is wrong in every case and actively
+            # misleading in the last, where the device never reached GitHub at all. The
+            # state file is re-read above, so last_result says which one this was.
+            status = self.read_update_status()
+            result = status.get("last_result", "")
+            version = status.get("installed", "") or "—"
+            if result == "up_to_date":
+                # The countdown was never stopped on this path, so there is nothing for
+                # the user to relaunch.
+                arabic_info(self, "التحديثات",
+                            "أنت تستخدم أحدث إصدار.\n\n"
+                            f"الإصدار المثبَّت: {version}\n\n"
+                            "لا يوجد تحديث جديد للتثبيت.")
+            elif result == "no_release":
+                arabic_info(self, "التحديثات",
+                            "لا يوجد إصدار منشور لهذا الجهاز حاليًا.\n\n"
+                            f"الإصدار المثبَّت: {version}")
+            elif result == "no_pointer":
+                arabic_error(self, "تعذر التحقق من التحديثات",
+                             "تعذر الوصول إلى خادم التحديثات، ولم يتغيّر شيء على الجهاز.\n\n"
+                             "تأكد من اتصال الإنترنت ثم أعد المحاولة.")
+            elif result == "rolled_back":
+                arabic_info(self, "التحديثات",
+                            "تمت إعادة الجهاز إلى الإصدار السابق.\n\n"
+                            f"الإصدار المثبَّت الآن: {version}\n\n"
+                            "أغلق هذه النافذة، ثم شغّل تطبيق مواقيت الصلاة من سطح المكتب.")
+            else:
+                arabic_info(self, "التحديثات",
+                            "تم التحديث بنجاح.\n\n"
+                            f"الإصدار المثبَّت الآن: {version}\n\n"
+                            "أغلق هذه النافذة، ثم شغّل تطبيق مواقيت الصلاة من سطح المكتب.")
         else:
             arabic_error(self, "فشلت عملية التحديث",
                          "لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.\n\n"

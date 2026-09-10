@@ -62,13 +62,46 @@ chk("unticking pins to the installed version",
     f"PIN={installed}" in open(CONF, encoding="utf-8").read(), True)
 w.update_follow_chk.setChecked(True)
 
-print("5. choosing nothing is refused, not silently ignored")
+print("5. the result dialog says what actually happened")
+# check_updates.sh exits 0 for several outcomes that are not an install, and the app used
+# to report every one of them as "تم التحديث بنجاح" - including the case where the device
+# never reached GitHub at all.
+def run_update(args):
+    seen.clear()
+    w.start_update(args, "…")
+    w.update_worker.wait(120000); app.processEvents()
+    return seen[-1] if seen else (None, None, None)
+
+# The device is unpinned and behind the pointer here, so this one really does install -
+# which is what makes the second run below a genuine no-op rather than a rigged one.
+kind, title, text = run_update(["--now"])
+chk("a real update is reported as one", "تم التحديث بنجاح" in text, True)
+chk("and asks the user to relaunch the countdown",
+    "شغّل تطبيق مواقيت الصلاة" in text, True)
+
+# Second run, nothing left to do: nothing was installed and nothing was stopped.
+kind, title, text = run_update(["--now"])
+chk("already current is not reported as an update", "تم التحديث بنجاح" in text, False)
+chk("it says the device is current", "أنت تستخدم أحدث إصدار" in text, True)
+chk("and does not ask the user to relaunch anything",
+    "شغّل تطبيق مواقيت الصلاة" in text, False)
+
+# An unreachable pointer is a failure to check, not a successful update.
+import shutil
+POINTER = os.path.join(HERE, "releases", "VERSIONS.json")
+shutil.move(POINTER, POINTER + ".away")
+kind, title, text = run_update(["--now"])
+chk("an unreachable pointer is an error, not a success", kind, "error")
+chk("and says nothing changed", "لم يتغيّر شيء على الجهاز" in text, True)
+shutil.move(POINTER + ".away", POINTER)
+
+print("6. choosing nothing is refused, not silently ignored")
 seen.clear()
 w.update_version_combo.setCurrentIndex(0)
 w.install_selected_version()
 chk("an error was shown", seen and seen[-1][0], "error")
 
-print("6. status text reflects the device after all of that")
+print("7. status text reflects the device after all of that")
 w.refresh_update_status()
 print("   ", w.update_status_label.text().replace("\n", " | "))
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
