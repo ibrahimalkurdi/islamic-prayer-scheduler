@@ -1,3 +1,4 @@
+import os
 import sys
 from datetime import datetime, timedelta
 from PyQt5.QtWidgets import (
@@ -5,8 +6,27 @@ from PyQt5.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsProxyWidget
 )
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QTransform
+from PyQt5.QtGui import QFont, QIcon, QTransform
 from prayer_times_map import prayerTimes  # your Python prayer times file
+
+
+# Resolved from this file rather than from $HOME: the icons sit beside the code in the
+# same tree, so this is right whichever user owns the device and also when the app is
+# started from a staging copy during an update.
+ICONS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+    "config", "icons")
+
+
+def app_icon():
+    """The window icon, assembled from every size that ships in config/icons/."""
+    icon = QIcon()
+    for size in (16, 32, 48, 64, 128, 256):
+        path = os.path.join(ICONS_DIR, "athan-app-icon-%d.png" % size)
+        if os.path.exists(path):
+            icon.addFile(path)
+    return icon
+
 
 
 # -------------------------
@@ -81,6 +101,7 @@ class AdhanCounter(QWidget):
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setWindowTitle("عداد الأذان")
+        self.setWindowIcon(app_icon())
         self.setLayoutDirection(Qt.RightToLeft)
 
         # Layout
@@ -231,6 +252,15 @@ class AdhanCounter(QWidget):
 # -------------------------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    # The panel's task list is handed a window's app_id and nothing else, and for an
+    # XWayland window that app_id is the WM_CLASS Qt derives from argv[0] - "main.py",
+    # which is also what the Settings app reports and which matches no desktop entry.
+    # With no entry to resolve, the panel falls back to the process behind the window,
+    # python3, and draws the Python logo. Nothing here matches this app by class - the
+    # updater and the health check both go by the command line - so naming it after its
+    # own desktop entry costs nothing and gives the panel something to find.
+    app.setApplicationName("prayer_times_gui")
+    app.setDesktopFileName("prayer_times_gui")
     window = AdhanCounter()
     window.show()
     sys.exit(app.exec_())

@@ -4,6 +4,6 @@ Type=Application
 Name=تثبيت مكونات النظام
 Comment=Re-run device setup
 Exec=/home/ihms/Desktop/scheduler/config/scripts/init_from_desktop.sh
-Icon=system-run
+Icon=/home/ihms/Desktop/scheduler/config/icons/athan-setup-app.png
 Terminal=true
 Categories=Utility;

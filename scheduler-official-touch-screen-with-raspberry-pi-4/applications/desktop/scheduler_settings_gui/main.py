@@ -561,13 +561,37 @@ class ApplySettingsWorker(QThread):
         self.finished_result.emit(success, log_tail)
 
 
+
+# Resolved from this file rather than from $HOME: the icons sit beside the code in the
+# same tree, so this is right whichever user owns the device and also when the app is
+# started from a staging copy during an update.
+ICONS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+    "config", "icons")
+
+
+def app_icon():
+    """The window icon, assembled from every size that ships in config/icons/.
+
+    The single path this used to name, icon.ico, has never existed in either tree. QIcon
+    over a missing file is silently null, so the window went up carrying no icon at all
+    and the panel had nothing to draw but its own fallback.
+    """
+    icon = QIcon()
+    for size in (16, 32, 48, 64, 128, 256):
+        path = os.path.join(ICONS_DIR, "athan-settings-app-icon-%d.png" % size)
+        if os.path.exists(path):
+            icon.addFile(path)
+    return icon
+
+
 # ---------------- Main App ----------------
 class ControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.is_processing = False
         self.setWindowTitle(" إعدادات البرامج  ")
-        self.setWindowIcon(QIcon(os.path.join(MAIN_DIR, "config", "icons", "icon.ico")))
+        self.setWindowIcon(app_icon())
         self.setGeometry(0, 0, 800, 480)
         self.config = configparser.ConfigParser(interpolation=None)
         self.load_config()
@@ -2257,6 +2281,14 @@ class ControlApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setFont(QFont("Amiri"))
+    # The task list on the panel does not read the window icon set above: on Wayland it is
+    # handed a window's app_id and nothing else, and for an XWayland window that app_id is
+    # the WM_CLASS Qt derives from argv[0] - "main.py", which is also what the countdown
+    # app reports, and which matches no desktop entry. With no entry to resolve, the panel
+    # falls back to the process behind the window, python3, and draws the Python logo.
+    # Naming the app after its own desktop entry is what gives the panel something to find.
+    app.setApplicationName("scheduler_settings_gui")
+    app.setDesktopFileName("scheduler_settings_gui")
 
     try:
         window = ControlApp()

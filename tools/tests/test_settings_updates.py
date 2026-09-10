@@ -104,4 +104,20 @@ chk("an error was shown", seen and seen[-1][0], "error")
 print("7. status text reflects the device after all of that")
 w.refresh_update_status()
 print("   ", w.update_status_label.text().replace("\n", " | "))
+print("8. the window carries an icon of its own")
+# A QIcon over a missing file is null and says nothing about it, which is how the app
+# spent its whole life pointing at an icon.ico that has never existed in this repo.
+chk("window icon loaded", not w.windowIcon().isNull(), True)
+chk("and it has real pixmaps in it", bool(w.windowIcon().availableSizes()), True)
+
+# The countdown app carries the other half of the same bug: it never set an icon at all.
+# It is checked here rather than in a suite of its own because there is nothing else
+# about it that runs off-device - it wants a screen and today's prayer map.
+COUNTDOWN = os.path.join(os.environ["HOME"],
+    "Desktop/scheduler/applications/desktop/prayer_times_gui/main.py")
+cspec = importlib.util.spec_from_file_location("countdown_app", COUNTDOWN)
+c = importlib.util.module_from_spec(cspec); cspec.loader.exec_module(c)
+chk("countdown icon loaded", not c.app_icon().isNull(), True)
+chk("and it has real pixmaps in it too", bool(c.app_icon().availableSizes()), True)
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))

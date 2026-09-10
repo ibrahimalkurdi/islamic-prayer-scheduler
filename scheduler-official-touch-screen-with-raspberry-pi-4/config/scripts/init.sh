@@ -316,19 +316,35 @@ do
     fi
 done
 
-cd -
+# The same entries again, in the place the desktop environment looks for applications
+# rather than the place the user clicks them. The panel identifies a running window by its
+# app_id and then looks the matching entry up here; an entry that exists only on the
+# Desktop is invisible to it, and a window it cannot resolve falls back to a generic icon.
+# -sfn rather than a test-then-create, so a stale link from an older layout is repaired.
+APPLICATIONS_DIR="$HOME/.local/share/applications"
+mkdir -p "$APPLICATIONS_DIR"
+for desktop_file in \
+    "$BASE_DIR/config/prayer_times_gui.desktop" \
+    "$BASE_DIR/config/scheduler_settings_gui.desktop" \
+    "$BASE_DIR/config/scheduler_setup.desktop"
+do
+    ln -sfn "$desktop_file" "$APPLICATIONS_DIR/$(basename "$desktop_file")"
+done
+update-desktop-database "$APPLICATIONS_DIR" 2> /dev/null || true
+echo "Application entries registered in $APPLICATIONS_DIR"
+
+cd - > /dev/null
 
 #######################################
 # Copy icons
 #######################################
-if [[ ! -f "$DONE_DIR/icons_installed" ]]; then
-    echo "Installing icons..."
-    sudo cp "$BASE_DIR/config/icons/athan-"*.png /usr/share/icons/hicolor/48x48/apps/
-    sudo gtk-update-icon-cache /usr/share/icons/hicolor
-    touch "$DONE_DIR/icons_installed"
-else
-    echo "Icons already installed"
-fi
+# Not guarded by a run-once marker: a release that adds a shortcut adds an icon with it,
+# and a device that has the marker from an earlier setup would never copy the new one -
+# leaving a shortcut with no artwork and no way to repair it short of deleting the marker
+# by hand. Copying a few PNGs is cheap enough to just do every time.
+echo "Installing icons..."
+sudo cp "$BASE_DIR/config/icons/athan-"*.png /usr/share/icons/hicolor/48x48/apps/
+sudo gtk-update-icon-cache /usr/share/icons/hicolor
 
 #######################################
 # Systemd services

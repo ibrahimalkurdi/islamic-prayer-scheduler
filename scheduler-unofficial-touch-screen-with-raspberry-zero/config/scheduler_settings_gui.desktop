@@ -7,5 +7,6 @@ Comment=Touchscreen Application
 Exec=python3 /home/ihms/Desktop/scheduler/applications/desktop/scheduler_settings_gui/main.py
 Icon=athan-settings-app
 Terminal=false
+StartupWMClass=scheduler_settings_gui
 Categories=Utility;
 
