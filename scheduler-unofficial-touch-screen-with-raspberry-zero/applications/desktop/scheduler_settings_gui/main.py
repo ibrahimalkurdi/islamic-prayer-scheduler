@@ -63,6 +63,13 @@ UPDATE_CONF_FILE = os.path.join(MAIN_DIR, "config", "update.conf")
 # leave the button disabled forever with no popup and no way to retry.
 UPDATE_TIMEOUT_SECONDS = 600
 UPDATE_LIST_TIMEOUT_SECONDS = 30
+# The update controls sit in a centred column rather than spanning the panel. Full-width
+# buttons on an 800px screen are a wall of colour with nothing for the eye to anchor on,
+# and a version list that wide is harder to read across, not easier. The rows still shrink
+# on a narrower screen - this is a cap, not a fixed size.
+UPDATE_CONTROL_WIDTH = 430
+# Marks the one entry in the rollback list that is a real restore rather than a download.
+ROLLBACK_LOCAL_LABEL = "نسخة محفوظة"
 
 # ---- per-prayer audio directories (NEW) ----
 PRAYER_AUDIO_DIRS = {
@@ -87,6 +94,19 @@ EXPECTED_CSV_HEADER = [
     "Month", "Day", "Fajr", "Sunrise",
     "Dhuhr", "Asr", "Maghrib", "Isha"
 ]
+
+
+def version_key(text):
+    """Sort key for a version string, so 1.0.10 comes after 1.0.9 rather than before it.
+
+    Tolerant of anything that is not a plain number: an unparseable segment sorts as 0
+    rather than raising, because this only ever orders a dropdown.
+    """
+    parts = []
+    for chunk in str(text).split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
 
 
 # ---------------- Defaults ----------------
@@ -612,6 +632,10 @@ class ControlApp(QMainWindow):
         main_layout.addWidget(self.friday_quran_frame)
 
         # ---------------- Updates Section ----------------
+        # Empty until جلب الإصدارات is pressed: what has been published is not knowable
+        # without asking, and both version lists are filled from the one answer.
+        self.update_published_versions = []
+        self.update_rollback_backup = ""
         main_layout.addWidget(self.build_updates_section())
 
         # ---------------- Buttons ----------------
@@ -729,57 +753,121 @@ class ControlApp(QMainWindow):
         self.update_attention_label.hide()
         layout.addWidget(self.update_attention_label)
 
-        self.update_now_btn = QPushButton("تحديث الآن")
-        self.update_now_btn.setStyleSheet(self.update_button_style("#198754"))
-        self.update_now_btn.setMinimumHeight(60)
-        self.update_now_btn.clicked.connect(self.run_update_now)
-        layout.addWidget(self.update_now_btn)
-
-        version_row = QHBoxLayout()
-        self.update_version_combo = QComboBox()
-        self.update_version_combo.setLayoutDirection(Qt.RightToLeft)
-        self.update_version_combo.setStyleSheet("font-size: 22px; padding: 5px;")
-        self.update_version_combo.setFixedHeight(50)
-        self.update_version_combo.addItem("اختر إصدارًا…", "")
-        version_row.addWidget(self.update_version_combo, 1)
-
-        self.update_refresh_btn = QPushButton("جلب الإصدارات")
-        self.update_refresh_btn.setStyleSheet(self.update_button_style("#6c757d"))
-        self.update_refresh_btn.setMinimumHeight(50)
-        self.update_refresh_btn.clicked.connect(self.load_available_versions)
-        version_row.addWidget(self.update_refresh_btn)
-        layout.addLayout(version_row)
-
-        self.update_pin_btn = QPushButton("تثبيت الإصدار المحدد")
-        self.update_pin_btn.setStyleSheet(self.update_button_style("#0d6efd"))
-        self.update_pin_btn.setMinimumHeight(60)
-        self.update_pin_btn.clicked.connect(self.install_selected_version)
-        layout.addWidget(self.update_pin_btn)
-
-        self.update_rollback_btn = QPushButton("الرجوع إلى الإصدار السابق")
-        self.update_rollback_btn.setStyleSheet(self.update_button_style("#dc3545"))
-        self.update_rollback_btn.setMinimumHeight(60)
-        self.update_rollback_btn.clicked.connect(self.run_update_rollback)
-        layout.addWidget(self.update_rollback_btn)
-
         self.update_auto_chk = QCheckBox("تحديث تلقائي يومي")
         self.update_auto_chk.setStyleSheet("font-size: 22px; padding: 5px; font-weight: bold;")
         self.update_auto_chk.setLayoutDirection(Qt.RightToLeft)
         self.update_auto_chk.stateChanged.connect(self.save_update_enabled)
         layout.addWidget(self.update_auto_chk)
 
-        # Ticked means PIN is empty, so the nightly check follows VERSIONS.json. Installing
-        # a chosen version above sets PIN and unticks this; without a control to put it
-        # back, a device pinned while being prepared would be freed only over SSH - which
-        # is not available once it is in someone's home.
-        self.update_follow_chk = QCheckBox("اتباع الإصدار المركزي عند التحديث التلقائي")
-        self.update_follow_chk.setStyleSheet("font-size: 22px; padding: 5px; font-weight: bold;")
-        self.update_follow_chk.setLayoutDirection(Qt.RightToLeft)
-        self.update_follow_chk.stateChanged.connect(self.save_update_follow)
-        layout.addWidget(self.update_follow_chk)
+        # Shown only while PIN is set, which is a state a device is not normally in - it
+        # gets there by someone choosing a version below, or by being prepared that way.
+        # A pin is invisible otherwise: the daily check quietly stops following the fleet,
+        # and there is no SSH into a device once it is in someone's home. So the pin says
+        # so in words, and the way out is a button that exists only when there is
+        # something to undo - rather than a permanently ticked checkbox that does nothing.
+        self.update_pin_label = QLabel("")
+        self.update_pin_label.setStyleSheet(
+            "font-size: 19px; padding: 2px 18px; color: #6c757d;")
+        self.update_pin_label.setWordWrap(True)
+        self.update_pin_label.hide()
+        layout.addWidget(self.update_pin_label)
+
+        self.update_unpin_btn = QPushButton("العودة إلى التحديث المركزي")
+        self.update_unpin_btn.setStyleSheet(self.update_button_style("#6c757d"))
+        self.update_unpin_btn.setMinimumHeight(54)
+        self.update_unpin_btn.clicked.connect(self.clear_update_pin)
+        self.update_unpin_btn.hide()
+        self.add_update_row(layout, (self.update_unpin_btn, 1))
+
+        # Above both groups rather than inside either: one fetch fills the version list
+        # and the rollback list alike, so it does not belong to one of them.
+        self.update_refresh_btn = QPushButton("جلب الإصدارات")
+        self.update_refresh_btn.setStyleSheet(self.update_button_style("#6c757d"))
+        self.update_refresh_btn.setMinimumHeight(60)
+        self.update_refresh_btn.clicked.connect(self.load_available_versions)
+        self.add_update_row(layout, (self.update_refresh_btn, 1))
+
+        # "Latest" here means the version VERSIONS.json names for this variant, which is the
+        # latest one approved for these devices - not whatever is newest on GitHub. A build
+        # can be published and tried on one device before the fleet is pointed at it, and
+        # the button must not be the thing that undoes that.
+        self.update_now_btn = QPushButton("التحديث إلى أحدث إصدار")
+        self.update_now_btn.setStyleSheet(self.update_button_style("#198754"))
+        self.update_now_btn.setMinimumHeight(60)
+        self.update_now_btn.clicked.connect(self.run_update_now)
+        self.add_update_row(layout, (self.update_now_btn, 1))
+
+        # ---- install a particular version ----
+        layout.addWidget(self.create_update_heading("التثبيت على إصدار محدد:"))
+
+        self.update_version_combo = self.create_version_combo()
+        self.update_version_combo.addItem("اختر إصدارًا…", "")
+        self.add_update_row(layout, (self.update_version_combo, 1))
+
+        self.update_pin_btn = QPushButton("تثبيت الإصدار المحدد")
+        self.update_pin_btn.setStyleSheet(self.update_button_style("#0d6efd"))
+        self.update_pin_btn.setMinimumHeight(60)
+        self.update_pin_btn.clicked.connect(self.install_selected_version)
+        self.add_update_row(layout, (self.update_pin_btn, 1))
+
+        # ---- go back to an earlier one ----
+        layout.addWidget(self.create_update_heading("الرجوع إلى إصدار سابق:"))
+
+        # Every version this device could go back to, the retained backup first. Only one
+        # backup is ever kept - check_updates.sh clears the directory each time it takes a
+        # new one - so exactly one entry here is a true restore: no download, no network,
+        # and the same bytes that were running before the last update. The rest are older
+        # releases that have to be fetched, so they only appear once the list has been.
+        self.update_rollback_combo = self.create_version_combo()
+        self.update_rollback_combo.currentIndexChanged.connect(self.update_rollback_button_text)
+        self.add_update_row(layout, (self.update_rollback_combo, 1))
+
+        self.update_rollback_btn = QPushButton("الرجوع إلى الإصدار السابق")
+        self.update_rollback_btn.setStyleSheet(self.update_button_style("#dc3545"))
+        self.update_rollback_btn.setMinimumHeight(60)
+        self.update_rollback_btn.clicked.connect(self.run_update_rollback)
+        self.add_update_row(layout, (self.update_rollback_btn, 1))
 
         self.refresh_update_status()
         return frame
+
+    def create_update_heading(self, text):
+        label = QLabel(text)
+        label.setStyleSheet("font-size: 22px; padding: 8px 2px 0 2px; font-weight: bold;")
+        return label
+
+    def create_version_combo(self):
+        combo = QComboBox()
+        combo.setLayoutDirection(Qt.RightToLeft)
+        # combobox-popup: 0 is what makes setMaxVisibleItems bind - the default popup sizes
+        # itself to its contents and ignores the limit. Releases only accumulate, and this
+        # is a touchscreen: past five the list is taller than the panel and the older
+        # versions are out of reach. Five at a time, newest first, the rest a scroll away.
+        combo.setStyleSheet("QComboBox { font-size: 22px; padding: 5px; combobox-popup: 0; }")
+        combo.setMaxVisibleItems(5)
+        combo.setFixedHeight(50)
+        return combo
+
+    def add_update_row(self, layout, *widgets):
+        """One row of update controls, centred and capped well short of the panel width.
+
+        A cap rather than a fixed size: the row still shrinks on a narrower screen, and
+        the stretches either side are what centre it.
+        """
+        holder = QWidget()
+        holder.setMaximumWidth(UPDATE_CONTROL_WIDTH)
+        inner = QHBoxLayout(holder)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(8)
+        for widget, stretch in widgets:
+            inner.addWidget(widget, stretch)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(holder, 4)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return holder
 
     def update_button_style(self, colour):
         return (
@@ -806,11 +894,8 @@ class ControlApp(QMainWindow):
         status = self.read_update_status()
         installed = status.get("installed") or "غير معروف"
         pinned = status.get("pinned") or ""
-        rollback_to = status.get("rollback_to") or ""
 
         lines = [f"الإصدار المثبَّت: {installed}"]
-        if pinned:
-            lines.append(f"مثبَّت على الإصدار: {pinned}")
         outcome = {
             "updated": "آخر عملية: تم التحديث بنجاح",
             "up_to_date": "آخر فحص: البرنامج محدَّث",
@@ -836,18 +921,15 @@ class ControlApp(QMainWindow):
         else:
             self.update_attention_label.hide()
 
-        self.update_rollback_btn.setEnabled(bool(rollback_to))
-        self.update_rollback_btn.setText(
-            f"الرجوع إلى الإصدار {rollback_to}" if rollback_to
-            else "الرجوع إلى الإصدار السابق (لا يوجد)"
-        )
+        self.populate_rollback_versions()
         self.update_auto_chk.blockSignals(True)
         self.update_auto_chk.setChecked(bool(status.get("enabled", True)))
         self.update_auto_chk.blockSignals(False)
 
-        self.update_follow_chk.blockSignals(True)
-        self.update_follow_chk.setChecked(not pinned)
-        self.update_follow_chk.blockSignals(False)
+        self.update_pin_label.setText(
+            f"مثبَّت على الإصدار {pinned} — لا يتبع التحديث المركزي" if pinned else "")
+        self.update_pin_label.setVisible(bool(pinned))
+        self.update_unpin_btn.setVisible(bool(pinned))
 
     def write_update_conf(self, key, value):
         """update.conf is plain shell, and the updater sources it - so a value is
@@ -869,23 +951,15 @@ class ControlApp(QMainWindow):
             arabic_error(self, "تعذر حفظ إعدادات التحديث", str(error))
             return False
 
-    def save_update_follow(self):
-        if self.update_follow_chk.isChecked():
-            self.write_update_conf("PIN", "")
+    def clear_update_pin(self):
+        """Back to whatever VERSIONS.json names. Only reachable while pinned.
+
+        Clearing the pin does not itself move the device - the next daily check does, or
+        التحديث إلى أحدث إصدار right now. Pinning is the other direction, and lives with the version
+        list below, which is the only place a version is actually chosen.
+        """
+        if self.write_update_conf("PIN", ""):
             self.refresh_update_status()
-            return
-        # Unticking has to pin to something, and the only version this device is known to
-        # work on is the one it is running.
-        installed = self.read_update_status().get("installed", "")
-        if not installed or installed == "unknown":
-            arabic_error(self, "تعذر تثبيت الإصدار",
-                         "الإصدار المثبَّت غير معروف. اختر إصدارًا من القائمة أعلاه وثبِّته.")
-            self.update_follow_chk.blockSignals(True)
-            self.update_follow_chk.setChecked(True)
-            self.update_follow_chk.blockSignals(False)
-            return
-        self.write_update_conf("PIN", installed)
-        self.refresh_update_status()
 
     def save_update_enabled(self):
         self.write_update_conf("ENABLED", "true" if self.update_auto_chk.isChecked() else "false")
@@ -913,8 +987,13 @@ class ControlApp(QMainWindow):
                          "تأكد من اتصال الجهاز بالإنترنت ثم أعد المحاولة.")
             return
         self.update_version_combo.addItem("اختر إصدارًا…", "")
-        for version in reversed(versions):
+        for version in sorted(versions, key=version_key, reverse=True):
             self.update_version_combo.addItem(version, version)
+
+        # The same fetch fills the rollback list, which until now held only whatever backup
+        # is on disk - the older releases are not knowable without asking.
+        self.update_published_versions = versions
+        self.populate_rollback_versions()
 
     def make_update_busy_dialog(self, text):
         """Owns the screen for the whole update.
@@ -972,7 +1051,67 @@ class ControlApp(QMainWindow):
         self.start_update(["--target", version], f"جارٍ التثبيت {version}…")
 
     def run_update_rollback(self):
-        self.start_update(["--rollback"], "جارٍ الرجوع…")
+        version = self.update_rollback_combo.currentData()
+        if not version:
+            arabic_error(self, "لم يتم اختيار إصدار",
+                         "اختر إصدارًا من القائمة أعلاه. إن كانت فارغة فاضغط «جلب الإصدارات».")
+            return
+        # Going back on purpose has to stick. Without the pin, that night's check would put
+        # the device straight back on the version it was just taken off - the same reason
+        # installing a chosen version pins. الرجوع إلى التحديث المركزي undoes it.
+        self.write_update_conf("PIN", version)
+        if version == self.update_rollback_backup:
+            # On disk already: no download, and the exact bytes that were verified healthy.
+            self.start_update(["--rollback"], f"جارٍ الرجوع إلى {version}…")
+        else:
+            self.start_update(["--target", version], f"جارٍ الرجوع إلى {version}…")
+
+    def populate_rollback_versions(self):
+        """The retained backup, then every published version older than the installed one.
+
+        Called on every status refresh, so it follows the device rather than a snapshot
+        taken when the app opened.
+        """
+        status = self.read_update_status()
+        installed = status.get("installed") or ""
+        backup = status.get("rollback_to") or ""
+        # After a rollback the backup directory still holds the version now running, and
+        # there is no going back to where you already are.
+        if backup == installed:
+            backup = ""
+        self.update_rollback_backup = backup
+
+        older = [v for v in self.update_published_versions
+                 if v != backup and (not installed or version_key(v) < version_key(installed))]
+        older.sort(key=version_key, reverse=True)
+
+        previous = self.update_rollback_combo.currentData()
+        self.update_rollback_combo.blockSignals(True)
+        self.update_rollback_combo.clear()
+        # A placeholder first, so nothing is preselected: this button pins the device and
+        # moves it, and an open list already showing a version invites a stray tap.
+        self.update_rollback_combo.addItem("اختر إصدارًا…", "")
+        if backup:
+            self.update_rollback_combo.addItem(f'{backup}  "{ROLLBACK_LOCAL_LABEL}"', backup)
+        for version in older:
+            self.update_rollback_combo.addItem(version, version)
+        if self.update_rollback_combo.count() == 1:
+            self.update_rollback_combo.setItemText(0, "لا يوجد إصدار سابق")
+        index = self.update_rollback_combo.findData(previous) if previous else -1
+        self.update_rollback_combo.setCurrentIndex(index if index > 0 else 0)
+        self.update_rollback_combo.blockSignals(False)
+        self.update_rollback_button_text()
+
+    def update_rollback_button_text(self):
+        version = self.update_rollback_combo.currentData()
+        self.update_rollback_btn.setEnabled(bool(version))
+        if version:
+            self.update_rollback_btn.setText(f"الرجوع إلى الإصدار {version}")
+        elif self.update_rollback_combo.count() > 1:
+            # There are versions to go back to; the placeholder is simply still selected.
+            self.update_rollback_btn.setText("اختر إصدارًا للرجوع إليه")
+        else:
+            self.update_rollback_btn.setText("الرجوع إلى الإصدار السابق (لا يوجد)")
 
     def on_update_finished(self, success, output):
         dialog = getattr(self, "update_busy", None)
@@ -980,7 +1119,7 @@ class ControlApp(QMainWindow):
             dialog.close()
             self.update_busy = None
 
-        self.update_now_btn.setText("تحديث الآن")
+        self.update_now_btn.setText("التحديث إلى أحدث إصدار")
         for button in (self.update_now_btn, self.update_pin_btn):
             button.setEnabled(True)
         self.refresh_update_status()

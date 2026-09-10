@@ -464,7 +464,7 @@ ssh <device>.local 'crontab -l | grep check_updates'
 
 | must be | why |
 |---|---|
-| `PIN=` empty | a unit shipped pinned never updates again, silently. The Settings app's **تثبيت الإصدار المحدد** button sets a pin — if you used it while preparing the device, tick **اتباع الإصدار المركزي عند التحديث التلقائي** before handover |
+| `PIN=` empty | a unit shipped pinned never updates again, silently. The Settings app's **تثبيت الإصدار المحدد** button sets a pin — if you used it while preparing the device, press **العودة إلى التحديث المركزي** before handover. That control is only on screen while the device is pinned, so its absence is the all-clear |
 | `ENABLED=true` | otherwise the nightly check does nothing |
 | `VARIANT` matching the board | it is cross-checked against the hardware every run |
 | `installed_version` matching what is actually installed | the updater compares against this string, so a wrong value means either a needless reinstall or, worse, a device that thinks it is current and never moves |
@@ -488,26 +488,33 @@ actually happened rather than assuming success.
 
 | control | what it does |
 |---|---|
-| status text | installed version, the pin if any, and the last run's outcome with its timestamp |
+| status text | installed version, and the last run's outcome with its timestamp |
 | amber banner | only appears when an update landed something that needs root — see [§14](#14-things-this-system-deliberately-will-not-do) |
-| **تحديث الآن** | `check_updates.sh --now` |
+| **التحديث إلى أحدث إصدار** | `check_updates.sh --now`. "Latest" is the version `VERSIONS.json` names for this variant — the latest one **approved** for these devices — not whatever is newest on GitHub. It moves down as readily as up: point the pointer back and this button downgrades. On a pinned device it resolves to the pin and so does nothing |
 | progress dialog | a modal window with an indeterminate bar, shown for the whole run. It has no close button — there is nothing safe to do half way through an update — and it is the only thing on the screen, because `--now` leaves the countdown closed |
-| **جلب الإصدارات** | `--list`, filling the dropdown newest-first |
+| **جلب الإصدارات** | `--list`, filling **both** version lists newest-first. Sorted numerically, so 1.0.10 sits above 1.0.9 rather than below it. Sits above both groups, because it serves both |
+| **التثبيت على إصدار محدد** list | every published version. Five rows at a time, the rest a scroll away |
 | **تثبيت الإصدار المحدد** | writes `PIN=<chosen>` to `update.conf`, then `--target <chosen>` |
-| **الرجوع إلى الإصدار السابق** | `--rollback`. Greyed out with "(لا يوجد)" when no backup is retained; otherwise it names the version it would restore |
-| **تحديث تلقائي يومي** | writes `ENABLED=true` or `ENABLED=false` |
-| **اتباع الإصدار المركزي عند التحديث التلقائي** | ticked = `PIN` empty, so the nightly check follows `VERSIONS.json`. Unticking pins the device to the version it is running. Installing a chosen version above unticks it |
+| **الرجوع إلى إصدار سابق** list | the retained backup first, marked *(نسخة محفوظة — رجوع فوري)*, then every published version **older than the installed one**. Never offers the installed version or anything newer. Until **جلب الإصدارات** is pressed it holds only the backup — what else exists is not knowable without asking |
+| **الرجوع إلى الإصدار X** | names whatever the list has selected. `--rollback` when that is the retained backup — no download, and the exact bytes that were verified healthy. `--target X` otherwise, which is an ordinary install of an older release. Either way it writes `PIN=X` first: going back on purpose has to survive the night. Greyed out with "(لا يوجد)" when the list is empty |
+| **تحديث تلقائي يومي** | writes `ENABLED=true` or `ENABLED=false`, and nothing else. Unticking stops the 02:00 check; **التحديث إلى أحدث إصدار** still works, because `ENABLED` is read only in cron mode |
+| **مثبَّت على الإصدار X — لا يتبع التحديث المركزي** | a grey line under the checkbox, present only while `PIN` is set |
+| **العودة إلى التحديث المركزي** | writes `PIN=` and nothing else. Hidden entirely unless the device is pinned |
 
 Installing a chosen version **pins** as well as installs. Without the pin, that night's
 check would pull the device straight back to whatever `VERSIONS.json` names — the opposite
 of what choosing a particular version means.
 
-Tick **اتباع الإصدار المركزي عند التحديث التلقائي** to hand the device back to central
-control; it writes `PIN=` and nothing else. This matters most on a device you are
-preparing for someone: pinning it while you test and forgetting to clear the pin ships a
-unit that silently never updates again, and once it is in a home you may have no SSH to
-fix it with. The checkbox reflects `PIN`, so it also tells you at a glance whether a device
-is under central control.
+Press **العودة إلى التحديث المركزي** to hand the device back to central control; it
+writes `PIN=` and nothing else. This matters most on a device you are preparing for
+someone: pinning it while you test and forgetting to clear the pin ships a unit that
+silently never updates again, and once it is in a home you may have no SSH to fix it with.
+
+The pin line and that button are rendered only while `PIN` is set, so the section states
+the device's update policy without being read: **one checkbox** and nothing under it means
+following the fleet, and anything under it means pinned, naming the version. `ENABLED` and
+`PIN` stay separate settings — "not on a schedule" and "held on one version" are different
+questions, and the earlier two-checkbox version of this section conflated them.
 
 The app writes `update.conf` in place, rewriting one line at a time, so anything you set
 by hand — `EXTRA_EXCLUDE`, a custom URL — survives.
@@ -885,7 +892,7 @@ The second means the failure was not caused by the release. Go to
 
 ### Manual
 
-From the Settings app (**الرجوع إلى الإصدار السابق**) or over SSH:
+From the Settings app (**الرجوع إلى إصدار سابق**) or over SSH:
 
 ```bash
 bash ~/Desktop/scheduler/config/scripts/check_updates.sh --rollback
@@ -897,7 +904,10 @@ recovery action.
 
 **Exactly one version is retained.** Each update wipes `var/update/rollback/` and writes
 a fresh backup of the version it is replacing, so you can always go back one step and
-never two. To go further back, pin instead:
+never two. The Settings app's rollback list reflects that: one entry is the retained
+backup, and everything below it is an older release that gets downloaded — the app calls
+`--target` for those, so from the device's point of view they are ordinary installs
+wearing the word "rollback". To go further back over SSH, pin instead:
 
 ```bash
 sed -i 's/^PIN=.*/PIN=1.0.5/' ~/Desktop/scheduler/config/update.conf
@@ -1238,7 +1248,9 @@ the device or your own backup.
 ## 17. Known limits and quirks
 
 - **One rollback slot.** Each update keeps only the version it replaced. Going further
-  back means pinning and re-downloading.
+  back means pinning and re-downloading — which is what the Settings app does for you when
+  the rollback list's selection is not the retained backup. Only the marked entry is an
+  offline restore; the rest need the network.
 - **`installed_version` is a claim, not a measurement.** Nothing verifies that the files
   on disk match it. Editing files on a device by hand leaves the version lying, and the
   updater will see "already on 1.2.0" and do nothing. Use `--target` to force a
