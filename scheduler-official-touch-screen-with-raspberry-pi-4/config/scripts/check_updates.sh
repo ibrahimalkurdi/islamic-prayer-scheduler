@@ -243,7 +243,12 @@ except Exception:
     sys.exit(0)
 v = doc.get(sys.argv[2])
 if isinstance(v, dict):
-    print("\n".join(str(x) for x in (v.get(sys.argv[3]) or []) if str(x).strip()))
+    # Written one line at a time, not "\n".join(...): joining an empty list yields "",
+    # and print("") is still a newline, which mapfile reads as one empty element. An
+    # empty include resolves to the staging root and rsyncs the whole tree.
+    for x in (v.get(sys.argv[3]) or []):
+        if str(x).strip():
+            sys.stdout.write(str(x).strip() + "\n")
 P
 }
 
@@ -652,6 +657,7 @@ done
 # honest; discarding it here would break that, and would misapply a new list to an old
 # archive during a rollback.
 for inc in ${P_INCLUDES[@]+"${P_INCLUDES[@]}"}; do
+    [[ -n "$inc" ]] || continue
     already=0
     for existing in "${INCLUDES[@]}"; do
         [[ "$existing" == "$inc" ]] && already=1 && break
@@ -734,6 +740,10 @@ RSYNC_FLAGS=(-a --checksum)
 log "Installing $TARGET..."
 FAILED=0
 for inc in "${EFFECTIVE_INCLUDES[@]}"; do
+    # An empty path resolves to the staging root, and rsyncing that would replace the
+    # whole tree regardless of what the release said it may touch. Nothing should produce
+    # one any more; this is the backstop that keeps a future bug from reaching rsync.
+    [[ -n "$inc" ]] || continue
     src="$STAGING_DIR/${inc%/}"
     if [[ ! -e "$src" ]]; then
         log "  skipping $inc - not in this release"

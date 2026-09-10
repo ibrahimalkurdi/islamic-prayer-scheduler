@@ -61,22 +61,24 @@ fi
 #    evidence that separates a working app from one stuck on a traceback, and the app
 #    is fullscreen, so its window is the size of the display.
 #
-#    The window has to be matched back to the countdown's own pid. Searching by class
-#    alone matches any Python window - including the Settings app, which is running
-#    whenever an update is driven from the touchscreen - so a class-only check passes
-#    even when the countdown is closed, which is the opposite of useful.
+#    The window is found by the countdown's own pid, via _NET_WM_PID. Not by window
+#    class: a class-only search matches any Python window - including the Settings app,
+#    which is on screen whenever an update is driven by hand - so it passes even when the
+#    countdown is closed. And not by the class "python" in particular, which matches
+#    nothing at all here, because Qt names the window after the script: WM_CLASS is
+#    "main.py". A search that matches nothing looks exactly like a dead GUI, which is how
+#    this check came to fail healthy devices and roll good releases back.
 if [[ $NO_GUI -eq 1 ]]; then
     :
 elif [[ -z "$GUI_PID" ]]; then
     [[ $QUIET -eq 1 ]] || echo "  SKIP  window check (no GUI process to match a window to)"
 elif command -v xdotool > /dev/null 2>&1; then
-    GUI_WINDOW=""
-    for wid in $(DISPLAY=:0 xdotool search --class "python" 2>/dev/null); do
-        if [[ "$(DISPLAY=:0 xdotool getwindowpid "$wid" 2>/dev/null)" == "$GUI_PID" ]]; then
-            GUI_WINDOW="$wid"
-            break
-        fi
-    done
+    # A mapped window is the better evidence, but --onlyvisible is a filter this check
+    # cannot afford to be wrong about, so an unmapped-but-present window still counts:
+    # the app reached X and created a window either way, and check 4 catches the app
+    # that died behind it.
+    GUI_WINDOW="$(DISPLAY=:0 xdotool search --onlyvisible --pid "$GUI_PID" 2>/dev/null | head -1)"
+    [[ -n "$GUI_WINDOW" ]] ||         GUI_WINDOW="$(DISPLAY=:0 xdotool search --pid "$GUI_PID" 2>/dev/null | head -1)"
     if [[ -n "$GUI_WINDOW" ]]; then
         pass "GUI has a window on the display"
     else

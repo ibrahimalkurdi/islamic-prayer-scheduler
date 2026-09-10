@@ -1028,11 +1028,21 @@ Exits non-zero on the first failure, naming it. Checks 3 and 4 approach the same
 from opposite sides on purpose, so losing `xdotool` degrades the check rather than
 disabling it.
 
-Check 3 matches the window back to the countdown's **own pid**, which matters more than it
-looks. Both apps are `python3`, so searching by window class alone is satisfied by the
-Settings app — and the Settings app is on screen exactly when an update is being driven by
-hand. A class-only check therefore passes while the countdown is closed, which is the
-opposite of useful.
+Check 3 finds the window by the countdown's **own pid**, through `_NET_WM_PID`
+(`xdotool search --pid`). Not by window class, for two separate reasons — both of which
+this check got wrong in turn before it worked:
+
+- a class-only search is satisfied by the **Settings app**, which is on screen exactly when
+  an update is being driven by hand, so it passes while the countdown is closed
+- the class is not what you would guess. Qt names the window after the script, so
+  `WM_CLASS` is `main.py`, not `python` or `python3`. Searching for a class that exists
+  nowhere returns no windows, and *no windows looks exactly like a dead GUI* — which
+  failed healthy devices and rolled good releases back nightly
+
+The second is the more dangerous shape of bug: a check that cannot pass is
+indistinguishable from a check that is failing for a real reason. The tell is in the log —
+if a rollback **also** fails the same check, the checker is what is broken, not the
+release.
 
 ### `--no-gui`
 
@@ -1230,6 +1240,12 @@ the device or your own backup.
   also redirects stdout into the same file, so cron-driven runs appear twice. Cosmetic
   only. To silence it, change the cron line to
   `> /dev/null 2>> …/logs/check_updates.log`, which keeps unexpected crash output.
+- **Check 3 assumes the countdown is an X client.** The Pi OS session is Wayland, and the
+  countdown reaches the screen through XWayland because it is launched with
+  `QT_QPA_PLATFORM=xcb` — which is why `DISPLAY=:0` and `xdotool` work at all. Launched as
+  a native Wayland client it would have no X window, and check 3 would fail a device that
+  is working perfectly. Nothing enforces that `xcb` stays; it is set in the autostart entry
+  and in `check_updates.sh`'s relaunch.
 - **An interactive update does not prove the countdown can open a real X window.** The
   offscreen check starts the app and watches it, but never maps anything to `:0` — so a
   release that broke `xcb` specifically would pass a Settings-driven update. It would be

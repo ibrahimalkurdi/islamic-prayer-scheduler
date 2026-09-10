@@ -153,6 +153,28 @@ expect "pointer include is added" "$out" "adding config/icons/ (named by the ver
     && echo "  ✓ the added path was installed" || { echo "  ✗ added path never arrived"; fail=1; }
 cp /tmp/m2.bak "$REL/pi4-v1.1.0/version.json"
 
+# An empty include/exclude in the object form must add nothing. It used to add one empty
+# string, which resolved to the staging root and rsynced the whole tree over the device -
+# quietly replacing paths the release never claimed. Proven by a path the release ships
+# and the manifest does NOT name: it must stay absent.
+cp "$REL/pi4-v1.1.0/version.json" /tmp/m3.bak
+python3 - "$REL/pi4-v1.1.0/version.json" <<'P'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["include"] = [p for p in m["include"] if p != "config/icons/"]
+json.dump(m, open(sys.argv[1], "w"), indent=2)
+P
+echo "1.0.0" > "$SCH/var/installed_version"
+rm -rf "$SCH/config/icons"
+point 1.1.0 '[]' '[]'
+out="$(run)"
+grep -q "adding  (named by the version pointer)" <<< "$out" \
+    && { echo "  ✗ an empty path was added"; fail=1; } || echo "  ✓ an empty include adds nothing"
+[ ! -d "$SCH/config/icons" ] \
+    && echo "  ✓ an unnamed path was not copied" || { echo "  ✗ the whole staging tree was rsynced"; fail=1; }
+chk_installed 1.1.0
+cp /tmp/m3.bak "$REL/pi4-v1.1.0/version.json"
+
 # Central does not mean trusted: the pointer faces the same refusal a manifest does.
 echo "1.0.0" > "$SCH/var/installed_version"
 point 1.1.0 '[]' '["config/config.ini"]'
