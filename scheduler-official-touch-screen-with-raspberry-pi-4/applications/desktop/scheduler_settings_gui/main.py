@@ -92,7 +92,7 @@ except ImportError:
     prayer_dst = None
     TIMEZONE_COUNTRIES = []
     DEFAULT_TIMEZONE = "Europe/Berlin"
-DEFAULT_PRAYERS_PRESET = os.path.join(PRAYERS_CONFIG_DIR, "default-prayers-time.csv")
+DEFAULT_PRAYERS_PRESET = os.path.join(PRAYERS_CONFIG_DIR, "برلين.csv")
 # Hash of PRAYER_CSV_FILE's content as of the last time the app itself wrote it, so a
 # later override attempt can detect the user hand-edited it since and warn before
 # clobbering that edit.
@@ -1352,7 +1352,7 @@ class ControlApp(QMainWindow):
         attention = status.get("needs_attention")
         if attention:
             self.update_attention_label.setText(
-                "هذا التحديث يحتاج إلى إكمال يدوي — شغّل init.sh على الجهاز.\n"
+                "هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة «تثبيت مكونات النظام» من سطح المكتب.\n"
                 f"({attention})"
             )
             self.update_attention_label.show()

@@ -52,6 +52,15 @@ leaked="$(grep -rl "/home/ihms" "$SCH" \
 chk "no file still points at /home/ihms" "$leaked" "0"
 chk "the wifi unit still runs as root" \
     "$(grep -c '^User=root' "$SCH/config/systemd/wifi_connectivity_resolver.service" 2>/dev/null)" "1"
+# cron exports HOME but not USER, and an unset USER used to write "User=" - an invalid
+# unit that will not start, and one the substitution could never find again because the
+# template string was already gone. Run it the way cron would.
+env -i HOME="$DEV" PATH=/usr/bin:/bin \
+    bash "$SCH/config/scripts/set_device_user.sh" "$SCH" > /dev/null 2>&1 || true
+chk "no empty User= after a run with no \$USER" \
+    "$(grep -rc '^User=$' "$SCH/config/systemd/" 2>/dev/null | grep -c ':[1-9]')" "0"
+chk "the athan unit names a real user" \
+    "$(grep -hc "^User=$(id -un)$" "$SCH/config/systemd/audio_event_scheduler.service" 2>/dev/null)" "1"
 
 echo
 [[ $fail -eq 0 ]] && echo "ALL PASS" || echo "FAILURES ABOVE"

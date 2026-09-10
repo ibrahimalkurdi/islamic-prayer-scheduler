@@ -28,6 +28,16 @@ set -e
 TEMPLATE_USER="ihms"
 TREE_ROOT="${1:-$HOME/Desktop/scheduler}"
 
+# $USER is set by a login shell, and cron does not run one - it exports HOME and LOGNAME
+# from /etc/passwd and little else. An unset $USER here wrote "User=" into the systemd
+# units, which is not a valid unit and will not start, and the substitution could not
+# find it again afterwards because the template string was already gone.
+DEVICE_USER="${USER:-${LOGNAME:-$(id -un)}}"
+if [[ -z "$DEVICE_USER" ]]; then
+    echo "ERROR: cannot determine the device user" >&2
+    exit 1
+fi
+
 if [[ ! -d "$TREE_ROOT" ]]; then
     echo "ERROR: no such tree: $TREE_ROOT" >&2
     exit 1
@@ -36,7 +46,7 @@ fi
 # audio/ is the owner's media and huge; logs/ and var/ are this device's own history,
 # where an old path is a record of what happened, not a setting to correct.
 mapfile -d '' -t CANDIDATES < <(
-    grep -rlZ -e "/home/$TEMPLATE_USER" -e "^User=$TEMPLATE_USER\$" "$TREE_ROOT" \
+    grep -rlZ -e "/home/$TEMPLATE_USER" -e "^User=$TEMPLATE_USER\$" -e "^User=\$" "$TREE_ROOT" \
         --binary-files=without-match \
         --exclude-dir=audio --exclude-dir=logs --exclude-dir=var \
         --exclude-dir=assets --exclude-dir=.git --exclude-dir=__pycache__ \
@@ -44,15 +54,17 @@ mapfile -d '' -t CANDIDATES < <(
 )
 
 if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
-    echo "Device user already set ($USER)"
+    echo "Device user already set ($DEVICE_USER)"
     exit 0
 fi
 
 for file in "${CANDIDATES[@]}"; do
     echo "  ${file#$TREE_ROOT/}"
-    # User= is anchored so a unit that deliberately runs as root keeps doing so.
+    # User= is anchored so a unit that deliberately runs as root keeps doing so. The
+    # empty case repairs a device that was updated by cron before this was fixed.
     sed -i -e "s|/home/$TEMPLATE_USER|$HOME|g" \
-           -e "s|^User=$TEMPLATE_USER\$|User=$USER|" "$file"
+           -e "s|^User=$TEMPLATE_USER\$|User=$DEVICE_USER|" \
+           -e "s|^User=\$|User=$DEVICE_USER|" "$file"
 done
 
-echo "Device user set to $USER in ${#CANDIDATES[@]} file(s)"
+echo "Device user set to $DEVICE_USER in ${#CANDIDATES[@]} file(s)"

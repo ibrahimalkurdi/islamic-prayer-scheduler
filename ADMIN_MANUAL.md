@@ -407,6 +407,16 @@ ssh louay.local 'tail -40 ~/Desktop/scheduler/logs/check_updates.log'
 ssh louay.local 'bash ~/Desktop/scheduler/config/scripts/health_check.sh'
 ```
 
+**Without SSH:** the daily prayers page shows the running version in its footer. It reads
+`var/installed_version` on every refresh rather than a constant compiled into the app, so
+it is the same answer `--status` gives and it updates without the app being restarted —
+which matters, because `check_updates.sh` relaunches the countdown *before* the health
+check and writes `installed_version` only *after* it passes. A device that has never
+completed an update shows `—`, not a version it is not running.
+
+That makes the footer the field answer to "did this device take the update?" — ask someone
+to read it over the phone rather than talking them through a terminal.
+
 ### 5.4 Holding a device back
 
 A pin makes one device ignore `VERSIONS.json` entirely — useful for a device you want to
@@ -423,6 +433,17 @@ or stop it updating at all:
 ```bash
 ssh louay.local "sed -i 's/^ENABLED=.*/ENABLED=false/' ~/Desktop/scheduler/config/update.conf"
 ```
+
+`init.sh` ends by running `check_updates.sh --now`, so a device you have just set up
+finishes provisioning already on whatever `VERSIONS.json` names, rather than up to a day
+behind until its first 02:00 run. It honours `ENABLED=false` — a device deliberately held
+back stays held back when setup is re-run on it — and never fails setup if the network is
+down or a release is rejected; the reason goes to `logs/check_updates.log`.
+
+It uses `--now` rather than `--cron` on purpose. `init.sh` is often run over SSH with
+nobody logged in at the screen, and cron mode relaunches the countdown on `:0` and then
+checks for its window — which would fail on a device with no desktop session and roll a
+good release straight back.
 
 ### 5.5 Handing over a customer device
 
@@ -1097,8 +1118,13 @@ changed `config/systemd/*.service`, the updater installs everything else, then r
 "needs_attention": "systemd unit changed: audio_event_scheduler.service"
 ```
 
-The Settings app shows an amber banner — *هذا التحديث يحتاج إلى إكمال يدوي — شغّل init.sh
-على الجهاز* — and the log names the file. Finish it over SSH:
+The Settings app shows an amber banner — *هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة
+«تثبيت مكونات النظام» من سطح المكتب* — and the log names the file.
+
+The owner can finish it themselves: **تثبيت مكونات النظام** on the Desktop runs `init.sh` in a
+terminal window that stays open, so the sudo prompt is answerable and the report is
+readable. That is the only step of this system that needs a person, and it no longer needs
+a person who knows SSH. Or do it yourself:
 
 ```bash
 ssh louay.local 'cd ~/Desktop/scheduler/config/scripts && bash init.sh'

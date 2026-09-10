@@ -145,12 +145,12 @@ The filename must match exactly, including Arabic characters.
 ##### Note:
 If you are in **Berlin**, you can use this prayer-time file for **2026**:
 ```
-cp config/prayers-config/default-prayers-time.csv ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
+cp config/prayers-config/برلين.csv ~/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv
 ```
 
 ##### Note:
 This step is optional. If no file is present, `init.sh` (Step 7) creates one for you
-from `config/prayers-config/default-prayers-time.csv`, and the Scheduler Settings app
+from `config/prayers-config/برلين.csv`, and the Scheduler Settings app
 can change it later at any time — see **Changing prayer times from the app** below.
 
 ---

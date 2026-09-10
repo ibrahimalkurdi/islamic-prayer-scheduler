@@ -15,7 +15,29 @@ from PyQt5.QtGui import (QBrush, QColor, QFont, QFontMetrics, QTextCharFormat,
 # copied in beside this file. It is read rather than imported - see load_prayer_times.
 
 
-APP_VERSION = "1.0.0"
+# The version this device is actually running, which is not a property of this file.
+# check_updates.sh writes var/installed_version after a release passes its health check,
+# so that file - not a constant baked into the payload - is the only honest answer. A
+# constant here would still read "1.0.0" on a device that has taken four updates.
+INSTALLED_VERSION_FILE = os.path.join(
+    os.path.expanduser("~"), "Desktop", "scheduler", "var", "installed_version"
+)
+
+
+def installed_version():
+    """Read on every refresh, never cached.
+
+    check_updates.sh relaunches this app *before* it runs the health check, and writes
+    var/installed_version only *after* the check passes. A value read once at startup
+    would therefore show the previous version for the whole life of the process - which
+    is exactly the moment someone looks at this label to see whether an update landed.
+    """
+    try:
+        with open(INSTALLED_VERSION_FILE, encoding="utf-8") as handle:
+            version = handle.read().strip()
+    except OSError:
+        return "—"
+    return version if version and version != "unknown" else "—"
 
 # =============================================================================
 # APPEARANCE
@@ -898,7 +920,7 @@ class DailyPrayersPage(QWidget):
         self.cards_layout = cards_layout
         layout.addLayout(cards_layout)
 
-        self.footer = QLabel(APP_VERSION)
+        self.footer = QLabel(installed_version())
         self.footer.setAlignment(Qt.AlignCenter)
         self.footer.setFont(QFont("DejaVu Sans", 9))
         self.footer.setStyleSheet(f"color: {FOOTER_COLOR};")
@@ -945,6 +967,7 @@ class DailyPrayersPage(QWidget):
 
         is_today = self.view_date == today
 
+        self.footer.setText(installed_version())
         self.date_btn.setText(self.view_date.strftime("%Y-%m-%d"))
         self.today_btn.setVisible(not is_today)
 

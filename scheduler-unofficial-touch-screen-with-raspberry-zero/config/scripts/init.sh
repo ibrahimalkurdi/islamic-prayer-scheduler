@@ -217,7 +217,8 @@ cd "$HOME/Desktop"
 
 for desktop_file in \
     "$BASE_DIR/config/prayer_times_gui.desktop" \
-    "$BASE_DIR/config/scheduler_settings_gui.desktop"
+    "$BASE_DIR/config/scheduler_settings_gui.desktop" \
+    "$BASE_DIR/config/scheduler_setup.desktop"
 do
     link_name="$(basename "$desktop_file")"
     if [[ ! -L "$link_name" ]]; then
@@ -281,6 +282,34 @@ if [[ ! -L "$AUTOSTART_LINK" ]]; then
     echo "Autostart entry created"
 else
     echo "Autostart entry already exists"
+fi
+
+#######################################
+# First update check
+#######################################
+# A device is only as current as the last time somebody copied files onto it. Ending setup
+# with an update check means a unit is on whatever VERSIONS.json names before it leaves,
+# instead of up to a day behind until the first 02:00 run.
+#
+# --now rather than --cron: init.sh is often run over SSH with nobody at the screen, and
+# cron mode relaunches the countdown on :0 and then checks for its window - which would
+# fail on a device with no desktop session and roll a good release straight back. --now
+# verifies the countdown offscreen instead, which is correct either way.
+#
+# --now normally ignores ENABLED, because pressing a button is a decision to update. This
+# is not a button, so ENABLED is honoured here: a device deliberately held back must stay
+# held back when someone re-runs setup on it.
+UPDATE_ENABLED="$(grep -E "^ENABLED=" "$CONFIG_DIR/update.conf" 2>/dev/null | cut -d= -f2 | tr -d '"')"
+if [[ "${UPDATE_ENABLED,,}" == "false" ]]; then
+    echo "Updates are disabled on this device - skipping the update check"
+elif [[ ! -f "$SCRIPTS_DIR/check_updates.sh" ]]; then
+    echo "No updater on this device - skipping the update check"
+else
+    echo "Checking for updates..."
+    # Never fatal: setup itself succeeded, and an unreachable network or a release that
+    # fails its health check is not a reason to report the device unprovisioned.
+    bash "$SCRIPTS_DIR/check_updates.sh" --now \
+        || echo "Update check did not complete - see logs/check_updates.log"
 fi
 
 echo "==== Scheduler setup completed successfully ===="

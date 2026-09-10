@@ -731,7 +731,7 @@ class ControlApp(QMainWindow):
         attention = status.get("needs_attention")
         if attention:
             self.update_attention_label.setText(
-                "هذا التحديث يحتاج إلى إكمال يدوي — شغّل init.sh على الجهاز.\n"
+                "هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة «تثبيت مكونات النظام» من سطح المكتب.\n"
                 f"({attention})"
             )
             self.update_attention_label.show()

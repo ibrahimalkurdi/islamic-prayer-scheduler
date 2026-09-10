@@ -78,6 +78,7 @@ INCLUDE=(
     "config/systemd/"
     "config/prayer_times_gui.desktop"
     "config/scheduler_settings_gui.desktop"
+    "config/scheduler_setup.desktop"
     "config/pipewire-pulse.conf"
     "config/crontab.txt"
     "config/update.conf.example"

@@ -136,7 +136,7 @@ cp "$SCHEDULER/config/prayer_times_map.py" \
 # The Settings app blocks on a mandatory picker if the owner's own prayer-times CSV is
 # missing from the Desktop, which it would be on a fixture - so seed it from the shipped
 # preset. This is a device file, not a release file: no update ever writes it.
-cp "$SCHEDULER/config/prayers-config/default-prayers-time.csv" \
+cp "$SCHEDULER/config/prayers-config/برلين.csv" \
    "$DEV/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv"
 
 echo "1.0.0" > "$SCHEDULER/var/installed_version"

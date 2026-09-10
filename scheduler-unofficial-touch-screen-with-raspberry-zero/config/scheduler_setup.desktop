@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=تثبيت مكونات النظام
+Comment=Re-run device setup
+Exec=/home/ihms/Desktop/scheduler/config/scripts/init_from_desktop.sh
+Icon=system-run
+Terminal=true
+Categories=Utility;
