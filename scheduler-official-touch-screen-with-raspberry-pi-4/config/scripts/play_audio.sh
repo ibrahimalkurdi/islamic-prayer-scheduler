@@ -91,7 +91,7 @@ fi
 if [[ " ${PRIORITY_PRAYERS[*]} " =~ " ${PRAYER_NAME_LOWER} " ]]; then
     log "Priority prayer '$PRAYER_NAME' detected. Killing other running instances..."
     # Kill other instances of this script
-    for pid in $(pgrep -f "player-app.sh"); do
+    for pid in $(pgrep -f "config/scripts/play_audio.sh"); do
         if [[ $pid -ne $$ ]]; then
             log "Killing existing instance PID $pid"
             pkill -P "$pid" vlc || true
@@ -144,9 +144,13 @@ else
         sunrise)        PLAYER_DIR="$AUDIO_DIR/shorooq" ;;
         tahajjud)       PLAYER_DIR="$AUDIO_DIR/tahajjud" ;;
         quran)          PLAYER_DIR="$AUDIO_DIR/quran" ;;
+        # Surat Al-Kahf, played on Fridays only. A separate folder rather than a
+        # marked file inside quran/, so the daily selection and the Friday one can
+        # be chosen independently.
+        friday_quran)   PLAYER_DIR="$AUDIO_DIR/friday_quran" ;;
         *)
             log "ERROR: Unknown prayer '$PRAYER_NAME'"
-            log "Allowed: fajr, sunrise, duha, athkar_elsabah, dhuhr, asr, maghrib, athkar_elmasa, isha, tahajjud, quran"
+            log "Allowed: fajr, sunrise, duha, athkar_elsabah, dhuhr, asr, maghrib, athkar_elmasa, isha, tahajjud, quran, friday_quran"
             exit 1
             ;;
     esac
@@ -188,6 +192,11 @@ fi
 # -------------------------------
 # Play
 # -------------------------------
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    log "No audio files to play for $PRAYER_NAME (looked in $PLAYER_DIR) - nothing to do"
+    exit 0
+fi
+
 log "Playing $PRAYER_NAME..."
 cvlc --intf dummy --no-video --play-and-exit "${FILES[@]}" &
 VLC_PID=$!

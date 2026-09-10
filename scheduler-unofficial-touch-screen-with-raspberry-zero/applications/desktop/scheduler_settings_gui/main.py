@@ -4,6 +4,7 @@ import os
 import configparser
 import subprocess
 import csv
+from datetime import datetime, timedelta
 import json
 import re
 
@@ -76,6 +77,10 @@ TAHAJJUD_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "tahajjud")
 DUHA_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "duha")
 ATHKAR_ELSABAH_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "athkar_elsabah")
 ATHKAR_ELMASA_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "athkar_elmasa")
+# Surat Al-Kahf. Its own folder rather than a marked file inside audio/quran/, so the
+# daily selection and the Friday one are chosen independently. audio/ never ships in an
+# update, so the folder is created by apply_settings.sh on the device.
+FRIDAY_QURAN_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "friday_quran")
 
 
 EXPECTED_CSV_HEADER = [
@@ -100,11 +105,24 @@ DUHA_TIME = "duha_time"
 QURAN_ENABLE = "enable_listen_to_quran"
 DEFAULT_CRON = "06:30"
 
+FRIDAY_QURAN_ENABLE = "enable_friday_quran"
+FRIDAY_QURAN_TIME = "friday_quran_time"
+FRIDAY_QURAN_POSITION = "friday_quran_position"
+FRIDAY_QURAN_BEFORE = "before"
+FRIDAY_QURAN_AFTER = "after"
+DEFAULT_FRIDAY_QURAN_POSITION = FRIDAY_QURAN_AFTER
+# Widget bound only. The real constraint - that the reading falls between Sunrise and Asr -
+# varies with the day and is enforced per Friday by the audio scheduler, and previewed in
+# the label under the spinbox.
+FRIDAY_QURAN_MAX_MINUTES = 300
+FRIDAY_WEEKDAY = 4  # date.weekday()
+
 DEFAULTS_INT = {
     TAHAJJUD_TIME: 20,
     DUHA_TIME: 60,
     ATHKAR_ELSABAH_TIME: 240,
     ATHKAR_ELMASA_TIME: 20,
+    FRIDAY_QURAN_TIME: 60,
 }
 
 DEFAULTS_BOOL = {
@@ -113,6 +131,7 @@ DEFAULTS_BOOL = {
     QURAN_ENABLE: True,
     ATHKAR_ELSABAH_ENABLE: True,
     ATHKAR_ELMASA_ENABLE: True,
+    FRIDAY_QURAN_ENABLE: True,
 }
 
 PRAYER_PREFIX = "enable_prayer_"
@@ -542,6 +561,56 @@ class ControlApp(QMainWindow):
 
         main_layout.addWidget(self.cron_frame)
 
+        # ---------------- Friday Quran (Surat Al-Kahf) Section ----------------
+        self.friday_quran_frame, friday_quran_layout, friday_quran_title = \
+            self.create_arabic_section("قراءة سورة الكهف يوم الجمعة")
+
+        friday_quran_layout = self.friday_quran_frame.layout()
+
+        self.friday_quran_chk = QCheckBox("تفعيل قراءة سورة الكهف يوم الجمعة")
+        self.friday_quran_chk.setChecked(self.config["Settings"].getboolean(FRIDAY_QURAN_ENABLE))
+        self.friday_quran_chk.setStyleSheet("font-size: 22px; padding: 5px;")
+        self.friday_quran_chk.setLayoutDirection(Qt.RightToLeft)
+        friday_quran_layout.addWidget(self.friday_quran_chk)
+
+        # Before-or-after sits above the number it qualifies: on its own "60 minutes" says
+        # nothing, and the pair is really one setting.
+        self.friday_quran_position_combo = QComboBox()
+        self.friday_quran_position_combo.setLayoutDirection(Qt.RightToLeft)
+        self.friday_quran_position_combo.setStyleSheet("font-size: 20px; padding: 5px;")
+        self.friday_quran_position_combo.setFixedHeight(45)
+        self.friday_quran_position_combo.addItem("بعد صلاة الجمعة", FRIDAY_QURAN_AFTER)
+        self.friday_quran_position_combo.addItem("قبل صلاة الجمعة", FRIDAY_QURAN_BEFORE)
+        self.select_friday_quran_position(
+            self.config["Settings"].get(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION))
+
+        self.friday_quran_spin = self.create_spinbox(
+            self.config["Settings"].get(FRIDAY_QURAN_TIME, DEFAULTS_INT[FRIDAY_QURAN_TIME]),
+            max_val=FRIDAY_QURAN_MAX_MINUTES
+        )
+        friday_quran_form = QFormLayout()
+        friday_quran_form.addRow("موعد القراءة", self.friday_quran_position_combo)
+        friday_quran_form.setLabelAlignment(Qt.AlignRight)
+        self.add_spinbox_row(friday_quran_form,
+                             "عدد الدقائق بالنسبة لصلاة الجمعة (دقيقة)",
+                             self.friday_quran_spin)
+        friday_quran_layout.addLayout(friday_quran_form)
+
+        self.friday_quran_time_label = QLabel("وقت قراءة سورة الكهف: --")
+        self.friday_quran_time_label.setStyleSheet("font-size: 18px; color: #555;")
+        friday_quran_layout.addWidget(self.friday_quran_time_label)
+
+        self.friday_quran_audio_list = self.create_checkable_audio_list(FRIDAY_QURAN_AUDIO_DIR)
+        self.load_audio_checked_state(
+            self.friday_quran_audio_list,
+            "friday_quran_audio_checked"
+        )
+        friday_quran_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
+        friday_quran_layout.addWidget(self.friday_quran_audio_list)
+        self.link_checkbox_to_list(self.friday_quran_chk, self.friday_quran_audio_list)
+
+        main_layout.addWidget(self.friday_quran_frame)
+
         # ---------------- Updates Section ----------------
         main_layout.addWidget(self.build_updates_section())
 
@@ -602,7 +671,8 @@ class ControlApp(QMainWindow):
         # ---------------- Increase form label fonts ----------------
         label_font = QFont()
         label_font.setPointSize(16)
-        for layout in [tahajjud_form, duha_form, athkar_elsabah_form, athkar_elmasa_form, cron_form]:
+        for layout in [tahajjud_form, duha_form, athkar_elsabah_form, athkar_elmasa_form, cron_form,
+                       friday_quran_form]:
             for i in range(layout.rowCount()):
                 item = layout.itemAt(i, QFormLayout.LabelRole)
                 if item:
@@ -617,6 +687,8 @@ class ControlApp(QMainWindow):
         self.setup_checkbox_link(self.athkar_elmasa_chk, self.athkar_elmasa_spin)
         self.setup_checkbox_link(self.cron_chk, self.cron_hour_spin)
         self.setup_checkbox_link(self.cron_chk, self.cron_min_spin)
+        self.setup_checkbox_link(self.friday_quran_chk, self.friday_quran_spin)
+        self.setup_checkbox_link(self.friday_quran_chk, self.friday_quran_position_combo)
         self.last_valid_duha = self.duha_spin.value()
         self.duha_spin.editingFinished.connect(self.validate_duha_time)
 
@@ -625,6 +697,8 @@ class ControlApp(QMainWindow):
         self.tahajjud_spin.valueChanged.connect(self.update_all_time_labels)
         self.athkar_elsabah_spin.valueChanged.connect(self.update_all_time_labels)
         self.athkar_elmasa_spin.valueChanged.connect(self.update_all_time_labels)
+        self.friday_quran_spin.valueChanged.connect(self.update_all_time_labels)
+        self.friday_quran_position_combo.currentIndexChanged.connect(self.update_all_time_labels)
 
         # --- Initial calculation ---
         self.update_all_time_labels()
@@ -1039,11 +1113,71 @@ class ControlApp(QMainWindow):
             athkar_masa_time = maghrib + self.athkar_elmasa_spin.value()
             self.athkar_elmasa_time_label.setText(f"وقت أذكار المساء: {self.minutes_to_hhmm(athkar_masa_time)}")
 
+            # Surat Al-Kahf. Read against the coming Friday's own times rather than today's,
+            # because that is the day it plays on - and in its own try, so a source CSV
+            # missing that one row cannot blank the labels above.
+            try:
+                self.friday_quran_time_label.setText(self.friday_quran_label_text())
+            except Exception as friday_error:
+                print("Failed to update the Surat Al-Kahf time label:", friday_error)
+                self.friday_quran_time_label.setText("--")
+
         except Exception as e:
             print("Failed to update time labels:", e)
             # Optional: clear labels if error
 
 
+
+    def load_prayer_row_for(self, date):
+        with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if int(row["Month"]) == date.month and int(row["Day"]) == date.day:
+                    return row
+
+        raise ValueError(f"Prayer times not found for {date.day:02d}/{date.month:02d}")
+
+    def selected_friday_quran_position(self):
+        value = self.friday_quran_position_combo.currentData()
+        return value if value in (FRIDAY_QURAN_BEFORE, FRIDAY_QURAN_AFTER) \
+            else DEFAULT_FRIDAY_QURAN_POSITION
+
+    def select_friday_quran_position(self, value):
+        index = self.friday_quran_position_combo.findData(str(value).strip().lower())
+        self.friday_quran_position_combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def next_friday(self):
+        """Today when today is Friday, otherwise the Friday coming."""
+        today = datetime.now().date()
+        return today + timedelta(days=(FRIDAY_WEEKDAY - today.weekday()) % 7)
+
+    def clamp_friday_quran(self, minutes, row):
+        """The window the audio scheduler enforces per Friday: strictly between Sunrise and
+        Asr. One offset is applied to every Friday of the year, and the Dhuhr->Asr gap is
+        nearly two hours shorter in December than in June, so a value that is comfortable
+        in summer would otherwise land on top of the Asr athan in winter."""
+        asr = self.time_to_minutes(row["Asr"])
+        sunrise = self.time_to_minutes(row["Sunrise"])
+        if minutes >= asr:
+            minutes = asr - 1
+        if minutes <= sunrise:
+            minutes = sunrise + 1
+        return minutes
+
+    def friday_quran_label_text(self):
+        friday = self.next_friday()
+        row = self.load_prayer_row_for(friday)
+        dhuhr = self.time_to_minutes(row["Dhuhr"])
+        offset = self.friday_quran_spin.value()
+
+        wanted = dhuhr - offset if self.selected_friday_quran_position() == FRIDAY_QURAN_BEFORE \
+            else dhuhr + offset
+        when = self.clamp_friday_quran(wanted, row)
+
+        text = (f"وقت قراءة سورة الكهف يوم الجمعة {friday.day:02d}/{friday.month:02d}: "
+                f"{self.minutes_to_hhmm(when)}")
+        if when != wanted:
+            text += " (تم تعديله ليقع بين الشروق والعصر)"
+        return text
 
     def clear_all_time_labels(self):
         """Clears any existing displayed actual time labels in the UI."""
@@ -1402,12 +1536,16 @@ class ControlApp(QMainWindow):
         self.athkar_elsabah_chk.setChecked(s.getboolean(ATHKAR_ELSABAH_ENABLE))
         self.athkar_elmasa_chk.setChecked(s.getboolean(ATHKAR_ELMASA_ENABLE))
         self.cron_chk.setChecked(s.getboolean(QURAN_ENABLE))
+        self.friday_quran_chk.setChecked(s.getboolean(FRIDAY_QURAN_ENABLE))
 
         # Spinboxes
         self.tahajjud_spin.setValue(int(s[TAHAJJUD_TIME]))
         self.duha_spin.setValue(int(s[DUHA_TIME]))
         self.athkar_elsabah_spin.setValue(int(s[ATHKAR_ELSABAH_TIME]))
         self.athkar_elmasa_spin.setValue(int(s[ATHKAR_ELMASA_TIME]))
+        self.friday_quran_spin.setValue(int(s[FRIDAY_QURAN_TIME]))
+        self.select_friday_quran_position(
+            s.get(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION))
 
         # Prayer checkboxes
         for key, chk in self.prayer_checkboxes.items():
@@ -1426,6 +1564,10 @@ class ControlApp(QMainWindow):
         for i in range(self.quran_audio_list.count()):
             self.quran_audio_list.item(i).setCheckState(Qt.Checked)
         self.load_quran_audio_checked_state()
+
+        # Surat Al-Kahf audio list
+        self.load_audio_checked_state(
+            self.friday_quran_audio_list, "friday_quran_audio_checked")
 
 
     # ---------------- Config ----------------
@@ -1448,6 +1590,9 @@ class ControlApp(QMainWindow):
         # ---------------- Quran cron time ----------------
         s.setdefault("listen_to_quran", DEFAULT_CRON)
 
+        # ---------------- Surat Al-Kahf position ----------------
+        s.setdefault(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION)
+
         # ---------------- Audio lists defaults (checked) ----------------
         audio_defaults = {
             "quran_audio_checked": QURAN_AUDIO_DIR,
@@ -1455,6 +1600,7 @@ class ControlApp(QMainWindow):
             "duha_audio_checked": DUHA_AUDIO_DIR,
             "athkar_elsabah_audio_checked": ATHKAR_ELSABAH_AUDIO_DIR,
             "athkar_elmasa_audio_checked": ATHKAR_ELMASA_AUDIO_DIR,
+            "friday_quran_audio_checked": FRIDAY_QURAN_AUDIO_DIR,
         }
 
         for cfg_key, directory in audio_defaults.items():
@@ -1503,6 +1649,9 @@ class ControlApp(QMainWindow):
         s[ATHKAR_ELMASA_ENABLE] = str(self.athkar_elmasa_chk.isChecked())
         s[ATHKAR_ELMASA_TIME] = str(self.athkar_elmasa_spin.value())
         s[QURAN_ENABLE] = str(self.cron_chk.isChecked())
+        s[FRIDAY_QURAN_ENABLE] = str(self.friday_quran_chk.isChecked())
+        s[FRIDAY_QURAN_TIME] = str(self.friday_quran_spin.value())
+        s[FRIDAY_QURAN_POSITION] = self.selected_friday_quran_position()
 
         for key, chk in self.prayer_checkboxes.items():
             s[key] = str(chk.isChecked())
@@ -1518,6 +1667,7 @@ class ControlApp(QMainWindow):
         self.save_audio_checked_state(self.duha_audio_list, "duha_audio_checked")
         self.save_audio_checked_state(self.athkar_elsabah_audio_list, "athkar_elsabah_audio_checked")
         self.save_audio_checked_state(self.athkar_elmasa_audio_list, "athkar_elmasa_audio_checked")
+        self.save_audio_checked_state(self.friday_quran_audio_list, "friday_quran_audio_checked")
 
         # Save checked prayer audio files (per prayer)
         for prayer_key, list_widget in self.prayer_audio_lists.items():
@@ -1555,6 +1705,8 @@ class ControlApp(QMainWindow):
 
             self.config["Settings"]["listen_to_quran"] = DEFAULT_CRON
             self.config["Settings"]["quran_audio_checked"] = ""
+            self.config["Settings"][FRIDAY_QURAN_POSITION] = DEFAULT_FRIDAY_QURAN_POSITION
+            self.config["Settings"]["friday_quran_audio_checked"] = ""
 
             # --- NEW: Check all section checkboxes ---
             self.tahajjud_chk.setChecked(True)
@@ -1562,6 +1714,7 @@ class ControlApp(QMainWindow):
             self.athkar_elsabah_chk.setChecked(True)
             self.athkar_elmasa_chk.setChecked(True)
             self.cron_chk.setChecked(True)
+            self.friday_quran_chk.setChecked(True)
 
             # --- NEW: Check all prayer checkboxes ---
             for chk in self.prayer_checkboxes.values():
@@ -1579,6 +1732,7 @@ class ControlApp(QMainWindow):
             check_all_items(self.duha_audio_list)
             check_all_items(self.athkar_elsabah_audio_list)
             check_all_items(self.athkar_elmasa_audio_list)
+            check_all_items(self.friday_quran_audio_list)
 
             for lst in self.prayer_audio_lists.values():
                 check_all_items(lst)

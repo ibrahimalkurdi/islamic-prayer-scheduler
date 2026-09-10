@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import subprocess
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 import time
 import logging
 import json
@@ -27,6 +27,11 @@ PRAYER_LABELS = [
     'Isha', 'Tahajjud'
 ]
 QURAN_EVENT_LABEL = "Quran"
+FRIDAY_QURAN_EVENT_LABEL = "friday_quran"
+FRIDAY = 4  # datetime.weekday()
+
+DEFAULT_FRIDAY_QURAN_POSITION = "after"
+DEFAULT_FRIDAY_QURAN_MINUTES = 60
 
 # ──────────────────────────────────────────────────────────────
 # Helpers
@@ -49,6 +54,7 @@ def get_audio_for_event(event_type):
         "athkar_elsabah": "athkar_elsabah_audio_checked",
         "athkar_elmasa": "athkar_elmasa_audio_checked",
         "quran": "quran_audio_checked",
+        "friday_quran": "friday_quran_audio_checked",
     }
     key = key_map.get(event_type.lower())
     return config["Settings"].get(key, "") if key else ""
@@ -69,7 +75,70 @@ def load_skipped_events():
             skipped.append(label.lower())
     if not config["Settings"].getboolean("enable_listen_to_quran", fallback=True):
         skipped.append("quran")
+    if not config["Settings"].getboolean("enable_friday_quran", fallback=True):
+        skipped.append("friday_quran")
     return skipped
+
+def load_friday_quran_offset():
+    """How far Surat Al-Kahf sits from Friday's Dhuhr, which is when the Jumu'ah prayer
+    is held: ("before"|"after", minutes). An hour afterwards unless configured otherwise."""
+    config = configparser.ConfigParser()
+    config.read(SETTINGS_INI_FILE)
+    try:
+        settings = config["Settings"]
+    except KeyError:
+        return DEFAULT_FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_MINUTES
+
+    position = str(settings.get("friday_quran_position",
+                                DEFAULT_FRIDAY_QURAN_POSITION)).strip().lower()
+    if position not in ("before", "after"):
+        position = DEFAULT_FRIDAY_QURAN_POSITION
+    try:
+        minutes = int(settings.get("friday_quran_time", DEFAULT_FRIDAY_QURAN_MINUTES))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_FRIDAY_QURAN_MINUTES
+    return position, max(0, minutes)
+
+
+def row_time(row, label, date):
+    """One column of a prayer-times row as a datetime on `date`, or None if the column is
+    absent or unparseable - the map carries "nan" for prayers a source did not provide."""
+    value = str(row.get(label, row.get(label.lower(), "nan"))).strip()
+    if value.lower() == "nan":
+        return None
+    try:
+        return datetime.combine(date, datetime.strptime(value, "%H:%M").time())
+    except ValueError:
+        return None
+
+
+def friday_quran_datetime(row, date, position, minutes):
+    """When Surat Al-Kahf plays on one Friday, and whether that had to be pulled back into
+    the day.
+
+    The offset is a single number applied to every Friday of the year, but the Dhuhr->Asr
+    gap is nearly two hours shorter in December than in June - so an hour after Jumu'ah is
+    comfortable in summer and lands on top of the Asr athan in winter. Clamped per day to
+    stay strictly inside (Sunrise, Asr), the same way 01_add_fields.py clamps Athkar
+    Elsabah against Dhuhr.
+    """
+    dhuhr = row_time(row, "Dhuhr", date)
+    if dhuhr is None:
+        return None, False
+
+    delta = timedelta(minutes=minutes)
+    wanted = dhuhr - delta if position == "before" else dhuhr + delta
+
+    when = wanted
+    asr = row_time(row, "Asr", date)
+    if asr is not None and when >= asr:
+        when = asr - timedelta(minutes=1)
+    sunrise = row_time(row, "Sunrise", date)
+    if sunrise is not None and when <= sunrise:
+        when = sunrise + timedelta(minutes=1)
+
+    return when, when != wanted
+
 
 def load_quran_time():
     config = configparser.ConfigParser()
@@ -123,10 +192,19 @@ class AthanScheduler:
         year = datetime.now().year
         skipped_set = set(load_skipped_events())
         q_time = load_quran_time()
+        friday_position, friday_minutes = load_friday_quran_offset()
+        friday_clamped = 0
 
         for row in prayer_times:
             month = int(row.get("Month", row.get("month", 1)))
             day = int(row.get("Day", row.get("day", 1)))
+
+            # The map is keyed by month and day with no year of its own, so 29 February can
+            # appear in a row that this year has no date for.
+            try:
+                date = datetime(year, month, day).date()
+            except ValueError:
+                continue
 
             # Schedule Prayers
             for label in PRAYER_LABELS:
@@ -140,8 +218,26 @@ class AthanScheduler:
 
             # Schedule Quran for this day
             if "quran" not in skipped_set and q_time:
-                q_dt = datetime.combine(datetime(year, month, day).date(), q_time)
+                q_dt = datetime.combine(date, q_time)
                 self.schedule.append({"datetime": q_dt, "type": "quran"})
+
+            # Surat Al-Kahf, Fridays only. Derived here from the row's own Dhuhr rather than
+            # added as a column by 01_add_fields.py: the CSV carries no year, so which rows
+            # are Fridays is not known until the schedule is built - and it is rebuilt at
+            # every midnight and after every settings change anyway.
+            if "friday_quran" not in skipped_set and date.weekday() == FRIDAY:
+                when, clamped = friday_quran_datetime(
+                    row, date, friday_position, friday_minutes)
+                if when is not None:
+                    self.schedule.append(
+                        {"datetime": when, "type": FRIDAY_QURAN_EVENT_LABEL})
+                    friday_clamped += 1 if clamped else 0
+
+        if friday_clamped:
+            logger.info(
+                f"Surat Al-Kahf moved to fit between Sunrise and Asr on {friday_clamped} "
+                f"Friday(s) - {friday_minutes} minute(s) {friday_position} Dhuhr does not "
+                "fit on every day of the year.")
 
         logger.info(f"Loaded {len(self.schedule)} events.")
 

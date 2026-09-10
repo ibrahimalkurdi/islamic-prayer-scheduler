@@ -6,7 +6,7 @@
   "_format_shorthand": "A variant with no path rules can be written as just the version string: \"zero\": \"1.0.3\".",
 
   "pi4": {
-    "version": "1.0.7",
+    "version": "1.0.8",
     "exclude": [],
     "include": []
   },

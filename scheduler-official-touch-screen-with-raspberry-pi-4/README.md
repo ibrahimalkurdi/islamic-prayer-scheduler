@@ -469,8 +469,12 @@ After completing all steps, the Islamic Prayer Scheduler will be fully configure
   empty box, that font is missing — re-run `init.sh`.
 - Audio for each event lives in `~/Desktop/scheduler/audio/<event>/`
   (`fajr`, `shorooq`, `duha`, `athkar_elsabah`, `dhuhr`, `asr`, `maghrib`,
-  `athkar_elmasa`, `isha`, `tahajjud`, `quran`). Add or remove `.mp3` files there, then
-  pick them in the Scheduler Settings app.
+  `athkar_elmasa`, `isha`, `tahajjud`, `quran`, `friday_quran`). Add or remove `.mp3`
+  files there, then pick them in the Scheduler Settings app.
+- `friday_quran` is Surat Al-Kahf, played on Fridays only, at an offset from that day's
+  Dhuhr — the Jumu'ah prayer — set in the Settings app. `audio/` is never part of an
+  update payload, so the folder is created by `apply_settings.sh`, which runs after every
+  update; it arrives empty and the recitation is silent until an `.mp3` is put in it.
 - After changing any application file, restart what uses it:
   `sudo systemctl restart audio_event_scheduler.service` for the scheduler, or simply
   reopen the GUI apps.

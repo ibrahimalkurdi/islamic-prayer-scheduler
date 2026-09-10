@@ -6,6 +6,13 @@ CONFIG_DIR="$MAIN_DIR/scheduler/config"
 SCRIPTS_DIR="$MAIN_DIR/scheduler/config/scripts"
 DESKTOP_APP_DIR="$MAIN_DIR/scheduler/applications/desktop/prayer_times_gui"
 
+# audio/ is deliberately never part of an update payload - it holds the owner's own MP3s
+# and runs to hundreds of megabytes - so a release that introduces a new audio folder has
+# no way to deliver it. Created here instead, on every run: this script is what the
+# updater calls once the files are in place, so the folder appears on an existing device
+# the first time it takes the release that needs it.
+mkdir -p "$MAIN_DIR/scheduler/audio/friday_quran"
+
 if [[ -f "$INPUT_CSV_FILE" ]]; then
 	echo "Copying $INPUT_CSV_FILE file to $CONFIG_DIR/input-prayers-time.csv"
 	cp -f "$INPUT_CSV_FILE" "$CONFIG_DIR/input-prayers-time.csv"

@@ -12,9 +12,10 @@
 #   releases/               two published pi4 releases (1.0.0 and 1.1.0), an index.json,
 #                           and the VERSIONS.json pointer that decides what installs,
 #                           read over file:// - curl handles that, so no server is needed
-#   test_updater.sh         the three test scripts, copied in beside them - each finds
+#   test_updater.sh         the four test scripts, copied in beside them - each finds
 #   test_state_survives.sh    the fixture from its own directory, so they run from here
 #   test_settings_updates.py
+#   test_friday_quran.py
 #
 # health_check.sh is replaced by a stub in both the device tree and the releases. It is
 # the one thing that cannot be faked off-device: it asks systemd whether the athan
@@ -153,7 +154,8 @@ echo "Raspberry Pi 4 Model B Rev 1.5" > "$FIXTURE/fake_model"
 
 cp "$(dirname "${BASH_SOURCE[0]}")/test_updater.sh" \
    "$(dirname "${BASH_SOURCE[0]}")/test_state_survives.sh" \
-   "$(dirname "${BASH_SOURCE[0]}")/test_settings_updates.py" "$FIXTURE/"
+   "$(dirname "${BASH_SOURCE[0]}")/test_settings_updates.py" \
+   "$(dirname "${BASH_SOURCE[0]}")/test_friday_quran.py" "$FIXTURE/"
 chmod +x "$FIXTURE/test_updater.sh" "$FIXTURE/test_state_survives.sh"
 
 cat <<DONE
@@ -163,6 +165,7 @@ Fixture ready. Run the tests from inside it:
   bash $FIXTURE/test_updater.sh
   bash $FIXTURE/test_state_survives.sh
   python3 $FIXTURE/test_settings_updates.py
+  python3 $FIXTURE/test_friday_quran.py
 
 Poke at the device by hand the same way - HOME and the model file are all that make it
 a device:

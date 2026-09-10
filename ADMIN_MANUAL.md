@@ -69,6 +69,7 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_updater.sh` | ten refusal/recovery paths, including the pointer and its path rules |
 | `tools/tests/test_state_survives.sh` | proves an update keeps the owner's data |
 | `tools/tests/test_settings_updates.py` | drives the Settings app's update section headlessly |
+| `tools/tests/test_friday_quran.py` | the Friday Surat Al-Kahf event, end to end: scheduler, player and Settings section |
 
 **On each device, under `~/Desktop/scheduler/`**
 
@@ -300,13 +301,14 @@ the releases. It is the only part that cannot work off-device, since it asks sys
 whether the athan service is up and X whether the countdown has a window. Every other
 script under test is the real one.
 
-Then run the three suites:
+Then run the four suites:
 
 ```bash
 cd /tmp/scheduler-update-test
 bash test_updater.sh              # 10 refusal and recovery paths
 bash test_state_survives.sh       # the owner's data survives a real update
 python3 test_settings_updates.py  # the Settings app's buttons, headless (slow, ~2 min)
+python3 test_friday_quran.py      # Surat Al-Kahf on Fridays, headless
 ```
 
 | suite | what it proves |
@@ -314,6 +316,7 @@ python3 test_settings_updates.py  # the Settings app's buttons, headless (slow, 
 | `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` is refused with the device untouched, and the plain-string shorthand still resolves; `--rollback` restores |
 | `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does |
 | `test_settings_updates.py` | the version list is fetched newest-first; choosing a version writes `PIN` **and** installs it; the checkbox writes `ENABLED`; choosing nothing raises an error rather than doing nothing |
+| `test_friday_quran.py` | Surat Al-Kahf is scheduled on Fridays and no other day; the default is an hour after Jumu'ah; before/after and the minute count both take effect; the time is clamped into the day's own Sunrise→Asr window; the checkbox switches it off; a nonsense or missing setting falls back to an hour after; its audio selection is separate from the daily one; the player routes `friday_quran` to its own folder and treats an empty folder as a no-op; the Settings section round-trips all three keys |
 
 Poke at the fixture device by hand the same way the tests do — `HOME` and the model file
 are the only things that make it a device:
@@ -326,7 +329,9 @@ HOME=$PWD/dev DEVICE_MODEL_FILE=$PWD/fake_model \
 
 Both `test_updater.sh` and `test_state_survives.sh` reset the fixture's device state
 before they start, so they can be re-run in any order. `test_settings_updates.py`
-deliberately leaves a pin behind — that is what it is testing.
+deliberately leaves a pin behind — that is what it is testing. `test_friday_quran.py`
+puts the fixture's `config.ini` back as it found it, so it can run before or after the
+others.
 
 To test **your** release rather than the fixture's, drop your `dist/` output into
 `/tmp/scheduler-update-test/releases/pi4-v1.2.0/`, add the tag to `releases/index.json`,
