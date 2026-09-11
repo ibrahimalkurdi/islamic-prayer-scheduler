@@ -1,0 +1,13 @@
+{
+  "_comment": "A test version pointer. No device reads this file unless its own config/update.conf sets UPDATE_POINTER_URL to it - see README.md. Use it to take one device through a release before VERSIONS.json moves the fleet. Same format as VERSIONS.json.",
+  "pi4": {
+    "version": "1.0.9",
+    "exclude": [],
+    "include": []
+  },
+  "zero": {
+    "version": "",
+    "exclude": [],
+    "include": []
+  }
+}

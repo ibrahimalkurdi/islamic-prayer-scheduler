@@ -12,10 +12,11 @@
 #   releases/               two published pi4 releases (1.0.0 and 1.1.0), an index.json,
 #                           and the VERSIONS.json pointer that decides what installs,
 #                           read over file:// - curl handles that, so no server is needed
-#   test_updater.sh         the four test scripts, copied in beside them - each finds
+#   test_updater.sh         the five test scripts, copied in beside them - each finds
 #   test_state_survives.sh    the fixture from its own directory, so they run from here
 #   test_settings_updates.py
 #   test_friday_quran.py
+#   test_make_release.sh
 #
 # health_check.sh is replaced by a stub in both the device tree and the releases. It is
 # the one thing that cannot be faked off-device: it asks systemd whether the athan
@@ -57,6 +58,14 @@ rsync -a --exclude='.git/' --exclude='audio/' --exclude='dist/' \
          "$REPO_ROOT/" "$BUILD/"
 printf '%s' "$HEALTH_STUB" > "$BUILD/$SUBTREE/config/scripts/health_check.sh"
 
+# The rsync above drops audio/ - it is 883 MB of the owner's music. But the folder names
+# under it are what make_release.sh checks default-audio/ against, and they are committed
+# in the real repo as empty placeholders, so the placeholders are put back.
+while IFS= read -r tracked; do
+    mkdir -p "$BUILD/$(dirname "$tracked")"
+    : > "$BUILD/$tracked"
+done < <(git -C "$REPO_ROOT" ls-files "$SUBTREE/audio")
+
 git -C "$BUILD" init -q
 git -C "$BUILD" config user.email "fixture@localhost"
 git -C "$BUILD" config user.name "fixture"
@@ -78,6 +87,12 @@ build_release 1.0.0
 # "did the update land?" cannot be told apart from "did nothing happen?".
 echo "# fixture marker: version 1.1.0" \
     >> "$BUILD/$SUBTREE/applications/desktop/prayer_times_gui/main.py"
+
+# 1.1.0 also carries default audio, which 1.0.0 does not - so "the release seeded it"
+# can be told apart from "it was always there".
+mkdir -p "$BUILD/$SUBTREE/default-audio/shorooq"
+echo "FIXTURE-DEFAULT-SHOROOQ" > "$BUILD/$SUBTREE/default-audio/shorooq/sunrise.mp3"
+git -C "$BUILD" add -A
 git -C "$BUILD" commit -qam "fixture 1.1.0"
 build_release 1.1.0
 
@@ -117,6 +132,10 @@ mkdir -p "$SCHEDULER/logs" "$SCHEDULER/var/update/rollback" "$SCHEDULER/audio/fa
 # The three kinds of state an update must leave alone, each marked so the tests can
 # prove it survived byte for byte.
 echo "FIXTURE-AUDIO" > "$SCHEDULER/audio/fajr/athan.mp3"
+# A second recitation, in the folder a forced include claims, so --delete running where
+# it must not can be detected rather than inferred.
+mkdir -p "$SCHEDULER/audio/shorooq"
+echo "FIXTURE-OWNERS-OWN" > "$SCHEDULER/audio/shorooq/owners-own.mp3"
 python3 - "$SCHEDULER/config/config.ini" <<'INI'
 import configparser, sys
 path = sys.argv[1]
@@ -155,8 +174,10 @@ echo "Raspberry Pi 4 Model B Rev 1.5" > "$FIXTURE/fake_model"
 cp "$(dirname "${BASH_SOURCE[0]}")/test_updater.sh" \
    "$(dirname "${BASH_SOURCE[0]}")/test_state_survives.sh" \
    "$(dirname "${BASH_SOURCE[0]}")/test_settings_updates.py" \
-   "$(dirname "${BASH_SOURCE[0]}")/test_friday_quran.py" "$FIXTURE/"
-chmod +x "$FIXTURE/test_updater.sh" "$FIXTURE/test_state_survives.sh"
+   "$(dirname "${BASH_SOURCE[0]}")/test_friday_quran.py" \
+   "$(dirname "${BASH_SOURCE[0]}")/test_make_release.sh" "$FIXTURE/"
+chmod +x "$FIXTURE/test_updater.sh" "$FIXTURE/test_state_survives.sh" \
+         "$FIXTURE/test_make_release.sh"
 
 cat <<DONE
 
@@ -164,6 +185,7 @@ Fixture ready. Run the tests from inside it:
 
   bash $FIXTURE/test_updater.sh
   bash $FIXTURE/test_state_survives.sh
+  bash $FIXTURE/test_make_release.sh
   python3 $FIXTURE/test_settings_updates.py
   python3 $FIXTURE/test_friday_quran.py
 

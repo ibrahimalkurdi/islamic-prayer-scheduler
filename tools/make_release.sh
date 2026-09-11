@@ -17,13 +17,35 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/dist"
 
 usage() {
-    echo "usage: $(basename "$0") <pi4|zero> <version>" >&2
+    cat >&2 <<'USAGE'
+usage: make_release.sh <pi4|zero> <version> [--yes] [--allow-large]
+
+  --yes          answer the default-audio folder-name prompt with "yes". For scripted
+                 builds; with no terminal the prompt refuses rather than hangs.
+  --allow-large  build even if the payload is over MAX_RELEASE_MB (default 25). Every
+                 device downloads the whole payload on every update, so this is
+                 deliberate, not routine.
+USAGE
     exit 2
 }
 
-[[ $# -eq 2 ]] || usage
-VARIANT="$1"
-VERSION="$2"
+ASSUME_YES=0
+ALLOW_LARGE=0
+MAX_RELEASE_MB="${MAX_RELEASE_MB:-25}"
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --yes|-y)      ASSUME_YES=1 ;;
+        --allow-large) ALLOW_LARGE=1 ;;
+        -h|--help)     usage ;;
+        -*)            echo "ERROR: unknown option '$1'" >&2; usage ;;
+        *)             POSITIONAL+=("$1") ;;
+    esac
+    shift
+done
+[[ ${#POSITIONAL[@]} -eq 2 ]] || usage
+VARIANT="${POSITIONAL[0]}"
+VERSION="${POSITIONAL[1]}"
 
 case "$VARIANT" in
     pi4)  SUBTREE="scheduler-official-touch-screen-with-raspberry-pi-4" ;;
@@ -102,11 +124,51 @@ git archive --format=tar "HEAD:$SUBTREE" | tar -x -C "$WORK"
 # The two trees keep their fonts and presets in different places, and an empty
 # directory left behind by a rename must not end up in the list either - so this asks
 # the exported tree what is really there, not the checkout.
-for optional in "config/fonts/" "config/icons/" "config/arabic-fonts/" "config/prayers-config/"; do
+for optional in "config/fonts/" "config/icons/" "config/arabic-fonts/" "config/prayers-config/" \
+                "default-audio/"; do
     if [[ -d "$WORK/${optional%/}" ]] && [[ -n "$(ls -A "$WORK/${optional%/}")" ]]; then
         INCLUDE+=("$optional")
     fi
 done
+
+# Folder names under default-audio/ have to match a real event folder, or the file
+# lands somewhere nothing will ever look for it and the release looks like it worked.
+# The valid names come from git rather than $WORK, because the strip below deletes
+# audio/ - and from this variant's own tree, since zero has no shorooq.
+if [[ -d "$WORK/default-audio" ]]; then
+    echo "==> Checking default-audio folder names"
+    VALID_EVENTS="$(git ls-tree --name-only "HEAD:$SUBTREE/audio" 2>/dev/null || true)"
+    BAD=0
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        # No audio/ in the repo means there is nothing to check against - every name
+        # would look wrong. Say so once rather than flagging all of them.
+        if [[ -z "$VALID_EVENTS" ]]; then
+            echo "    cannot check names: this tree has no committed audio/ folders"
+            break
+        fi
+        if ! grep -qxF "$dir" <<< "$VALID_EVENTS"; then
+            BAD=1
+            echo "    WARNING: default-audio/$dir/ does not match any audio folder in this tree." >&2
+            suggestion="$(python3 -c 'import difflib,sys; m=difflib.get_close_matches(sys.argv[1], sys.argv[2].split(), 1, 0.5); print(m[0] if m else "")' \
+                          "$dir" "$VALID_EVENTS" 2>/dev/null)"
+            [[ -n "$suggestion" ]] && echo "             Did you mean: $suggestion" >&2
+            echo "             It will ship and land in audio/$dir/, where nothing will play it." >&2
+        fi
+    done < <(cd "$WORK/default-audio" && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+
+    if [[ $BAD -eq 1 && $ASSUME_YES -eq 0 ]]; then
+        if [[ ! -t 0 ]]; then
+            echo "ERROR: refusing to build with an unrecognised default-audio folder." >&2
+            echo "       Fix the name, or pass --yes if it is deliberate." >&2
+            exit 1
+        fi
+        read -r -p "Proceed anyway? [y/N] " answer
+        [[ "$answer" =~ ^[Yy] ]] || { echo "Aborted."; exit 1; }
+    fi
+    [[ $BAD -eq 0 && -n "$VALID_EVENTS" ]] && echo "    all names match an event folder"
+    true
+fi
 
 echo "==> Stripping device state"
 for path in "${STRIP[@]}"; do
@@ -127,8 +189,11 @@ while IFS= read -r found; do
     LEAKED=1
 done < <(cd "$WORK" && {
     find . \( -name 'config.ini' -o -name 'prayer_times_map.py' \
-           -o -name 'executed-events.json' -o -name '*.mp3' \
+           -o -name 'executed-events.json' \
            -o -path './audio/*' -o -path './var/*' -o -path './logs/*' \) -print
+    # An MP3 only ships from default-audio/, which is seeded into the device's own
+    # audio/ folder after the update. Anywhere else it is the owner's music.
+    find . -name '*.mp3' ! -path './default-audio/*' -print
     # A CSV only ships if it is a preset: named default-prayers-time.csv, or sitting in
     # the presets directory. Anything else is one device's own prayer times.
     find . -name '*.csv' \
@@ -150,6 +215,17 @@ done
 
 echo "==> Building $ARCHIVE_NAME"
 tar -czf "$OUT_DIR/$ARCHIVE_NAME" -C "$WORK" .
+# Every device downloads this whole file on every update, over whatever connection the
+# mosque has. default-audio/ is the only part that can grow without anyone noticing, so
+# the size is checked rather than assumed.
+ARCHIVE_BYTES="$(stat -c %s "$OUT_DIR/$ARCHIVE_NAME")"
+if (( ARCHIVE_BYTES > MAX_RELEASE_MB * 1024 * 1024 )) && [[ $ALLOW_LARGE -eq 0 ]]; then
+    echo "ERROR: payload is $(( ARCHIVE_BYTES / 1024 / 1024 )) MB, over the ${MAX_RELEASE_MB} MB limit." >&2
+    echo "       Trim default-audio/, or pass --allow-large if every device should download this." >&2
+    rm -f "$OUT_DIR/$ARCHIVE_NAME"
+    exit 1
+fi
+
 SHA256="$(cd "$OUT_DIR" && sha256sum "$ARCHIVE_NAME" | cut -d' ' -f1)"
 (cd "$OUT_DIR" && sha256sum "$ARCHIVE_NAME" > SHA256SUMS)
 

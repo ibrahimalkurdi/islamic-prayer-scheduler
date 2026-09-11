@@ -175,14 +175,26 @@ grep -q "adding  (named by the version pointer)" <<< "$out" \
 chk_installed 1.1.0
 cp /tmp/m3.bak "$REL/pi4-v1.1.0/version.json"
 
-# Central does not mean trusted: the pointer faces the same refusal a manifest does.
+# A release cannot claim device data - but the pointer can, and says so. This is the
+# sharp edge of the override, so it is asserted rather than left to the audio case.
 echo "1.0.0" > "$SCH/var/installed_version"
 point 1.1.0 '[]' '["config/config.ini"]'
 before="$(md5sum "$SCH/config/config.ini" | cut -d' ' -f1)"
 out="$(run)"
-expect "pointer naming protected data is refused" "$out" "the version pointer asks to replace 'config/config.ini'"
+expect "pointer overrides the deny-list, loudly" "$out" "FORCED: config/config.ini"
+# Forcing a path is only half of it: the release still has to carry the file. This one
+# never does - make_release.sh strips it - so the force resolves to nothing.
+expect "and a path no release ships is a no-op" "$out" "skipping config/config.ini - not in this release"
 [ "$before" = "$(md5sum "$SCH/config/config.ini" | cut -d' ' -f1)" ] \
     && echo "  ✓ config.ini untouched" || { echo "  ✗ config.ini was modified"; fail=1; }
+
+# The two paths the updater is itself writing to while it runs stay refused from either
+# source. Not a matter of trust - copying over them corrupts the run doing the copying.
+echo "1.0.0" > "$SCH/var/installed_version"
+point 1.1.0 '[]' '["var/update/"]'
+out="$(run)"
+expect "the updater's own path is still refused" "$out" "which this update is"
+chk_installed 1.0.0
 
 # The shorthand form has to keep working - it is what most variants will use.
 point_plain 1.1.0
@@ -200,5 +212,106 @@ conf PIN ""
 echo "10. rollback restores the retained version"
 out="$(run --rollback)"
 expect "rolled back" "$out" "Rolling back to"
+
+echo "11. audio that ships with a release is seeded into the device's own folder"
+conf PIN ""
+conf APPLY_MODE ""
+point 1.1.0
+SEEDED="$SCH/audio/shorooq/sunrise.mp3"
+LEDGER="$SCH/var/seeded-audio"
+
+# A device that has never seen this release: no ledger, nothing in the folder.
+rm -f "$SEEDED" "$LEDGER"
+echo "1.0.0" > "$SCH/var/installed_version"
+run > /dev/null
+[ "$(cat "$SEEDED" 2>/dev/null)" = "FIXTURE-DEFAULT-SHOROOQ" ] \
+    && echo "  ✓ the release's audio was copied into audio/shorooq/" \
+    || { echo "  ✗ default audio was not seeded"; fail=1; }
+grep -qxF "shorooq/sunrise.mp3" "$LEDGER" \
+    && echo "  ✓ and recorded in the ledger" || { echo "  ✗ nothing was recorded"; fail=1; }
+
+# The owner deletes it because they do not want it. The next night must not bring it back.
+rm -f "$SEEDED"
+echo "1.0.0" > "$SCH/var/installed_version"
+run > /dev/null
+[ ! -e "$SEEDED" ] \
+    && echo "  ✓ a recitation the owner deleted stays deleted" \
+    || { echo "  ✗ the deleted file came back"; fail=1; }
+
+# Their own file under the same name is never replaced by the shipped one.
+rm -f "$LEDGER"
+echo "OWNERS-CHOICE" > "$SEEDED"
+echo "1.0.0" > "$SCH/var/installed_version"
+run > /dev/null
+[ "$(cat "$SEEDED")" = "OWNERS-CHOICE" ] \
+    && echo "  ✓ a file the owner put there is not overwritten" \
+    || { echo "  ✗ the owner's file was overwritten"; fail=1; }
+rm -f "$SEEDED" "$LEDGER"
+
+echo "12. a forced include installs, and never deletes beside what it installs"
+# No release ships a denied path - make_release.sh strips them all - so one is put into
+# this release by hand. That is what a future release doing it deliberately looks like.
+PACK="$REL/pi4-v1.1.0/scheduler-pi4-1.1.0.tar.gz"
+cp "$PACK" /tmp/pack.bak
+cp "$REL/pi4-v1.1.0/version.json" /tmp/m4.bak
+WORK="$(mktemp -d)"
+tar -xzf "$PACK" -C "$WORK"
+mkdir -p "$WORK/audio/shorooq"
+echo "FROM-RELEASE" > "$WORK/audio/shorooq/from-release.mp3"
+tar -czf "$PACK" -C "$WORK" .
+python3 - "$REL/pi4-v1.1.0/version.json" "$(sha256sum "$PACK" | cut -d' ' -f1)" <<'P'
+import json, sys
+m = json.load(open(sys.argv[1])); m["sha256"] = sys.argv[2]
+json.dump(m, open(sys.argv[1], "w"), indent=2)
+P
+
+# "full" is the mode that carries --delete. Against a forced path it must not be applied:
+# the owner's own recitation is in that folder and is not in the payload.
+conf APPLY_MODE full
+echo "1.0.0" > "$SCH/var/installed_version"
+point 1.1.0 '[]' '["audio/shorooq/"]'
+out="$(run)"
+expect "the forced path is named in the log" "$out" "FORCED: audio/shorooq/"
+expect "and --delete is not applied to it"   "$out" "--delete not applied"
+[ "$(cat "$SCH/audio/shorooq/from-release.mp3" 2>/dev/null)" = "FROM-RELEASE" ] \
+    && echo "  ✓ the forced path was installed over the deny-list" \
+    || { echo "  ✗ the forced path was not installed"; fail=1; }
+[ "$(cat "$SCH/audio/shorooq/owners-own.mp3" 2>/dev/null)" = "FIXTURE-OWNERS-OWN" ] \
+    && echo "  ✓ the owner's own recitation survived --delete" \
+    || { echo "  ✗ the owner's audio was deleted"; fail=1; }
+[ "$(cat "$SCH/audio/fajr/athan.mp3" 2>/dev/null)" = "FIXTURE-AUDIO" ] \
+    && echo "  ✓ audio the pointer did not claim is untouched" \
+    || { echo "  ✗ an unclaimed audio folder was touched"; fail=1; }
+
+rm -rf "$WORK"
+cp /tmp/pack.bak "$PACK"
+cp /tmp/m4.bak "$REL/pi4-v1.1.0/version.json"
+conf APPLY_MODE ""
+point 1.1.0
+
+echo "13. a device can follow a version file of its own"
+# The failure mode this guards is silence: a device left on a test pointer takes versions
+# nobody rolled out and misses the ones everybody got, with nothing on screen to say so.
+printf '{\n  "pi4": {"version": "1.0.0", "exclude": [], "include": []},\n  "zero": ""\n}\n' \
+    > "$REL/VERSIONS-test.json"
+point 1.1.0
+echo "1.1.0" > "$SCH/var/installed_version"
+conf UPDATE_POINTER_URL "\"file://$REL/VERSIONS-test.json\""
+out="$(run)"
+expect "the custom file decides the version" "$out" "Target 1.0.0 (version pointer)"
+expect "and the device says which file it follows" "$out" "Version pointer: VERSIONS-test.json"
+expect "--status names it too" "$(run --status)" '"pointer": "VERSIONS-test.json"'
+# Cleared means "follow the fleet's file" - which for this fixture is the local one it
+# started with, not raw.githubusercontent.com.
+conf UPDATE_POINTER_URL "\"file://$REL/VERSIONS.json\""
+out="$(run --status)"
+grep -qF '"pointer_is_default": true' <<< "$out" \
+    && echo "  ✓ clearing it puts the device back on the fleet's file" \
+    || { echo "  ✗ still following the custom pointer"; fail=1; }
+grep -qF "NOT the default" <<< "$(run)" \
+    && { echo "  ✗ still warning after being cleared"; fail=1; } \
+    || echo "  ✓ and the warning stops"
+rm -f "$REL/VERSIONS-test.json"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

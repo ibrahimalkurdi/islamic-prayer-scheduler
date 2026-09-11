@@ -200,6 +200,21 @@ After completing all steps, the Islamic Prayer Scheduler will be fully configure
 - Ensure the system date and timezone are correctly set.
 - Update the CSV file whenever prayer times change.
 - Re-run the initialization script if major configuration changes are made.
+- Audio for each event lives in `~/Desktop/scheduler/audio/<event>/`
+  (`fajr`, `duha`, `athkar_elsabah`, `dhuhr`, `asr`, `maghrib`, `athkar_elmasa`, `isha`,
+  `tahajjud`, `quran`, `friday_quran`). Add or remove `.mp3` files there, then pick them
+  in the Scheduler Settings app.
+- `friday_quran` is Surat Al-Kahf, played on Fridays only, at an offset from that day's
+  Dhuhr — the Jumu'ah prayer — set in the Settings app.
+- `audio/` is never part of an update payload — it is the owner's own music and runs to
+  hundreds of megabytes. The folders themselves are created by `apply_settings.sh`, which
+  runs after every update, so a folder a new release needs arrives with the release. It
+  arrives **empty**, and that event is silent until an `.mp3` is put in it.
+- A release can ship a starting recitation in `default-audio/<event>/`, mirroring
+  `audio/` one folder at a time. `apply_settings.sh` copies each file into
+  `audio/<event>/` once per device, recording it in `var/seeded-audio`: a file the owner
+  deletes does not come back on the next update, and one they put there themselves under
+  the same name is never overwritten. See `default-audio/README.md`.
 
 ---
 
@@ -297,21 +312,27 @@ wall-mounted screen dead.
 
 ### Controlling updates on a device
 
-From the Settings app, under **تحديثات البرنامج**: install now, pick a specific version,
-roll back to the previous one, or turn the daily check off. Or edit
-`config/update.conf` directly:
+From the Settings app, under **تحديثات البرنامج**: **جلب الإصدارات** fills both version
+lists, **التحديث إلى أحدث إصدار** installs the version `VERSIONS.json` names for this
+hardware, **تثبيت الإصدار المحدد** holds the device on one version, **الرجوع إلى إصدار
+سابق** picks what to go back to — the backup kept on the device, or any older published
+version — and **تحديث تلقائي يومي** turns the 02:00 check off without stopping those
+buttons. Or edit `config/update.conf` directly:
 
 ```sh
 VARIANT=zero        # pi4 | zero - cross-checked against the board on every run
 ENABLED=true        # false = never update this device
-PIN=                # empty = follow the newest release; 1.0.3 = hold on exactly 1.0.3
+PIN=                # empty = follow VERSIONS.json; 1.0.3 = hold on exactly 1.0.3
 APPLY_MODE=         # empty = obey the release; changed | full
 EXTRA_EXCLUDE=      # paths this device keeps whatever a release says
+POINTER_NAME=       # empty = VERSIONS.json; another file in the repo = follow that instead
 ```
 
 `PIN` moves a device in either direction, so it is also how you go back to a version that
 worked. `EXTRA_EXCLUDE` protects a file you have edited by hand without pinning the whole
-device to an old version.
+device to an old version. `POINTER_NAME` lets one device take a release before the fleet
+does — it then ignores `VERSIONS.json` until the line is cleared, and says so in its log
+and in the Settings app on every run.
 
 By hand on the device:
 

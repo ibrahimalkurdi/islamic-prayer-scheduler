@@ -1431,6 +1431,17 @@ class ControlApp(QMainWindow):
         self.update_pin_label.hide()
         layout.addWidget(self.update_pin_label)
 
+        # A device following a version file other than the fleet's takes versions nobody
+        # rolled out and misses the ones everybody got. That is set over SSH, months
+        # earlier, by someone who is no longer looking - so the device says which file it
+        # follows rather than leaving it to be discovered.
+        self.update_pointer_label = QLabel("")
+        self.update_pointer_label.setStyleSheet(
+            "font-size: 17px; padding: 2px 18px; color: #6c757d;")
+        self.update_pointer_label.setWordWrap(True)
+        self.update_pointer_label.hide()
+        layout.addWidget(self.update_pointer_label)
+
         self.update_unpin_btn = QPushButton("العودة إلى التحديث المركزي")
         self.update_unpin_btn.setStyleSheet(self.update_button_style("#6c757d"))
         self.update_unpin_btn.setMinimumHeight(44)
@@ -1589,6 +1600,11 @@ class ControlApp(QMainWindow):
             f"مثبَّت على الإصدار {pinned} — لا يتبع التحديث المركزي" if pinned else "")
         self.update_pin_label.setVisible(bool(pinned))
         self.update_unpin_btn.setVisible(bool(pinned))
+
+        custom_pointer = "" if status.get("pointer_is_default", True) else status.get("pointer", "")
+        self.update_pointer_label.setText(
+            f"يتبع ملف إصدارات خاص: {custom_pointer}" if custom_pointer else "")
+        self.update_pointer_label.setVisible(bool(custom_pointer))
 
     def write_update_conf(self, key, value):
         """update.conf is plain shell, and the updater sources it - so a value is

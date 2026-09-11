@@ -38,6 +38,13 @@ APPLY_MODE=
 #   EXTRA_EXCLUDE="config/scripts/play_audio.sh config/pipewire-pulse.conf"
 EXTRA_EXCLUDE=
 
+# Which version file this device follows. Empty means VERSIONS.json - the file that
+# decides what every device runs. Point it at another file in the repo to take one device
+# through a release before the fleet sees it; that device then ignores VERSIONS.json until
+# this is cleared, and says so in its log on every run.
+#   POINTER_NAME=VERSIONS-test.json
+POINTER_NAME=
+
 # Where releases come from, and where the version pointer lives. Only worth changing to
 # test the updater against a local directory - curl reads file:// URLs, so no server is
 # needed:

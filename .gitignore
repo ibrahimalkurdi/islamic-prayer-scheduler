@@ -1,4 +1,7 @@
 *.mp3
+# Audio that ships with a release, seeded into the device's own audio/ folder by
+# apply_settings.sh. Everything under audio/ stays ignored - that is the owner's.
+!**/default-audio/**/*.mp3
 dist/
 __pycache__/
 *.pyc

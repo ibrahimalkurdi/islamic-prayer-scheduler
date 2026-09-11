@@ -19,6 +19,7 @@ The system supports automatic audio playback for prayers, nawafel, athkar, and Q
     - Tahajjud
     - Athkar Al-Sabah & Al-Masa
     - Custom Quran playlists
+    - Surat Al-Kahf on Fridays, at a configurable offset from the Jumu'ah prayer
 
 - **Prayer Time Countdown Desktop Application**
   - Displays a live countdown for the next prayer time.
@@ -108,6 +109,54 @@ The system is built on two main pillars:
    [ADMIN_MANUAL.md](ADMIN_MANUAL.md). [`VERSIONS.json`](VERSIONS.json) is the one file
    that decides which version each device runs — publishing a release does not deploy it,
    editing that file does.
+
+---
+
+## Releasing an Update
+
+Devices in the field update themselves from GitHub Releases. Cutting a release and
+rolling it out are two separate steps, on purpose.
+
+**1. Build and publish the release.** On a clean tree, from the repo root:
+
+```bash
+tools/make_release.sh pi4 1.0.9
+```
+
+The variant is `pi4` or `zero` — the two hardware builds are different software and every
+release belongs to exactly one. The script packages that subtree, strips out every device
+file (settings, prayer times, audio) and proves they are gone, then prints the
+`gh release create pi4-v1.0.9 …` command to publish it.
+
+Nothing is installed anywhere yet. The release simply exists.
+
+**2. Roll it out to every Raspberry Pi by editing the version file.** In
+[`VERSIONS.json`](VERSIONS.json), set the version for that hardware and push:
+
+```json
+"pi4": { "version": "1.0.9", "exclude": [], "include": [] }
+```
+
+```bash
+git commit -am "roll pi4 out to 1.0.9" && git push
+```
+
+Every `pi4` device reads this file on its nightly 02:00 check and installs what it names.
+Putting an older version back here rolls the whole fleet back the same way — devices move
+down as readily as up. The `zero` line is separate, so each hardware type is rolled out on
+its own. A device pinned from its own Settings app ignores this file until it is unpinned.
+
+**Testing a release on one device first.** A device can follow a version file of its own,
+so you can try a release on your own Raspberry Pi before the fleet sees it. Commit the
+custom file to the repo, then name it in that device's `config/update.conf`:
+
+```sh
+UPDATE_POINTER_URL="https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main/VERSIONS-test.json"
+```
+
+That device now reads [`VERSIONS-test.json`](VERSIONS-test.json) and ignores
+`VERSIONS.json`; no other device reads it. Clear the line to put it back on the fleet's
+file.
 
 ---
 

@@ -47,11 +47,15 @@ UPDATE_DOWNLOAD_URL="${UPDATE_DOWNLOAD_URL:-https://github.com/ibrahimalkurdi/is
 # The one file that decides what every device runs. Publishing a release does not roll
 # it out - this file does, and moving a value back one version rolls that fleet back on
 # the next check. Devices never pick a version for themselves.
-UPDATE_POINTER_URL="${UPDATE_POINTER_URL:-https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main/VERSIONS.json}"
+POINTER_REPO_RAW="https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main"
+POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
+UPDATE_POINTER_URL="${UPDATE_POINTER_URL:-}"
 
 # This updater's own version. A release may demand a newer one via min_updater, in which
 # case the device stays where it is rather than applying something it cannot apply safely.
-UPDATER_VERSION="1.0.0"
+# 1.1.0 is the first that honours a pointer include over the deny-list and seeds
+# default-audio/ - a release relying on either should set min_updater to it.
+UPDATER_VERSION="1.1.0"
 
 # How long to let the apps settle before judging them, and where to read the board's
 # identity. Both overridable so the whole flow can be exercised off-device.
@@ -60,6 +64,11 @@ HEALTH_SETTLE_SECONDS="${HEALTH_SETTLE_SECONDS:-15}"
 # past widget construction and the first paint, short enough not to stall the dialog.
 GUI_VERIFY_SECONDS="${GUI_VERIFY_SECONDS:-8}"
 DEVICE_MODEL_FILE="${DEVICE_MODEL_FILE:-/proc/device-tree/model}"
+
+# How large a pointer-forced path may be before the rollback copy is skipped. The backup
+# is one version on the same SD card, and a forced audio/ path can run to hundreds of
+# megabytes.
+FORCED_BACKUP_MAX_MB="${FORCED_BACKUP_MAX_MB:-50}"
 
 # Never replaced, whatever a release asks for. The manifest proposes; this disposes.
 # Without it a malformed or tampered release could name config.ini and a device would
@@ -132,8 +141,19 @@ ENABLED="true"
 PIN=""
 APPLY_MODE=""
 EXTRA_EXCLUDE=""
+POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
 # shellcheck disable=SC1090
 [[ -f "$UPDATE_CONF" ]] && source "$UPDATE_CONF"
+
+# A device following anything but the fleet's own file is the quiet failure mode here -
+# it takes versions nobody rolled out and misses the ones everybody got. POINTER_NAME is
+# the short way to say it; UPDATE_POINTER_URL still wins, for a file:// test directory.
+if [[ -z "$UPDATE_POINTER_URL" ]]; then
+    UPDATE_POINTER_URL="$POINTER_REPO_RAW/$POINTER_NAME"
+else
+    POINTER_NAME="$(basename "$UPDATE_POINTER_URL")"
+fi
+POINTER_IS_DEFAULT=$([[ "$POINTER_NAME" == "VERSIONS.json" ]] && echo 1 || echo 0)
 
 INSTALLED="$(cat "$INSTALLED_VERSION_FILE" 2>/dev/null || echo "unknown")"
 
@@ -269,9 +289,11 @@ if [[ "$MODE" == "status" ]]; then
     if [[ -d "$ROLLBACK_DIR" ]]; then
         ROLLBACK_TO="$(ls -1 "$ROLLBACK_DIR" 2>/dev/null | head -1)"
     fi
-    python3 - "$STATE_FILE" "$VARIANT" "$INSTALLED" "$PIN" "$ENABLED" "$ROLLBACK_TO" <<'STATUS'
+    python3 - "$STATE_FILE" "$VARIANT" "$INSTALLED" "$PIN" "$ENABLED" "$ROLLBACK_TO" \
+             "$POINTER_NAME" "$POINTER_IS_DEFAULT" <<'STATUS'
 import json, sys
 state_path, variant, installed, pin, enabled, rollback_to = sys.argv[1:7]
+pointer_name, pointer_is_default = sys.argv[7:9]
 try:
     state = json.load(open(state_path))
 except Exception:
@@ -282,6 +304,8 @@ json.dump({
     "pinned": pin,
     "enabled": enabled.lower() == "true",
     "rollback_to": rollback_to,
+    "pointer": pointer_name,
+    "pointer_is_default": pointer_is_default == "1",
     "last_result": state.get("result", ""),
     "last_message": state.get("message", ""),
     "needs_attention": state.get("needs_attention", ""),
@@ -467,6 +491,9 @@ fi
 # which files a release is allowed to replace.
 POINTER_OK=1
 fetch_pointer || POINTER_OK=0
+if [[ $POINTER_IS_DEFAULT -eq 0 ]]; then
+    log "Version pointer: $POINTER_NAME (NOT the default - this device does not follow the fleet)"
+fi
 
 if [[ -n "$TARGET_ARG" ]]; then
     TARGET="$TARGET_ARG"
@@ -623,8 +650,36 @@ if [[ ${#INCLUDES[@]} -eq 0 ]]; then
     exit 1
 fi
 
-# Being central buys the pointer no extra trust: its include list faces exactly the same
-# refusal as a release's, and the deny-list below outranks both.
+# A release cannot claim device data: the archive is public, it installs unattended, and
+# a tampered or malformed manifest naming config.ini would be obeyed by every device that
+# took it. The version pointer is different - it is one file in the repo, edited
+# deliberately, and naming a path there is how audio and other device-side files are
+# delivered on purpose. So the manifest is refused and the pointer is honoured, loudly.
+#
+# Two paths stay refused from either source, and not as a matter of trust: the updater is
+# writing to both while it runs, so copying over them corrupts the update doing the
+# copying.
+ALWAYS_REFUSED=("var/update/" "var/installed_version")
+
+# Does this path match one of the rsync patterns in $2..? A trailing slash means a
+# directory and covers everything beneath it; anything else matches itself.
+matches_any() { # $1 path, $2.. patterns
+    local path="$1" pattern
+    shift
+    for pattern in "$@"; do
+        [[ -z "$pattern" ]] && continue
+        if [[ "${pattern%/}" != "$pattern" ]]; then
+            [[ "$path" == "$pattern"* || "${path%/}" == "${pattern%/}" ]] && return 0
+        else
+            # shellcheck disable=SC2053
+            [[ "$path" == $pattern || "${path%/}" == "$pattern" ]] && return 0
+        fi
+    done
+    return 1
+}
+
+path_is_denied() { matches_any "$1" "${DENY_LIST[@]}"; }
+
 refuse_if_protected() { # $1 path, $2 where it came from, $3 state message prefix
     local inc="$1" origin="$2" prefix="$3" denied match
     for denied in "audio/" "var/" "logs/" "config/config.ini" "config/update.conf"; do
@@ -648,8 +703,23 @@ refuse_if_protected() { # $1 path, $2 where it came from, $3 state message prefi
 for inc in "${INCLUDES[@]}"; do
     refuse_if_protected "$inc" "this release" "manifest"
 done
+# The pointer overrides the deny-list, so what it claims has to be impossible to miss in
+# the log: this is the one place an update writes to something the device owns.
+FORCED=()
 for inc in ${P_INCLUDES[@]+"${P_INCLUDES[@]}"}; do
-    refuse_if_protected "$inc" "the version pointer" "pointer"
+    [[ -n "$inc" ]] || continue
+    for refused in "${ALWAYS_REFUSED[@]}"; do
+        if [[ "$inc" == "$refused" || "$inc" == "$refused"* ]]; then
+            log "ERROR: the version pointer asks to replace '$inc', which this update is"
+            log "       writing to as it runs. Refusing - nothing has been touched."
+            write_state "error" "pointer names the updater's own path: $inc" ""
+            exit 1
+        fi
+    done
+    if path_is_denied "$inc"; then
+        FORCED+=("$inc")
+        log "FORCED: $inc - claimed by the version pointer, overriding the deny-list"
+    fi
 done
 
 # Additions, not a replacement. The manifest's list is generated by make_release.sh from
@@ -668,24 +738,35 @@ for inc in ${P_INCLUDES[@]+"${P_INCLUDES[@]}"}; do
     fi
 done
 
+is_forced() {
+    local path="$1" f
+    for f in ${FORCED[@]+"${FORCED[@]}"}; do
+        [[ "$path" == "$f" ]] && return 0
+    done
+    return 1
+}
+
 ALL_EXCLUDES=("${DENY_LIST[@]}" "${M_EXCLUDES[@]}" ${P_EXCLUDES[@]+"${P_EXCLUDES[@]}"} ${EXTRA_EXCLUDE:-})
 RSYNC_EXCLUDES=()
 for pattern in "${ALL_EXCLUDES[@]}"; do
     [[ -n "$pattern" ]] && RSYNC_EXCLUDES+=(--exclude="$pattern")
 done
 
-path_excluded() {
+path_excluded() { matches_any "$1" "${ALL_EXCLUDES[@]}"; }
+
+# The --exclude list to use for one forced path: everything except the deny-list patterns
+# that would have blocked it. The release's own excludes and this device's EXTRA_EXCLUDE
+# still apply - neither of those is what the pointer is overriding.
+forced_rsync_excludes() { # $1 path
     local path="$1" pattern
+    FORCED_RSYNC_EXCLUDES=()
     for pattern in "${ALL_EXCLUDES[@]}"; do
-        [[ -z "$pattern" ]] && continue
-        if [[ "${pattern%/}" != "$pattern" ]]; then
-            [[ "$path" == "$pattern"* || "${path%/}" == "${pattern%/}" ]] && return 0
-        else
-            # shellcheck disable=SC2053
-            [[ "$path" == $pattern || "${path%/}" == "$pattern" ]] && return 0
+        [[ -n "$pattern" ]] || continue
+        if matches_any "$path" "$pattern" && printf '%s\n' "${DENY_LIST[@]}" | grep -qxF "$pattern"; then
+            continue
         fi
+        FORCED_RSYNC_EXCLUDES+=(--exclude="$pattern")
     done
-    return 1
 }
 
 # An excluded entry has to leave the include list, not merely be handed to rsync as an
@@ -704,6 +785,10 @@ exclusion_source() {
 
 EFFECTIVE_INCLUDES=()
 for inc in "${INCLUDES[@]}"; do
+    if is_forced "$inc"; then
+        EFFECTIVE_INCLUDES+=("$inc")
+        continue
+    fi
     if path_excluded "$inc"; then
         log "  keeping this device's own $inc (excluded by $(exclusion_source "$inc"))"
         continue
@@ -720,6 +805,7 @@ EFFECTIVE_MODE="${APPLY_MODE:-${M_APPLY_MODE:-changed}}"
 log "Apply mode: $EFFECTIVE_MODE"
 log "Replacing: ${EFFECTIVE_INCLUDES[*]}"
 log "Protecting: ${DENY_LIST[*]} ${M_EXCLUDES[*]} ${P_EXCLUDES[*]-} ${EXTRA_EXCLUDE:-}"
+[[ ${#FORCED[@]} -gt 0 ]] && log "Forced by the version pointer: ${FORCED[*]}"
 
 # ---------------------------------------------------------------------------
 # Back up, then swap
@@ -727,11 +813,31 @@ log "Protecting: ${DENY_LIST[*]} ${M_EXCLUDES[*]} ${P_EXCLUDES[*]-} ${EXTRA_EXCL
 BACKUP="$ROLLBACK_DIR/$INSTALLED"
 rm -rf "$ROLLBACK_DIR"; mkdir -p "$BACKUP"
 log "Backing up the current version to $BACKUP"
+NOT_BACKED_UP=""
 for inc in "${EFFECTIVE_INCLUDES[@]}"; do
     src="$MAIN_DIR/${inc%/}"
     [[ -e "$src" ]] || continue
+
+    # The rollback copy lives on the same SD card as everything else and holds one
+    # version. A forced audio/ path would put hundreds of megabytes in it every night, so
+    # it is measured first and skipped if it will not fit - said out loud, because it
+    # means that path cannot be rolled back.
+    if is_forced "$inc"; then
+        size_mb="$(du -sm "$src" 2>/dev/null | cut -f1)"
+        if [[ -n "$size_mb" ]] && (( size_mb > FORCED_BACKUP_MAX_MB )); then
+            log "  $inc not backed up - ${size_mb}MB, too large to roll back"
+            NOT_BACKED_UP="${NOT_BACKED_UP:+$NOT_BACKED_UP }$inc"
+            continue
+        fi
+    fi
+
     mkdir -p "$BACKUP/$(dirname "${inc%/}")"
-    rsync -a "${RSYNC_EXCLUDES[@]}" "$src" "$BACKUP/$(dirname "${inc%/}")/" >> "$LOG_FILE" 2>&1
+    if is_forced "$inc"; then
+        forced_rsync_excludes "$inc"
+        rsync -a "${FORCED_RSYNC_EXCLUDES[@]}" "$src" "$BACKUP/$(dirname "${inc%/}")/" >> "$LOG_FILE" 2>&1
+    else
+        rsync -a "${RSYNC_EXCLUDES[@]}" "$src" "$BACKUP/$(dirname "${inc%/}")/" >> "$LOG_FILE" 2>&1
+    fi
 done
 
 RSYNC_FLAGS=(-a --checksum)
@@ -751,12 +857,30 @@ for inc in "${EFFECTIVE_INCLUDES[@]}"; do
     fi
     dest="$MAIN_DIR/$(dirname "${inc%/}")/"
     mkdir -p "$dest"
-    if [[ -d "$src" ]]; then
-        rsync "${RSYNC_FLAGS[@]}" "${RSYNC_EXCLUDES[@]}" "$src/" "$MAIN_DIR/${inc%/}/" >> "$LOG_FILE" 2>&1 || FAILED=1
+
+    # --delete is never applied to a forced path, whatever the release asked for. On
+    # audio/ it would remove every recitation not in the payload - the owner's own music,
+    # on every device, the same night. A forced path is there to add or replace files,
+    # never to decide what else may exist beside them.
+    if is_forced "$inc"; then
+        forced_rsync_excludes "$inc"
+        this_flags=(-a --checksum)
+        this_excludes=("${FORCED_RSYNC_EXCLUDES[@]}")
     else
-        rsync "${RSYNC_FLAGS[@]}" "${RSYNC_EXCLUDES[@]}" "$src" "$dest" >> "$LOG_FILE" 2>&1 || FAILED=1
+        this_flags=("${RSYNC_FLAGS[@]}")
+        this_excludes=("${RSYNC_EXCLUDES[@]}")
     fi
-    log "  $inc"
+
+    if [[ -d "$src" ]]; then
+        rsync "${this_flags[@]}" ${this_excludes[@]+"${this_excludes[@]}"} "$src/" "$MAIN_DIR/${inc%/}/" >> "$LOG_FILE" 2>&1 || FAILED=1
+    else
+        rsync "${this_flags[@]}" ${this_excludes[@]+"${this_excludes[@]}"} "$src" "$dest" >> "$LOG_FILE" 2>&1 || FAILED=1
+    fi
+    if is_forced "$inc"; then
+        log "  $inc (forced by the version pointer, --delete not applied)"
+    else
+        log "  $inc"
+    fi
 done
 
 if [[ $FAILED -eq 1 ]]; then
@@ -774,6 +898,12 @@ fi
 # to answer a sudo prompt. Granting NOPASSWD for those would be a root grant in all but
 # name, for something that changes on first install and almost never again.
 ATTENTION=""
+# A forced path too large for the rollback copy is not an error, but it is the one thing
+# about this update that cannot be undone, so it is reported rather than only logged.
+if [[ -n "$NOT_BACKED_UP" ]]; then
+    ATTENTION="not backed up, cannot be rolled back: $NOT_BACKED_UP"
+    log "NOTE: $ATTENTION"
+fi
 for unit in "$STAGING_DIR"/config/systemd/*.service; do
     [[ -f "$unit" ]] || continue
     installed_unit="/etc/systemd/system/$(basename "$unit")"

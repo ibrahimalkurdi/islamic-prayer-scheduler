@@ -102,7 +102,7 @@ customer's settings and prayer times, and re-download 858 MB of audio.
 
 | path | update behaviour |
 |---|---|
-| `audio/` (858 MB), `var/`, `logs/` | never touched |
+| `audio/` (858 MB), `var/`, `logs/` | never touched by a release. A release can put a *new* file in `audio/` through `default-audio/` (§3.7), and `VERSIONS.json` can claim one of these paths outright (§8b) — both are deliberate acts, and neither is something a release can do on its own |
 | `config/config.ini` | never overwritten — the owner's settings |
 | `config/*.csv`, `config/executed-events.json` | never overwritten — generated per device |
 | `config/prayer_times_map.py`, `applications/**/prayer_times_map.py` | never overwritten — generated, and one of them sits *inside* a directory that is replaced |
@@ -119,7 +119,9 @@ fail:
    release can introduce a new directory and every existing device honours it, with no
    updater upgrade needed first.
 3. **A deny-list hard-coded in the updater**, which no manifest can override. Without it,
-   a malformed or tampered manifest naming `config.ini` would be obeyed.
+   a malformed or tampered manifest naming `config.ini` would be obeyed. `VERSIONS.json`
+   *can* override it — that file is in this repo and is edited by hand, not shipped in a
+   public archive — and every path it forces is logged as `FORCED:`. See §8b.
 
 On top of all that, `apply_settings.sh` runs after every update and rebuilds the prayer
 map from the device's own CSV — so even a generated file that somehow slipped through is
@@ -195,10 +197,19 @@ It will:
 2. `git archive` that variant's subtree at `HEAD`, so only committed content ships;
 3. strip device data, the docs and the screenshots;
 4. **prove the strip worked** — it searches the built tree for `config.ini`, any
-   `prayer_times_map.py`, `executed-events.json`, any `.mp3`, and any `.csv` that is not
-   a shipped preset. One hit and the build fails rather than shipping someone's data;
-5. assert the files a device actually needs are present;
-6. write `dist/version.json` and `dist/SHA256SUMS`, and print the publish command.
+   `prayer_times_map.py`, `executed-events.json`, any `.mp3` outside `default-audio/`,
+   and any `.csv` that is not a shipped preset. One hit and the build fails rather than
+   shipping someone's data;
+5. check that every folder under `default-audio/` names a real event, and **ask** before
+   building one that does not (§3.7);
+6. assert the files a device actually needs are present;
+7. refuse a payload over `MAX_RELEASE_MB` (25 MB) unless given `--allow-large` — every
+   device downloads the whole thing on every update;
+8. write `dist/version.json` and `dist/SHA256SUMS`, and print the publish command.
+
+Two flags, both for the checks above: `--yes` answers the folder-name prompt, and
+`--allow-large` lifts the size cap. With no terminal — in a script — the prompt refuses
+rather than hanging.
 
 Output:
 
@@ -277,6 +288,51 @@ Devices already on that version stay on it; nothing reaches back into a device. 
 moving `VERSIONS.json` back to a good version over deleting a bad release: it takes effect
 the same night and leaves the evidence in place.
 
+### 3.7 Shipping audio with a release — `default-audio/`
+
+`audio/` is the owner's own music and never travels in a payload. But a release that adds
+a new event has nothing to play until someone copies an MP3 onto every device by hand,
+which is what `default-audio/` is for. It mirrors `audio/` one folder at a time:
+
+```
+scheduler-official-touch-screen-with-raspberry-pi-4/
+  default-audio/shorooq/athan.mp3     ->  ~/Desktop/scheduler/audio/shorooq/athan.mp3
+```
+
+`.gitignore` still ignores every other `.mp3`, so these have to be committed under that
+path — `git archive` only ships committed content. On the device, `apply_settings.sh`
+copies them across after every update, creating the folder if it is not there.
+
+Four rules, all of them about not overruling the owner:
+
+- **Copied once per device.** Each path is recorded in `var/seeded-audio`. A recitation
+  the owner deletes does not come back the next night — which it would, forever, if the
+  rule were simply "copy what is missing". Delete the line from that file to seed it again.
+- **Never overwrites.** A file already in `audio/<event>/` under the same name is left
+  exactly as it is, and the log says `Keeping this device's own audio/<event>/<file>`.
+- **Folder names are checked at build time.** `default-audio/shroq/` when the event is
+  `shorooq` would ship, land in `audio/shroq/`, and never play. The build reports it,
+  suggests the real name, and asks before going on.
+- **It ships on every release**, with no flag — whatever is in the folder at build time
+  travels with that release. Keep it small: 25 MB is the cap, and every device downloads
+  the whole payload every time.
+
+**Sending an MP3 to one customer and no one else.** Publish a version with the file in
+`default-audio/`, leave `VERSIONS.json` where it is, and have that customer install it
+from **تثبيت الإصدار المحدد** in the Settings app. No other device is told the version
+exists. Two things to know before doing it:
+
+- That button **pins**, so their device stops following the fleet until it is unpinned.
+  §5.5 is about a pin you set; this is one the customer sets, and it is just as silent.
+- **Build it from a branch.** `make_release.sh` packages `HEAD` of the current branch, so
+  a file committed on `customer/<name>` never reaches `main`. Commit it to `main` instead
+  and the next fleet release carries it to everybody. Version numbers are the only thing
+  keeping the two lines apart, so never reuse a branch's number on `main`.
+
+**Taking a shipped file back is manual.** Removing it from `default-audio/` stops future
+devices getting it; devices that already have it keep it, because the ledger says it was
+seeded and nothing ever deletes inside `audio/`.
+
 ---
 
 ## 4. Testing a release before anyone gets it
@@ -301,21 +357,23 @@ the releases. It is the only part that cannot work off-device, since it asks sys
 whether the athan service is up and X whether the countdown has a window. Every other
 script under test is the real one.
 
-Then run the four suites:
+Then run the five suites:
 
 ```bash
 cd /tmp/scheduler-update-test
-bash test_updater.sh              # 10 refusal and recovery paths
+bash test_updater.sh              # 13 refusal and recovery paths
 bash test_state_survives.sh       # the owner's data survives a real update
+bash test_make_release.sh         # the packaging guards (slow, ~3 min - it builds six releases)
 python3 test_settings_updates.py  # the Settings app's buttons, headless (slow, ~2 min)
 python3 test_friday_quran.py      # Surat Al-Kahf on Fridays, headless
 ```
 
 | suite | what it proves |
 |---|---|
-| `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` is refused with the device untouched, and the plain-string shorthand still resolves; `--rollback` restores |
+| `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` overrides the deny-list but resolves to nothing because no release ships that file, a pointer naming `var/update/` is still refused, and the plain-string shorthand still resolves; `--rollback` restores; a release's `default-audio/` is seeded into `audio/`, a seeded file the owner deletes does not come back, and one they put there themselves is not overwritten; a forced `include` installs over the deny-list without `--delete` touching the owner's own recitations beside it; a device pointed at its own version file follows it and says so in the log and in `--status` |
+| `test_make_release.sh` | `default-audio/` ships while `audio/` is still stripped; an `.mp3` anywhere else fails the build; a folder name matching no event is reported with the real name suggested and refuses to build with no terminal, while `--yes` proceeds; a payload over the cap is refused and the archive removed, while `--allow-large` builds it |
 | `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does |
-| `test_settings_updates.py` | the version list is fetched newest-first; choosing a version writes `PIN` **and** installs it; the checkbox writes `ENABLED`; choosing nothing raises an error rather than doing nothing |
+| `test_settings_updates.py` | the version list is fetched newest-first; choosing a version writes `PIN` **and** installs it; the checkbox writes `ENABLED`; choosing nothing raises an error rather than doing nothing; the pin line and **العودة إلى التحديث المركزي** are on screen only while the device is pinned; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest; both lists show five rows at a time |
 | `test_friday_quran.py` | Surat Al-Kahf is scheduled on Fridays and no other day; the default is an hour after Jumu'ah; before/after and the minute count both take effect; the time is clamped into the day's own Sunrise→Asr window; the checkbox switches it off; a nonsense or missing setting falls back to an hour after; its audio selection is separate from the daily one; the player routes `friday_quran` to its own folder and treats an empty folder as a no-op; the Settings section round-trips all three keys |
 
 Poke at the fixture device by hand the same way the tests do — `HOME` and the model file
@@ -457,7 +515,7 @@ A unit you are preparing for someone else is provisioned once and then left to f
 it will ever receive a fix:
 
 ```bash
-ssh <device>.local 'grep -E "^(PIN|ENABLED|VARIANT)=" ~/Desktop/scheduler/config/update.conf'
+ssh <device>.local 'grep -E "^(PIN|ENABLED|VARIANT|POINTER_NAME|UPDATE_POINTER_URL)=" ~/Desktop/scheduler/config/update.conf'
 ssh <device>.local 'cat ~/Desktop/scheduler/var/installed_version'
 ssh <device>.local 'crontab -l | grep check_updates'
 ```
@@ -469,10 +527,24 @@ ssh <device>.local 'crontab -l | grep check_updates'
 | `VARIANT` matching the board | it is cross-checked against the hardware every run |
 | `installed_version` matching what is actually installed | the updater compares against this string, so a wrong value means either a needless reinstall or, worse, a device that thinks it is current and never moves |
 | the 02:00 cron line present | no cron line, no updates. `init.sh` installs it |
+| `POINTER_NAME` and `UPDATE_POINTER_URL` empty | otherwise the device follows a version file the fleet does not, taking releases nobody rolled out and missing the ones everybody got. If you used one to test the unit, clear it. The device logs `Version pointer: … (NOT the default)` on every run and the Settings app names the file, so this is visible without SSH too |
 
 Install the release you want it to ship with using `--target`, **not** by pointing
 `VERSIONS.json` at it — the pointer is a fleet-wide control and every device in the field
 acts on it overnight.
+
+**But `--target` on its own does not hold.** The command line never writes `PIN` — only
+the Settings app's buttons do, and deliberately (§6). So a device handed over on a
+`--target` install with no pin moves to whatever `VERSIONS.json` names on its first night
+at the customer's site. Either let the pointer already name that version, or pin the
+device to it and accept that it then stops following the fleet:
+
+```bash
+ssh <device>.local 'sed -i "s/^PIN=.*/PIN=1.2.0/" ~/Desktop/scheduler/config/update.conf'
+```
+
+A pinned unit never updates again until someone unpins it. Write down which devices you
+pinned somewhere that is not the device.
 
 Once a customer device is in the field, treat `VERSIONS.json` as production: editing it is
 a deploy to people's homes, executed unattended at 02:00 while you are asleep. That is
@@ -493,13 +565,14 @@ actually happened rather than assuming success.
 | **التحديث إلى أحدث إصدار** | `check_updates.sh --now`. "Latest" is the version `VERSIONS.json` names for this variant — the latest one **approved** for these devices — not whatever is newest on GitHub. It moves down as readily as up: point the pointer back and this button downgrades. On a pinned device it resolves to the pin and so does nothing |
 | progress dialog | a modal window with an indeterminate bar, shown for the whole run. It has no close button — there is nothing safe to do half way through an update — and it is the only thing on the screen, because `--now` leaves the countdown closed |
 | **جلب الإصدارات** | `--list`, filling **both** version lists newest-first. Sorted numerically, so 1.0.10 sits above 1.0.9 rather than below it. Sits above both groups, because it serves both |
-| **التثبيت على إصدار محدد** list | every published version. Five rows at a time, the rest a scroll away |
+| **التثبيت على إصدار محدد** list | every published version. It opens on «اختر إصدارًا…» rather than a preselected version, because the button under it installs as well as pins. Five rows at a time, the rest a scroll away |
 | **تثبيت الإصدار المحدد** | writes `PIN=<chosen>` to `update.conf`, then `--target <chosen>` |
-| **الرجوع إلى إصدار سابق** list | the retained backup first, marked *(نسخة محفوظة — رجوع فوري)*, then every published version **older than the installed one**. Never offers the installed version or anything newer. Until **جلب الإصدارات** is pressed it holds only the backup — what else exists is not knowable without asking |
-| **الرجوع إلى الإصدار X** | names whatever the list has selected. `--rollback` when that is the retained backup — no download, and the exact bytes that were verified healthy. `--target X` otherwise, which is an ordinary install of an older release. Either way it writes `PIN=X` first: going back on purpose has to survive the night. Greyed out with "(لا يوجد)" when the list is empty |
+| **الرجوع إلى إصدار سابق** list | opens on «اختر إصدارًا…» for the same reason — the button under it moves the device, not just its pin. Then the retained backup, marked `"نسخة محفوظة"`, then every published version **older than the installed one**. Never offers the installed version or anything newer. Until **جلب الإصدارات** is pressed it holds only the backup — what else exists is not knowable without asking. With no backup and no fetched list it reads «لا يوجد إصدار سابق» |
+| **الرجوع إلى الإصدار X** | names whatever the list has selected. `--rollback` when that is the retained backup — no download, and the exact bytes that were verified healthy. `--target X` otherwise, which is an ordinary install of an older release. Either way it writes `PIN=X` first: going back on purpose has to survive the night. While the list is still on its placeholder the button is greyed out and reads «اختر إصدارًا للرجوع إليه»; with nothing to offer at all, «الرجوع إلى الإصدار السابق (لا يوجد)» |
 | **تحديث تلقائي يومي** | writes `ENABLED=true` or `ENABLED=false`, and nothing else. Unticking stops the 02:00 check; **التحديث إلى أحدث إصدار** still works, because `ENABLED` is read only in cron mode |
 | **مثبَّت على الإصدار X — لا يتبع التحديث المركزي** | a grey line under the checkbox, present only while `PIN` is set |
 | **العودة إلى التحديث المركزي** | writes `PIN=` and nothing else. Hidden entirely unless the device is pinned |
+| **يتبع ملف إصدارات خاص: X** | a second grey line, present only while this device follows a version file other than `VERSIONS.json` (§8, `POINTER_NAME`). There is no button to clear it — that is an admin's decision, made over SSH — but the device stops hiding it |
 
 Installing a chosen version **pins** as well as installs. Without the pin, that night's
 check would pull the device straight back to whatever `VERSIONS.json` names — the opposite
@@ -666,6 +739,32 @@ is touched.
 
 ---
 
+### `POINTER_NAME` — following a version file of your own
+
+Empty means `VERSIONS.json`, the file the whole fleet follows. Set it to another file in
+the repo and this device reads that one instead:
+
+```sh
+POINTER_NAME=VERSIONS-test.json
+```
+
+That is how a release is taken through one device before the fleet sees it: publish it,
+name it in `VERSIONS-test.json`, push, and only the device carrying this line installs it.
+The file has to be committed and pushed — it is fetched from `raw.githubusercontent.com`,
+not from your disk — and raw caches for about five minutes.
+
+`UPDATE_POINTER_URL` still wins if both are set, which is what the off-device tests use to
+point at a `file://` directory.
+
+**This is the setting most likely to be left behind.** A device on a test pointer takes
+versions nobody rolled out and misses the ones everybody got, quietly, for as long as the
+line is there. So it is loud about it: the log says
+`Version pointer: VERSIONS-test.json (NOT the default - this device does not follow the fleet)`
+on every run, `--status` carries `pointer` and `pointer_is_default`, and the Settings app
+shows «يتبع ملف إصدارات خاص» under the version. Clear the line to go back.
+
+---
+
 ## 8b. The version pointer — `VERSIONS.json`
 
 Lives at the repo root and is served to devices from the `main` branch:
@@ -714,7 +813,7 @@ are *additions to* the release's own lists, never a replacement:
 | key | effect |
 |---|---|
 | `exclude` | paths every device of this variant keeps, on top of whatever the release already protects. A fleet-wide `EXTRA_EXCLUDE`. |
-| `include` | extra paths every device of this variant takes, on top of what the release's manifest names. Only useful for something the archive contains but the manifest leaves out. |
+| `include` | extra paths every device of this variant takes, on top of what the release's manifest names. Also the one way to claim a path the deny-list normally protects — see point 2 below. |
 
 The full resolution the updater performs, in order:
 
@@ -733,14 +832,39 @@ Four things to know about that ordering:
    the archive and the path list from disagreeing. If the pointer *replaced* that list,
    a release adding a directory would silently never install it, and a fleet rollback
    would apply a new path list to an old archive.
-2. **`include` is not privileged.** A pointer naming `config/config.ini`, `audio/`,
-   `var/`, `logs/` or `config/update.conf` is refused exactly as a tampered manifest is,
-   and nothing on the device is touched. Being central buys no extra trust.
-3. **The deny-list still outranks everything**, pointer included.
+2. **The pointer outranks the deny-list; a release does not.** A *manifest* naming
+   `config/config.ini`, `audio/`, `var/`, `logs/` or `config/update.conf` is still
+   refused outright — the archive is public, it installs unattended, and a tampered
+   manifest would otherwise be obeyed by every device that took it. The *pointer* is one
+   file in this repo, edited deliberately, so naming one of those paths there is honoured
+   and logged as `FORCED: <path> - claimed by the version pointer, overriding the
+   deny-list`. Three things constrain it:
+   - **The release still has to carry the file.** Forcing `config/config.ini` does
+     nothing, because `make_release.sh` strips it from every archive; the log says
+     `skipping config/config.ini - not in this release`. A forced path only does
+     something if a release deliberately ships it.
+   - **`--delete` is never applied to a forced path**, whatever `apply_mode` asks for.
+     Against `audio/` it would remove every recitation not in the payload — the owner's
+     own music, on every device, the same night.
+   - **`var/update/` and `var/installed_version` stay refused from either source.** The
+     updater is writing to both while it runs, so copying over them corrupts the update
+     doing the copying. This one is mechanical, not a matter of trust.
+
+   A forced path larger than 50 MB (`FORCED_BACKUP_MAX_MB`) is installed but **not backed
+   up** — the rollback copy is one version on the same SD card. The log says
+   `not backed up - too large to roll back` and `--status` carries it in
+   `needs_attention`, because it means that part of the update cannot be undone.
+3. **Everything else in the deny-list still outranks the release**, and `EXTRA_EXCLUDE`
+   still outranks the pointer: a device can always protect more than it is asked to.
 4. **The log names the layer.** Anything kept back is logged as
    `keeping this device's own <path> (excluded by the version pointer)` — or
    `by the release`, `by this device's EXTRA_EXCLUDE`, `by the deny-list`. Anything the
-   pointer adds is logged as `adding <path> (named by the version pointer)`.
+   pointer adds is logged as `adding <path> (named by the version pointer)`, and anything
+   it forces past the deny-list as `FORCED: <path>`.
+5. **`include` is keyed by variant, not version.** It keeps applying to every release
+   that follows, so an entry added for one rollout has to be taken out again when that
+   rollout is superseded — otherwise it is still forcing a path months later, and nothing
+   will remind you.
 
 A path in `include` that the release does not actually contain is skipped with
 `skipping <path> - not in this release`, not an error.
@@ -833,11 +957,11 @@ completely untouched.
 | 8 | download the archive, verify sha256, extract to `var/update/staging/` | deletes the download; the live tree is untouched |
 | 9 | pre-flight: `py_compile` every `.py`, `bash -n` every `.sh` in staging | refuses the release; the live tree is untouched |
 | 10 | run `set_device_user.sh` **on staging** — rewrite the template user | logs a warning and continues |
-| 11 | resolve the effective path set — `(manifest.include + pointer.include) − manifest.exclude − pointer.exclude − EXTRA_EXCLUDE − DENY_LIST` — and log it in full | refuses the update if either `include` names protected data, naming which of the two did |
-| 12 | back up those paths to `var/update/rollback/<current>/` | — |
+| 11 | resolve the effective path set — `(manifest.include + pointer.include) − manifest.exclude − pointer.exclude − EXTRA_EXCLUDE − DENY_LIST` — and log it in full | refuses the update if the *manifest* names protected data; a path the *pointer* names is forced past the deny-list and logged as `FORCED:` (§8b) |
+| 12 | back up those paths to `var/update/rollback/<current>/` | a forced path over 50 MB is skipped and reported as `not backed up` |
 | 13 | rsync staging → live, per `apply_mode` | restores the backup, restarts, exits 1 |
 | 14 | compare shipped `config/systemd/*.service` against `/etc/systemd/system/` | records `needs_attention`; does not stop the update |
-| 15 | run `apply_settings.sh` — rebuilds the prayer map from this device's own CSV | logs a warning and continues |
+| 15 | run `apply_settings.sh` — rebuilds the prayer map from this device's own CSV, creates any missing `audio/<event>/` folder, and seeds `default-audio/` into `audio/` (§3.7) | logs a warning and continues |
 | 16 | restart the athan service; kill the countdown, and relaunch it on `:0` **only in cron mode** | logs a warning |
 | 17 | wait `HEALTH_SETTLE_SECONDS`, run `health_check.sh` — with `--no-gui` plus an offscreen countdown start in `--now` mode | **restores the backup, restarts, verifies again** |
 | 18 | write `var/installed_version`, clear staging, log success | — |
@@ -921,7 +1045,14 @@ happens to have kept.
 **A rollback restores files; it does not un-run anything.** `apply_settings.sh` has
 already regenerated the prayer map, and any migration a release performed on
 `config.ini` stays performed. The restore also does not delete files the failed release
-added — it copies the old ones back over the top rather than guessing at what is new.
+added — it copies the old ones back over the top rather than guessing at what is new. So
+an MP3 seeded from `default-audio/` stays, and so does its line in `var/seeded-audio`.
+
+**A forced path may not be in the backup at all.** Anything `VERSIONS.json` claimed past
+the deny-list (§8b) is only backed up below 50 MB — the rollback copy is one version on
+the same SD card. Above that it is installed and skipped, the log says
+`not backed up - too large to roll back`, and `--status` carries it in `needs_attention`.
+Check `--status` before relying on a rollback after an update that forced a large path.
 
 ### Fleet
 
@@ -1016,6 +1147,8 @@ output be read by check 4 as the live app crashing.
   "variant": "pi4",
   "installed": "1.2.0",
   "pinned": "",
+  "pointer": "VERSIONS.json",
+  "pointer_is_default": true,
   "enabled": true,
   "rollback_to": "1.1.0",
   "last_result": "updated",
@@ -1116,6 +1249,13 @@ ssh <device>.local 'bash ~/Desktop/scheduler/config/scripts/health_check.sh'
 ---
 
 ## 14. Things this system deliberately will not do
+
+**It never writes into `audio/` on its own.** A release cannot claim that folder: the
+packager strips it and the updater refuses a manifest that names it. Two things can put a
+file there, and both are deliberate acts by an admin rather than something a release does
+by itself — `default-audio/`, which seeds a file once per device and never overwrites one
+(§3.7), and an `include` in `VERSIONS.json`, which forces the path and is logged as
+`FORCED:` (§8b). Neither ever deletes: `--delete` is not applied to a forced path.
 
 **It never uses `sudo`, apart from restarting the athan service** (permitted by a narrow
 rule in `/etc/sudoers.d/010_scheduler-restart` that `init.sh` installs and validates).
@@ -1258,6 +1398,22 @@ the device or your own backup.
 - **A device that has never updated names its backup `unknown`,** and rolling back writes
   `unknown` into `installed_version`. The files are correct; only the label is wrong. §5.1
   avoids it.
+- **A release that introduces a new audio folder ships it empty unless you fill it.**
+  `audio/` is never in a payload, so the folder is created device-side by
+  `apply_settings.sh` — which the updater runs at the end of every update. The event is
+  scheduled from the moment the release lands and stays silent until an `.mp3` arrives,
+  either by hand or through `default-audio/` (§3.7). `audio/friday_quran/` (Surat
+  Al-Kahf, 1.0.8) is the case this exists for.
+- **A `default-audio/` file removed from the repo stays on every device that already took
+  it.** The ledger says it was seeded and nothing ever deletes inside `audio/`. Retracting
+  one is a manual visit.
+- **A pointer `include` is keyed by variant, not version.** It keeps forcing its path on
+  every release that follows until someone takes it out of `VERSIONS.json`, and nothing
+  will remind you.
+- **A device following its own version file says so only in the log, `--status` and the
+  Settings app.** Set `POINTER_NAME` for a test and forget it, and that device takes
+  versions nobody rolled out and misses the ones everybody got. §5.5 lists it among the
+  things to check before handover.
 - **A failed release retries every night** until you pin the device or publish a fix.
   Each retry re-downloads the archive.
 - **Only systemd units are checked for root-owned drift** — not fonts, not the sudoers
