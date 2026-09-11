@@ -1,14 +1,95 @@
 {
-  "_comment": "The version each device runs, and what an update is allowed to replace on it. This file - not the release list - is what devices read. Publishing a release does not roll it out; editing this file does. Moving a version back rolls that fleet back on its next check. See ADMIN_MANUAL.md section 8b.",
-  "_format_version": "The version to install, or \"\" for none yet. Devices upgrade OR downgrade to reach it. A device with PIN set in its own config/update.conf ignores this.",
-  "_format_paths": "exclude: paths this hardware keeps, on top of whatever the release already protects. include: extra paths this hardware takes, on top of what the release ships - and the one way to claim a path the updater's deny-list normally protects, such as an audio folder. A release can never do that; this file can, because it is edited by hand and not shipped in a public archive. Forced paths are logged as FORCED: on the device and are never rsynced with --delete. var/update/ and var/installed_version stay refused - the updater is writing to them while it runs. Both lists are additions to the release's own, never a replacement. Paths are relative to ~/Desktop/scheduler/ and a trailing slash means a directory. See ADMIN_MANUAL.md section 8b.",
-  "_format_stale": "include and exclude are keyed by hardware, not by version: whatever is listed keeps applying to every release that follows. Take an entry out when the rollout it was added for is superseded - nothing will remind you.",
-  "_format_shorthand": "A variant with no path rules can be written as just the version string: \"zero\": \"1.0.3\".",
+  "_readme": {
+
+    "definitions": {
+      "these_notes": [
+        "JSON has no comments. Keys starting with _ are notes by convention, and the",
+        "updater reads only 'pi4' and 'zero', so everything here is ignored by devices."
+      ],
+
+      "what_this_file_does": [
+        "Decides what every device runs. Publishing a release does not roll it out;",
+        "editing this file does. Set a version back and that fleet rolls back on its",
+        "next 02:00 check. A device with PIN set in its own update.conf ignores this."
+      ],
+
+      "always_protected": [
+        "Not something you set - it is the updater's own list, hard-coded in",
+        "config/scripts/check_updates.sh and shown here for reference. No release can",
+        "replace these paths; only 'include' can claim one, and the device logs it:",
+        "",
+        "  audio/   var/   logs/   config/config.ini   config/update.conf",
+        "  config/*.csv   config/executed-events.json   **/prayer_times_map.py"
+      ],
+
+      "keyed_by_hardware_not_version": [
+        "'exclude' and 'include' keep applying to every later release until someone",
+        "removes them - nothing will remind you. Take an entry out once the rollout",
+        "it was added for is superseded."
+      ],
+
+      "full_detail": "ADMIN_MANUAL.md section 8b"
+    },
+
+    "config": {
+      "version": [
+        "The version to install, or \"\" for none yet.",
+        "Devices move down to reach it as readily as up."
+      ],
+
+      "exclude": [
+        "Paths this hardware keeps, on top of always_protected.",
+        "Can only ever protect more, never less."
+      ],
+
+      "include": [
+        "Paths this hardware takes, on top of what the release ships - and the only",
+        "way to claim one of the always_protected paths. The release must still",
+        "contain the file. A forced path is added to or replaced, never deleted."
+      ]
+    },
+
+    "examples": {
+      "roll this hardware to 1.1.0": {
+        "version": "1.1.0",
+        "exclude": [],
+        "include": []
+      },
+
+      "hold this hardware where it is - nothing rolls out to it yet": {
+        "version": "",
+        "exclude": [],
+        "include": []
+      },
+
+      "a release broke the countdown on this hardware only: take everything else": {
+        "version": "1.1.0",
+        "exclude": ["applications/desktop/prayer_times_gui/"],
+        "include": []
+      },
+
+      "a hand-edited crontab on this hardware must survive every release": {
+        "version": "1.1.0",
+        "exclude": ["config/crontab.txt"],
+        "include": []
+      },
+
+      "push a recitation into the owner's audio folder - overrides always_protected": {
+        "version": "1.1.1",
+        "exclude": [],
+        "include": ["audio/quran/"]
+      },
+
+      "shorthand for a hardware with no path rules": "1.1.0"
+    }
+  },
+
   "pi4": {
-    "version": "1.1.0",
+    "version": "1.1.1",
     "exclude": [],
     "include": []
   },
+
   "zero": {
     "version": "",
     "exclude": [],
