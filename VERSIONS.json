@@ -5,7 +5,7 @@
   "_format_stale": "include and exclude are keyed by hardware, not by version: whatever is listed keeps applying to every release that follows. Take an entry out when the rollout it was added for is superseded - nothing will remind you.",
   "_format_shorthand": "A variant with no path rules can be written as just the version string: \"zero\": \"1.0.3\".",
   "pi4": {
-    "version": "1.0.9",
+    "version": "1.1.0",
     "exclude": [],
     "include": []
   },
