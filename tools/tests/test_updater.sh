@@ -313,5 +313,61 @@ grep -qF "NOT the default" <<< "$(run)" \
     || echo "  ✓ and the warning stops"
 rm -f "$REL/VERSIONS-test.json"
 
+echo "16. when the primary host is unreachable the mirror carries the update"
+# Syria blocks every GitHub host this script fetches from - the raw pointer, the release
+# assets, the API - so a device there reads nothing at all and never even learns a
+# version exists. Codeberg carries the same repo and the same releases behind it. Here
+# the primary is pointed at a directory that is not there, which is what a blocked host
+# looks like to curl: no answer, whatever the reason.
+SAVED_CONF="$(cat "$SCH/config/update.conf")"
+mirror_conf() { # $1 primary base, $2 mirror base
+    cat >> "$SCH/config/update.conf" <<CONF
+UPDATE_POINTER_URL="file://$1/VERSIONS.json"
+UPDATE_POINTER_MIRROR="file://$2/VERSIONS.json"
+UPDATE_DOWNLOAD_URL="file://$1"
+UPDATE_DOWNLOAD_MIRROR="file://$2"
+CONF
+}
+
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+mirror_conf "$REL/blocked" "$REL"
+out="$(run --now)"
+expect "the dead primary is reported, not swallowed" "$out" "no answer from"
+expect "and the mirror is named as the one that answered" "$out" "served by the mirror instead"
+expect "the update goes through anyway" "$out" "==== Updated to 1.1.0 ===="
+chk_installed="$(cat "$SCH/var/installed_version")"
+[ "$chk_installed" = "1.1.0" ] \
+    && echo "  ✓ and the device is really on the new version" \
+    || { echo "  ✗ installed_version says $chk_installed"; fail=1; }
+
+echo "17. with both hosts unreachable it fails where it stands"
+# The mirror must not turn a total outage into a half-finished install: nothing has been
+# downloaded, so nothing should have been touched.
+echo "1.1.0" > "$SCH/var/installed_version"
+point 1.1.1
+echo "$SAVED_CONF" > "$SCH/config/update.conf"
+mirror_conf "$REL/blocked" "$REL/also-blocked"
+out="$(run --now)"
+expect "both hosts are named" "$out" "no answer from"
+expect "and it stops at the pointer rather than guessing" "$out" "Cannot read the version pointer"
+still="$(cat "$SCH/var/installed_version")"
+[ "$still" = "1.1.0" ] \
+    && echo "  ✓ the device is left on the version it had" \
+    || { echo "  ✗ installed_version moved to $still"; fail=1; }
+
+echo "18. a device pointed at one host by hand is not sent anywhere else"
+# Naming a host in update.conf is an instruction. Reaching past it to the built-in
+# mirror would ignore that - and would put a test rig on the real network.
+echo "$SAVED_CONF" > "$SCH/config/update.conf"
+conf UPDATE_POINTER_URL "\"file://$REL/blocked/VERSIONS.json\""
+out="$(run --now)"
+expect "the named host is tried" "$out" "no answer from"
+grep -qF "served by the mirror instead" <<< "$out" \
+    && { echo "  ✗ it fell through to a mirror nobody asked for"; fail=1; } \
+    || echo "  ✓ and nothing is tried behind it"
+
+echo "$SAVED_CONF" > "$SCH/config/update.conf"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

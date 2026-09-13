@@ -254,6 +254,18 @@ All three files must be attached: the device fetches `version.json` first, and o
 the archive named inside it. `SHA256SUMS` is for humans — the device verifies against the
 `sha256` field in the manifest.
 
+Then put the same release on Codeberg:
+
+```bash
+tools/mirror_codeberg.sh pi4 1.2.0
+```
+
+Second on purpose — it copies the title and notes off the GitHub release, so both carry
+the same text, and it ends by fetching `version.json` and the archive back the way a
+device would. Syria blocks `raw.githubusercontent.com` and `objects.githubusercontent.com`,
+which between them are every host a device fetches from, so a release that only went to
+GitHub is a release those devices cannot install. See section 3.8.
+
 **Nothing installs yet.** A published release is available, not deployed. Devices install
 what `VERSIONS.json` names, and you have not touched it.
 
@@ -361,6 +373,44 @@ seeded and nothing ever deletes inside `audio/`. That is why clearing the folder
 releases is safe: three separate things guarantee it — `apply_settings.sh` only ever
 copies, `audio/` is on the deny-list so rsync never reaches it, and the path is already
 in `var/seeded-audio` so it would be skipped even if it came back.
+
+### 3.8 The Codeberg mirror
+
+GitHub is the repo of record. Codeberg carries a copy because Syria blocks
+`raw.githubusercontent.com` and `objects.githubusercontent.com` — between them that is the
+version pointer, the manifest and the archive, so a device on such a network reads nothing
+at all and never learns a version exists. Codeberg serves raw files and release downloads
+from one hostname, so a network that reaches it reaches all three.
+
+**Devices need no configuration.** `check_updates.sh` tries GitHub first and falls back on
+its own, logging `served by the mirror instead` when it does. It falls back on any curl
+failure, not only a dropped connection: a censoring network often answers with a block page
+rather than refusing, and that is an HTTP error indistinguishable from a missing file.
+
+The mirror is only worth falling back to if it is kept current. Two commands do that:
+
+```bash
+tools/mirror_codeberg.sh pi4 1.2.0   # after gh release create — tree, tag, assets
+tools/mirror_codeberg.sh             # after any push, including a VERSIONS.json edit
+```
+
+The second matters as much as the first: a device reads the pointer from whichever host it
+can reach, so leaving `VERSIONS.json` unmirrored puts the two fleets on different targets.
+The script says so if you run it with a version and the mirrored pointer disagrees.
+
+The two repos have unrelated histories — Codeberg was seeded from a content copy, not a
+clone — so the script syncs the tree and commits rather than pushing. The commit carries
+GitHub's own message plus a `Mirrored-from:` trailer, which is the only record of which
+commit it came from; the SHAs cannot be compared.
+
+Release assets go up through Gitea's API. It needs a token with repository write from
+<https://codeberg.org/user/settings/applications>, in `~/.config/codeberg/token`
+(`chmod 600`) or `CODEBERG_TOKEN`. **The repo also needs Releases switched on** — Settings
+→ Units — or the API answers 404 and nothing can be uploaded.
+
+If the mirror is ever unreachable or stale, nothing breaks for devices that can see
+GitHub. Only the blocked ones are affected, and they fail the same way they would have
+without a mirror at all: they roll back and stay on the version they had.
 
 ---
 
@@ -726,6 +776,12 @@ to match it.
 | `UPDATE_POINTER_URL` | `VERSIONS.json` on `main`, via raw.githubusercontent.com | can also be set in `update.conf` |
 | `UPDATE_API_URL` | GitHub releases API | can also be set in `update.conf` |
 | `UPDATE_DOWNLOAD_URL` | GitHub release downloads | can also be set in `update.conf` |
+| `UPDATE_POINTER_MIRROR` | the same file on Codeberg | tried only when the primary does not answer |
+| `UPDATE_API_MIRROR` | Codeberg releases API | as above |
+| `UPDATE_DOWNLOAD_MIRROR` | Codeberg release downloads | as above |
+
+Setting one of the three primaries switches its mirror off, so a device pointed at a host
+stays there. Set both halves to name your own pair. See section 3.8.
 
 The updater re-execs itself from a copy in `/tmp` before touching anything, because it is
 inside the payload it installs and bash reads a script incrementally as it runs —

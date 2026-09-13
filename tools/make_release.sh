@@ -364,11 +364,18 @@ cat <<SUMMARY
   archive   dist/$ARCHIVE_NAME  ($SIZE)
   sha256    $SHA256
 
-Edit dist/version.json to add release notes, then publish:
+Edit dist/version.json to add release notes, then publish to both hosts:
 
   gh release create $TAG \\
       dist/$ARCHIVE_NAME dist/version.json dist/SHA256SUMS \\
       --title "$VARIANT $VERSION" --notes "..."
+
+  tools/mirror_codeberg.sh $VARIANT $VERSION
+
+The mirror is second on purpose: it copies the title and notes off the GitHub release, so
+both carry the same text. Devices on networks that block GitHub - Syria blocks every host
+this release is served from - reach Codeberg and nothing else, so a release that only went
+to GitHub is a release those devices cannot install.
 
 Publishing does NOT roll it out. Devices install whatever VERSIONS.json names, so test
 the release on one device first:
@@ -378,4 +385,9 @@ the release on one device first:
 then roll the fleet forward by setting "$VARIANT" to "$VERSION" in VERSIONS.json and
 pushing that one file. Setting it back to the previous version rolls everyone back.
 The other variant is unaffected either way.
+
+That edit reaches devices through VERSIONS.json on whichever host they can read, so mirror
+it too or the two fleets follow different targets:
+
+  tools/mirror_codeberg.sh
 SUMMARY

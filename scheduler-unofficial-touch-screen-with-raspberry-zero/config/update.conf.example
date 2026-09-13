@@ -12,7 +12,7 @@
 # other device installing the wrong software.
 #   pi4   Raspberry Pi 4 with the official touch screen
 #   zero  Raspberry Pi Zero with the unofficial screen
-VARIANT=zero
+VARIANT=pi4
 
 # Set to false to leave this device where it is. The daily cron check does nothing;
 # "تحديث الآن" in the Settings app still works, because pressing a button is a
@@ -54,3 +54,22 @@ POINTER_NAME=
 #UPDATE_POINTER_URL=
 #UPDATE_API_URL=
 #UPDATE_DOWNLOAD_URL=
+
+# Where the device looks when the host above does not answer. Left alone, every device
+# already falls back from GitHub to the Codeberg mirror, which carries the same repo and
+# the same release assets - that is what keeps devices on networks that block
+# raw.githubusercontent.com updating. Nothing here needs setting for that to work.
+#
+# Setting one of the three above turns its mirror off, so that a device pointed at a
+# host stays there. Set both halves to name your own pair:
+#   UPDATE_POINTER_URL="https://example.org/islamic-prayer-scheduler/raw/branch/main/VERSIONS.json"
+#   UPDATE_POINTER_MIRROR="https://codeberg.org/teleshops/islamic-prayer-scheduler/raw/branch/main/VERSIONS.json"
+#
+# On a device where GitHub is blocked outright, putting the mirror in front costs it the
+# 15-second connect timeout it would otherwise wait through on every fetch:
+#   UPDATE_POINTER_URL="https://codeberg.org/teleshops/islamic-prayer-scheduler/raw/branch/main/VERSIONS.json"
+#   UPDATE_DOWNLOAD_URL="https://codeberg.org/teleshops/islamic-prayer-scheduler/releases/download"
+#   UPDATE_API_URL="https://codeberg.org/api/v1/repos/teleshops/islamic-prayer-scheduler/releases"
+#UPDATE_POINTER_MIRROR=
+#UPDATE_API_MIRROR=
+#UPDATE_DOWNLOAD_MIRROR=

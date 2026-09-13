@@ -41,13 +41,25 @@ SERVICE="audio_event_scheduler.service"
 
 # Overridable from update.conf so the whole flow can be pointed at a local directory for
 # testing - curl reads file:// URLs, so no server is needed to exercise this end to end.
-UPDATE_API_URL="${UPDATE_API_URL:-https://api.github.com/repos/ibrahimalkurdi/islamic-prayer-scheduler/releases}"
-UPDATE_DOWNLOAD_URL="${UPDATE_DOWNLOAD_URL:-https://github.com/ibrahimalkurdi/islamic-prayer-scheduler/releases/download}"
+GITHUB_API_URL="https://api.github.com/repos/ibrahimalkurdi/islamic-prayer-scheduler/releases"
+UPDATE_API_URL="${UPDATE_API_URL:-$GITHUB_API_URL}"
+GITHUB_DOWNLOAD_URL="https://github.com/ibrahimalkurdi/islamic-prayer-scheduler/releases/download"
+UPDATE_DOWNLOAD_URL="${UPDATE_DOWNLOAD_URL:-$GITHUB_DOWNLOAD_URL}"
+
+# Where to look when GitHub does not answer. Syria blocks raw.githubusercontent.com and
+# objects.githubusercontent.com, which is every file this script fetches - so a device
+# there reads nothing at all, not even the pointer. Codeberg carries the same repo and
+# the same release assets, and serves raw files and downloads from one hostname, so a
+# network that reaches it at all reaches both. GitHub stays primary: the mirror is only
+# consulted when the primary host fails to answer.
+CODEBERG_REPO="https://codeberg.org/teleshops/islamic-prayer-scheduler"
+CODEBERG_API="https://codeberg.org/api/v1/repos/teleshops/islamic-prayer-scheduler"
 
 # The one file that decides what every device runs. Publishing a release does not roll
 # it out - this file does, and moving a value back one version rolls that fleet back on
 # the next check. Devices never pick a version for themselves.
 POINTER_REPO_RAW="https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main"
+POINTER_REPO_MIRROR="$CODEBERG_REPO/raw/branch/main"
 POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
 UPDATE_POINTER_URL="${UPDATE_POINTER_URL:-}"
 
@@ -153,17 +165,33 @@ PIN=""
 APPLY_MODE=""
 EXTRA_EXCLUDE=""
 POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
+# Settable from update.conf, like the three primaries they stand behind. A device on a
+# network that blocks GitHub can be given any pair of hosts without touching this script.
+UPDATE_POINTER_MIRROR="${UPDATE_POINTER_MIRROR:-}"
+UPDATE_DOWNLOAD_MIRROR="${UPDATE_DOWNLOAD_MIRROR:-}"
+UPDATE_API_MIRROR="${UPDATE_API_MIRROR:-}"
 # shellcheck disable=SC1090
 [[ -f "$UPDATE_CONF" ]] && source "$UPDATE_CONF"
 
 # A device following anything but the fleet's own file is the quiet failure mode here -
 # it takes versions nobody rolled out and misses the ones everybody got. POINTER_NAME is
 # the short way to say it; UPDATE_POINTER_URL still wins, for a file:// test directory.
+# Codeberg stands behind each built-in host, and only behind those. A device that names
+# its own primary in update.conf gets no mirror unless it names one too: pointing a
+# device at a host is an instruction, and reaching past it to GitHub's mirror would
+# defeat the point - and would put a test rig on the real network.
 if [[ -z "$UPDATE_POINTER_URL" ]]; then
     UPDATE_POINTER_URL="$POINTER_REPO_RAW/$POINTER_NAME"
+    : "${UPDATE_POINTER_MIRROR:=$POINTER_REPO_MIRROR/$POINTER_NAME}"
 else
     POINTER_NAME="$(basename "$UPDATE_POINTER_URL")"
 fi
+[[ "$UPDATE_DOWNLOAD_URL" == "$GITHUB_DOWNLOAD_URL" ]] \
+    && : "${UPDATE_DOWNLOAD_MIRROR:=$CODEBERG_REPO/releases/download}"
+# Gitea answers /api/v1/repos/<owner>/<repo>/releases with the same fields this reads out
+# of GitHub's - tag_name, draft, prerelease - so one parser serves both.
+[[ "$UPDATE_API_URL" == "$GITHUB_API_URL" ]] \
+    && : "${UPDATE_API_MIRROR:=$CODEBERG_API/releases}"
 POINTER_IS_DEFAULT=$([[ "$POINTER_NAME" == "VERSIONS.json" ]] && echo 1 || echo 0)
 
 INSTALLED="$(cat "$INSTALLED_VERSION_FILE" 2>/dev/null || echo "unknown")"
@@ -219,7 +247,16 @@ except Exception: pass
 # because releases/latest resolves to the newest release in the repo regardless of
 # variant - without the prefix, a release for one variant would strand the other.
 published_versions() {
-    curl "${CURL_SMALL[@]}" "$UPDATE_API_URL" 2>/dev/null | python3 -c "
+    local releases
+    releases="$(mktemp)" || return 0
+    # --list prints to stdout, and log() writes there too - so the mirror's own
+    # reporting is muted here rather than landing in the middle of the version list.
+    if ! fetch_mirrored "$releases" "$UPDATE_API_URL" "$UPDATE_API_MIRROR" \
+                        "${CURL_SMALL[@]}" >/dev/null 2>&1; then
+        rm -f "$releases"
+        return 0
+    fi
+    python3 -c "
 import json, sys, re
 prefix = '${VARIANT}-v'
 try:
@@ -234,18 +271,49 @@ tags = [r['tag_name'][len(prefix):] for r in releases
 def key(v):
     return [int(p) if p.isdigit() else 0 for p in re.split(r'[._-]', v)]
 print('\n'.join(sorted(set(tags), key=key)))
-" 2>/dev/null
+" < "$releases" 2>/dev/null
+    rm -f "$releases"
+}
+
+# One file, from the primary host if it answers and from the mirror if it does not.
+# Any curl failure moves on, not only a dropped connection: a censoring network often
+# answers with a block page instead of refusing, and --fail turns that into an HTTP
+# error indistinguishable from a missing file. Treating only transport errors as
+# "unreachable" would leave exactly the devices this exists for stuck on the primary.
+# The manifest's sha256 is what keeps the mirror honest about what it serves.
+fetch_mirrored() {
+    local dest="$1" primary="$2" mirror="$3"; shift 3
+    local -a opts=("$@") hosts=("$primary")
+    [[ -n "$mirror" ]] && hosts+=("$mirror")
+    local url host rc
+    for url in "${hosts[@]}"; do
+        rc=0
+        rm -f "$dest"
+        curl "${opts[@]}" "$url" -o "$dest" 2>>"$LOG_FILE" || rc=$?
+        if [[ $rc -eq 0 ]]; then
+            [[ "$url" == "$primary" ]] || log "  served by the mirror instead"
+            return 0
+        fi
+        rm -f "$dest"
+        host="${url#*://}"
+        log "  no answer from ${host%%/*} (curl exit $rc)"
+    done
+    return 1
 }
 
 # The pointer is fetched once and kept, because two things are read out of it at very
 # different moments - the target version before anything is downloaded, and this
 # variant's path rules after the archive is unpacked. Two fetches could disagree.
 fetch_pointer() {
-    local body
-    rm -f "$POINTER_FILE"
-    body="$(curl "${CURL_SMALL[@]}" "$UPDATE_POINTER_URL" 2>/dev/null)" || return 1
-    printf '%s' "$body" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null || return 2
-    printf '%s' "$body" > "$POINTER_FILE"
+    local tmp="$POINTER_FILE.part"
+    rm -f "$POINTER_FILE" "$tmp"
+    fetch_mirrored "$tmp" "$UPDATE_POINTER_URL" "$UPDATE_POINTER_MIRROR" \
+                   "${CURL_SMALL[@]}" || return 1
+    # Whichever host served it, it still has to be the file we asked for. A mirror that
+    # answers every path with its own HTML is the case this catches.
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp" 2>/dev/null \
+        || { rm -f "$tmp"; return 2; }
+    mv "$tmp" "$POINTER_FILE"
 }
 
 # Empty output means the pointer names no version for this variant, which is a real
@@ -555,7 +623,9 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 MANIFEST="$UPDATE_DIR/version.json"
 
-if ! curl "${CURL_SMALL[@]}" "$UPDATE_DOWNLOAD_URL/$TAG/version.json" -o "$MANIFEST" 2>>"$LOG_FILE"; then
+if ! fetch_mirrored "$MANIFEST" "$UPDATE_DOWNLOAD_URL/$TAG/version.json" \
+                    "${UPDATE_DOWNLOAD_MIRROR:+$UPDATE_DOWNLOAD_MIRROR/$TAG/version.json}" \
+                    "${CURL_SMALL[@]}"; then
     log "ERROR: no manifest for $TAG"
     write_state "error" "no manifest for $TAG" ""
     exit 1
@@ -588,7 +658,9 @@ fi
 # ---------------------------------------------------------------------------
 ARCHIVE="$UPDATE_DIR/$M_ARCHIVE"
 log "Downloading $M_ARCHIVE..."
-if ! curl "${CURL_BIG[@]}" "$UPDATE_DOWNLOAD_URL/$TAG/$M_ARCHIVE" -o "$ARCHIVE" 2>>"$LOG_FILE"; then
+if ! fetch_mirrored "$ARCHIVE" "$UPDATE_DOWNLOAD_URL/$TAG/$M_ARCHIVE" \
+                    "${UPDATE_DOWNLOAD_MIRROR:+$UPDATE_DOWNLOAD_MIRROR/$TAG/$M_ARCHIVE}" \
+                    "${CURL_BIG[@]}"; then
     log "ERROR: download failed or stalled - it will be retried on the next run"
     rm -f "$ARCHIVE"
     write_state "error" "download failed" ""
