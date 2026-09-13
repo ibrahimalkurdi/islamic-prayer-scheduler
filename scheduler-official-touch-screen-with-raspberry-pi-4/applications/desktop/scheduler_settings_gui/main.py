@@ -282,6 +282,13 @@ PRAYER_PREFIX = "enable_prayer_"
 # because the athan scheduler parses them.
 MERIDIEM_AM = "AM"
 MERIDIEM_PM = "PM"
+# Every label here is an Arabic sentence with a time inside it. Left to itself the bidi
+# algorithm splits "4:35 AM" in two - the digits are weak, AM is strong left-to-right -
+# and lays the halves out right to left, so the screen reads "AM 4:35". These wrap the
+# time in a left-to-right isolate, which keeps it one run in the order it was written
+# and stops it affecting the Arabic around it.
+LTR_ISOLATE = "\u2066"
+POP_ISOLATE = "\u2069"
 
 # (config key, display name, wording). Sunrise is listed here so it gets the same
 # section, checkbox and audio picker as the rest, but it is not a صلاة and has no أذان,
@@ -1072,12 +1079,12 @@ class ControlApp(QMainWindow):
         summer Fajr, and Athkar Elmasa is Maghrib plus up to five, which runs past
         midnight. Without the wrap those land on the right digits with the wrong marker.
 
-        "6:48 AM" is one left-to-right run, so it sits inside the surrounding Arabic
-        sentence as a single unit and is not reordered - which is why no leading mark or
-        separate widget is needed here, unlike the ص/م this replaced."""
+        Returned inside a left-to-right isolate, so the Arabic sentence it is dropped
+        into shows it as "4:35 AM" and not "AM 4:35". The marks are invisible; strip
+        LTR_ISOLATE and POP_ISOLATE if the text is ever compared rather than shown."""
         hour, minute = divmod(minutes % (24 * 60), 60)
         mark = MERIDIEM_AM if hour < 12 else MERIDIEM_PM
-        return f"{hour % 12 or 12}:{minute:02d} {mark}"
+        return f"{LTR_ISOLATE}{hour % 12 or 12}:{minute:02d} {mark}{POP_ISOLATE}"
 
     def effective_prayer_csv(self):
         """The file whose times actually get scheduled: the daylight-saving copy when

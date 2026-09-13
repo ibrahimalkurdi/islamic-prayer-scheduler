@@ -44,6 +44,11 @@ app = QApplication(sys.argv)
 page = load(PRAYER_GUI, "prayer_times_gui")
 gui = load(SETTINGS_GUI, "settings_app")
 
+
+def settings_clock(minutes):
+    """What the Settings app shows, without the invisible isolate it wraps it in."""
+    return gui.ControlApp.minutes_to_clock(None, minutes).strip("\u2066\u2069")
+
 # 24-hour input, then what the wall display shows and what the Settings app prints. The
 # display pads the hour so the colons line up down the card list. The Settings labels have
 # no column to line up with, so no pad.
@@ -124,17 +129,16 @@ os.remove(MAP_FILE)
 
 print("5. the Settings app agrees, without the pad")
 for (hour, minute), _, in_settings in CASES:
-    chk(f"{hour:02d}:{minute:02d}",
-        gui.ControlApp.minutes_to_clock(None, hour * 60 + minute), in_settings)
+    chk(f"{hour:02d}:{minute:02d}", settings_clock(hour * 60 + minute), in_settings)
 
 print("6. a time that falls outside the day is wrapped into it")
 # Tahajjud is Fajr minus up to five hours, which goes negative on a summer Fajr, and
 # Athkar Elmasa is Maghrib plus up to five, which runs past midnight. Both are reachable
 # from the spin boxes, and both used to be shown as -2:00 and 26:00.
-chk("two hours before midnight", gui.ControlApp.minutes_to_clock(None, -120), "10:00 PM")
-chk("one minute before midnight", gui.ControlApp.minutes_to_clock(None, -1), "11:59 PM")
-chk("two hours after midnight", gui.ControlApp.minutes_to_clock(None, 26 * 60), "2:00 AM")
-chk("exactly midnight, the next day", gui.ControlApp.minutes_to_clock(None, 24 * 60), "12:00 AM")
+chk("two hours before midnight", settings_clock(-120), "10:00 PM")
+chk("one minute before midnight", settings_clock(-1), "11:59 PM")
+chk("two hours after midnight", settings_clock(26 * 60), "2:00 AM")
+chk("exactly midnight, the next day", settings_clock(24 * 60), "12:00 AM")
 
 print("7. a duration is not a clock time and keeps its leading zero")
 # The countdown page and the daily page's badge both show time remaining. Reading "1:00 م"
@@ -172,18 +176,22 @@ def on_screen(text):
     opt = lay.textOption(); opt.setTextDirection(_Qt.RightToLeft); lay.setTextOption(opt)
     lay.beginLayout(); line = lay.createLine(); line.setLineWidth(2000); lay.endLayout()
     return "".join(c for _, c in sorted((line.cursorToX(i)[0], text[i])
-                                        for i in range(len(text))))
+                                        for i in range(len(text)))
+                   if c not in "\u2066\u2069\u200e")
 
-# Arabic runs right to left, so the reader meets whatever sits further right first. A
-# correctly set time gives them the digits and then the marker - which puts AM to the
-# LEFT of the digits on screen. Looks inverted written down; it is what the reader wants.
+# The label is an Arabic sentence with a time inside it. Bidi splits "4:35 AM" in two on
+# its own - weak digits, strong Latin marker - and lays the halves out right to left, so
+# the screen reads "AM 4:35". The isolate is what stops that, and only the laid-out line
+# can show whether it held.
 sentence = f"وقت صلاة الضحى: {w.minutes_to_clock(7 * 60 + 11)}"
 visual = on_screen(sentence)
+chk("the time is wrapped in an isolate",
+    w.minutes_to_clock(7 * 60 + 11).startswith("\u2066"), True)
 chk("both parts survive", "7:11" in visual and "AM" in visual, True)
-chk("the reader meets the digits before the marker",
-    visual.index("AM") < visual.index("7:11"), True)
+chk("and the marker is drawn to the right of the digits",
+    visual.index("7:11") < visual.index("AM"), True)
 
-chk("16:05 reads 4:05 PM", w.minutes_to_clock(16 * 60 + 5), "4:05 PM")
+chk("16:05 reads 4:05 PM", settings_clock(16 * 60 + 5), "4:05 PM")
 
 # The suite leaves the device's own settings as it found them.
 open(SETTINGS_INI_FILE, "w", encoding="utf-8").write(saved_ini)

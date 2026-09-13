@@ -25,11 +25,22 @@ The system supports automatic audio playback for prayers, nawafel, athkar, and Q
   - Displays a live countdown for the next prayer time.
   - Visual indicators:
     - 🟢 Green background: first 20 minutes after prayer time starts
-      ![Green Background](assets/green-athan-alert.png)
+
+      <img src="scheduler-official-touch-screen-with-raspberry-pi-4/assets/manual/app-duha-green.png" alt="Green background" width="520" />
+
     - 🔴 Red background: last 20 minutes before the next prayer
-      ![Red Background](assets/red-athan-alert.png)
+
+      <img src="scheduler-official-touch-screen-with-raspberry-pi-4/assets/manual/app-red.png" alt="Red background" width="520" />
+
+    - 🟠 Orange background: the makrooh windows — from sunrise until Duha opens,
+      and the zawal stretch at the end of Duha. Nafl is discouraged in both, and the
+      screen says so in a line above the name
+
+      <img src="scheduler-official-touch-screen-with-raspberry-pi-4/assets/manual/app-shrooq-makrooh.png" alt="Orange makrooh background" width="520" />
+
     - ⚪ Gray background: time between these two periods
-      ![Gray Background](assets/gray-athan-alert.png)
+
+      <img src="scheduler-official-touch-screen-with-raspberry-pi-4/assets/manual/app-countdown.png" alt="Gray background" width="520" />
 
 - **Scheduler Settings Desktop Application**
   - Allows users to configure:

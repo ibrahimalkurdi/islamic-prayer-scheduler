@@ -126,9 +126,10 @@ COUNTDOWN_NOTICE_MAX_PT = 22
 COUNTDOWN_NOTICE_MIN_PT = 14
 
 # --- Countdown page backgrounds ----------------------------------------------
-# Deeper shades than the daily table's PERIOD_COLORS, which are read on a card
-# rather than across a room. Makrooh is the exception: one orange, shared with
-# the table, so both screens agree on what a makrooh window looks like.
+# The daily table reads from these too, through PERIOD_COLORS, so a period looks
+# the same whichever screen it is seen on. The table's beige has no counterpart
+# here - the counter shows plain grey through the middle of a period - so that one
+# stays its own value.
 COUNTDOWN_BG_DEFAULT = "#333333"
 COUNTDOWN_BG_GREEN = "#006600"    # the 20 minutes after an athan
 COUNTDOWN_BG_RED = "#990000"      # the 20 minutes before the next athan
@@ -492,19 +493,26 @@ def clock_12h(when):
 
 MAKROOH_LABEL = "مكروه"
 
-# Shown on the countdown while a period's closing stretch is makrooh for nafl. The Duha
-# windows name that prayer because that is the one being waited for; the close of Asr is
-# makrooh for nafl generally, so it is worded that way.
+# Shown on the countdown through every window that is makrooh for nafl: the stretch from
+# sunrise until Duha opens, the zawal before Dhuhr, and the close of Asr. One wording for
+# all three - what is discouraged in them is nafl, not one named prayer - so the screen
+# says the same thing whenever the same rule applies. The backgrounds still differ, and
+# deliberately: orange where makrooh is the whole story, red where an athan is also
+# minutes away.
 MAKROOH_NAFL_NOTICE = "(الوقت مكروه لصلاة النافلة)"
 
 # Periods whose last PERIOD_EDGE_MINUTES are makrooh for nafl, rather than merely close
 # to the next athan: zawal at the end of Duha, and the yellowing sun at the end of Asr.
 MAKROOH_AT_PERIOD_END = ("الضحى", "العصر")
+# Of those, the ones that keep the plain red anyway, because the counter shows them red
+# and the two screens are meant to agree. Maghrib really is minutes away at the close of
+# العصر - there the مكروه tag carries the makrooh, and the colour carries the athan.
+MAKROOH_KEEPS_RED = ("العصر",)
 
 PERIOD_COLORS = {
-    "green": "#198754",
+    "green": COUNTDOWN_BG_GREEN,
     "beige": "#E7DBC1",
-    "red": "#dc3545",
+    "red": COUNTDOWN_BG_RED,
     "makrooh": COUNTDOWN_BG_MAKROOH,
 }
 
@@ -585,7 +593,7 @@ def period_state(name, start, end, now):
     # Makrooh in their own right, so they take the makrooh colour rather than the red
     # that only means the next athan is near - the same sense the countdown page uses.
     if name in MAKROOH_AT_PERIOD_END and remaining <= PERIOD_EDGE_MINUTES:
-        return "makrooh", True
+        return ("red" if name in MAKROOH_KEEPS_RED else "makrooh"), True
     if duration - PERIOD_EDGE_MINUTES < remaining:
         return "green", False
     if remaining <= PERIOD_EDGE_MINUTES:
@@ -829,7 +837,10 @@ class PrayerCard(QWidget):
         if active:
             base = QColor(PERIOD_COLORS[color])
             light_fill = base.lightness() > 170
-            background = ("qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            # Flat for makrooh: the gradient would fade the card away from the exact
+            # orange the counter paints, and those two are meant to match.
+            background = (base.name() if color == "makrooh" else
+                          "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
                           f" stop:0 {base.name()},"
                           f" stop:1 {base.darker(112 if light_fill else 128).name()})")
             border = base.darker(112).name() if light_fill else base.lighter(118).name()
@@ -1445,7 +1456,7 @@ class AdhanCounter(QWidget):
                 # Still الشروق's own window - name it as such; الضحى has not opened yet.
                 label = prayer_display_name("الشروق")
                 bg = COUNTDOWN_BG_MAKROOH
-                title_text = "(الوقت مكروه لصلاة الضحى)"
+                title_text = MAKROOH_NAFL_NOTICE
                 target = duha_start
             else:
                 label = prayer_display_name("الضحى")
@@ -1457,7 +1468,7 @@ class AdhanCounter(QWidget):
                     # makrooh orange, the same as the sunrise window above, rather
                     # than the red that only means the next athan is near.
                     bg = COUNTDOWN_BG_MAKROOH
-                    title_text = "(الوقت مكروه لصلاة الضحى)"
+                    title_text = MAKROOH_NAFL_NOTICE
 
             remaining = max(0, int((target - now).total_seconds()))
             hours = remaining // 3600

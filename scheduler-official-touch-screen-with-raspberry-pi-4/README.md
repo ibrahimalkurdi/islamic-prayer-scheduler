@@ -255,19 +255,22 @@ The colours use the same 20-minute rule as the countdown view:
 | Orange | مكروه — nafl prayer is discouraged right now |
 | Beige | the rest of the period (the countdown view shows plain grey here) |
 
+Green, red and orange are the same values the countdown view paints, so one moment does
+not look like two different states depending on which screen you are looking at.
+
 **مكروه** is shown beside the time during the three windows the countdown view also warns
 about: from الشروق until الضحى opens, the zawal stretch just before الظهر, and the last 20
-minutes of العصر. The countdown view names them above the prayer name —
-`(الوقت مكروه لصلاة الضحى)` for the first two, `(الوقت مكروه لصلاة النافلة)` for العصر,
-which is makrooh for nafl generally rather than for one named prayer.
+minutes of العصر. In all three the countdown view shows `(الوقت مكروه لصلاة النافلة)`
+above the prayer name — one wording, because what is discouraged in them is nafl rather
+than any one named prayer.
 
-العصر is the one place the two views differ on colour. The card here turns orange, because
-on this table the colour is the only thing saying مكروه; the countdown view stays red,
-because المغرب really is minutes away and the line of text carries the makrooh instead.
+The last 20 minutes of العصر stay **red** on both views, not orange: المغرب really is
+minutes away, and that is what the colour is for. The مكروه tag beside the time — and the
+line of text on the countdown — are what say the window is makrooh.
 
 The countdown treats الشروق → الظهر as **الضحى's own period**, matching this table: the
 first 20 minutes after sunrise are الشروق on orange (مكروه), then الضحى runs to الظهر —
-green for its first 20 minutes, red for the zawal at the end.
+green for its first 20 minutes, orange again for the zawal at the end.
 
 Tap the date to open a calendar and look at another day. The table returns to today by
 itself after 10 minutes, and while left open it follows the calendar over midnight.

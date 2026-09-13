@@ -2,9 +2,9 @@
 
 Nafl is makrooh at three points in the day: from sunrise until Duha opens, at zawal just
 before Dhuhr, and as Asr closes. The countdown screen says so in a line of text; the daily
-list says so with a tag and the makrooh colour. The two disagree on background colour for
-Asr on purpose - the countdown stays red there because Maghrib really is minutes away, and
-the notice carries the makrooh instead.
+list says so with a tag and the makrooh colour. All three windows are worded the same,
+because the rule is the same in all three. The backgrounds are not: Asr keeps the red on
+the countdown, because Maghrib really is minutes away and the notice carries the makrooh.
 
 Run from inside the fixture, not from the repo - HOME is resolved from this file's own
 directory:
@@ -52,21 +52,20 @@ print("1. Asr closes makrooh, and only in its last 20 minutes")
 ASR, MAGHRIB = at(16, 38), at(19, 38)
 chk("21 minutes out nothing has started yet",
     page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=21)), ("beige", False))
-chk("20 minutes out it is makrooh",
-    page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=20)), ("makrooh", True))
-chk("and still makrooh a minute before Maghrib",
-    page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=1)), ("makrooh", True))
+chk("20 minutes out it is makrooh, and red",
+    page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=20)), ("red", True))
+chk("and still so a minute before Maghrib",
+    page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=1)), ("red", True))
 chk("the middle of the period is untouched",
     page.period_state("العصر", ASR, MAGHRIB, at(17, 30)), ("beige", False))
 chk("and it still opens green",
     page.period_state("العصر", ASR, MAGHRIB, ASR + timedelta(minutes=5)), ("green", False))
-# The red window and the makrooh window are the same 20 minutes, so makrooh takes it
-# whole: the Asr card never shows red again. That is the intended reading of "like
-# الشروق" - the colour says makrooh, not "Maghrib is close".
-states = {page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=m))[0]
+# The red window and the makrooh window are the same 20 minutes. The card keeps the red,
+# because the counter shows that window red and the two screens are meant to agree; the
+# مكروه tag beside the time is what says makrooh here.
+states = {page.period_state("العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=m))
           for m in range(1, 21)}
-chk("red is gone from the Asr card entirely", "red" in states, False)
-chk("the whole window is makrooh", states, {"makrooh"})
+chk("the whole window is red, and tagged makrooh", states, {("red", True)})
 
 print("2. the windows that were already makrooh still are")
 SUNRISE, DUHA = at(6, 28), at(6, 48)
@@ -75,12 +74,17 @@ chk("sunrise, for its whole period",
 DHUHR = at(13, 8)
 chk("zawal, in Duha's last 20 minutes",
     page.period_state("الضحى", DUHA, DHUHR, DHUHR - timedelta(minutes=10)), ("makrooh", True))
+chk("and it is the counter's own orange, not a card-only shade",
+    page.PERIOD_COLORS["makrooh"], page.COUNTDOWN_BG_MAKROOH)
 chk("but not Duha in the middle",
     page.period_state("الضحى", DUHA, DHUHR, at(10, 0)), ("beige", False))
 
 print("3. no other period turned makrooh")
+# The tag is what separates the close of العصر from any other red window - both are red.
+chk("العصر closing is tagged", page.period_state(
+    "العصر", ASR, MAGHRIB, MAGHRIB - timedelta(minutes=10))[1], True)
 ISHA = at(21, 17)
-chk("Maghrib's last 20 minutes are still only red",
+chk("Maghrib's last 20 minutes are red and carry no tag",
     page.period_state("المغرب", MAGHRIB, ISHA, ISHA - timedelta(minutes=10)), ("red", False))
 FAJR = at(4, 33)
 chk("and so are Fajr's",
@@ -156,13 +160,31 @@ text, _, bg, _ = screen_at(SUNRISE - timedelta(minutes=10))
 chk("Fajr closing is silent", text, "")
 chk("and red too", bg, page.COUNTDOWN_BG_RED)
 
-print("6. the notice the Duha windows show is unchanged")
+print("6. the sunrise and zawal windows say the same thing, on the same orange")
+# One wording for every window that is makrooh for nafl - the rule is the same in all
+# three, so the screen should not name a different prayer in each. The backgrounds still
+# differ on purpose and are asserted here so a colour change cannot slip through with it.
 text, _, bg, _ = screen_at(at(6, 35))
-chk("sunrise still names Duha", text, "(الوقت مكروه لصلاة الضحى)")
+chk("sunrise says nafl, not الضحى", text, NOTICE)
 chk("on the makrooh orange, as before", bg, page.COUNTDOWN_BG_MAKROOH)
 text, _, bg, _ = screen_at(DHUHR - timedelta(minutes=10))
-chk("and so does zawal", text, "(الوقت مكروه لصلاة الضحى)")
-chk("orange there too", bg, page.COUNTDOWN_BG_MAKROOH)
+chk("zawal says nafl too", text, NOTICE)
+chk("orange there as well", bg, page.COUNTDOWN_BG_MAKROOH)
+
+print("7. all three windows are worded identically")
+windows = {screen_at(at(6, 35))[0],                        # sunrise until الضحى opens
+           screen_at(DHUHR - timedelta(minutes=10))[0],    # zawal
+           screen_at(MAGHRIB - timedelta(minutes=10))[0]}  # the close of العصر
+chk("one notice for all of them", windows, {NOTICE})
+chk("and no window still names a prayer", any("الضحى" in t for t in windows), False)
+
+print("8. the card palette and the counter's are the same palette")
+# "the daily list should match the countdown" - so these are not two tables that happen
+# to agree today, they are one set of values read from both screens.
+for state, counter in (("makrooh", page.COUNTDOWN_BG_MAKROOH),
+                       ("red", page.COUNTDOWN_BG_RED),
+                       ("green", page.COUNTDOWN_BG_GREEN)):
+    chk(f"{state} is one colour on both screens", page.PERIOD_COLORS[state], counter)
 
 page.datetime = real_datetime
 os.remove(MAP_FILE)
