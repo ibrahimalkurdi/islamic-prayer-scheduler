@@ -186,6 +186,38 @@ for state, counter in (("makrooh", page.COUNTDOWN_BG_MAKROOH),
                        ("green", page.COUNTDOWN_BG_GREEN)):
     chk(f"{state} is one colour on both screens", page.PERIOD_COLORS[state], counter)
 
+print("9. both screens change colour on the same second")
+# The daily card used to be computed from a minute count floored out of the timestamps,
+# so it went red while the counter still read 00:20 and stayed green a minute short at the
+# other end. Walked a second at a time across both edges, because that is the only place
+# the two ever disagreed.
+BY_BACKGROUND = {page.COUNTDOWN_BG_DEFAULT: "beige",
+                 page.COUNTDOWN_BG_GREEN: "green",
+                 page.COUNTDOWN_BG_RED: "red",
+                 page.COUNTDOWN_BG_MAKROOH: "makrooh"}
+
+def both(when):
+    """What the counter paints, and what the card would paint, at the same instant."""
+    return (BY_BACKGROUND[screen_at(when)[2]],
+            page.period_state("المغرب", MAGHRIB, ISHA, when)[0])
+
+EDGE = page.PERIOD_EDGE_MINUTES * 60
+for offset in range(EDGE - 5, EDGE + 6):        # the red edge, second by second
+    when = ISHA - timedelta(seconds=offset)
+    counter, card = both(when)
+    chk(f"{offset}s before المغرب's end", card, counter)
+for offset in range(EDGE - 5, EDGE + 6):        # and the green one
+    when = MAGHRIB + timedelta(seconds=offset)
+    counter, card = both(when)
+    chk(f"{offset}s after المغرب", card, counter)
+
+# The digits on screen are floored seconds, so the flip has to land where the counter
+# still shows 00:20 - not a minute earlier, which is what was reported.
+chk("at 00:20 on the clock the card has not gone red",
+    page.period_state("المغرب", MAGHRIB, ISHA, ISHA - timedelta(seconds=EDGE + 40))[0], "beige")
+chk("and the counter agrees it still reads 00:20",
+    screen_at(ISHA - timedelta(seconds=EDGE + 40))[2], page.COUNTDOWN_BG_DEFAULT)
+
 page.datetime = real_datetime
 os.remove(MAP_FILE)
 

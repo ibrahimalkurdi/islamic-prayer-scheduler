@@ -586,17 +586,19 @@ def period_state(name, start, end, now):
     The makrooh windows are the ones the countdown page also warns about: from sunrise
     until Duha opens, the zawal stretch just before Dhuhr, and the close of Asr. The red
     state on every other period only means the next athan is close - it is not makrooh."""
-    duration = int((end - start).total_seconds() // 60)
-    remaining = int((end - now).total_seconds() // 60)
+    # Measured off the timestamps, not off a minute count rounded down from them. The
+    # countdown page compares seconds, and rounding here first turned the card red while
+    # the counter still read 00:20 - one screen a minute ahead of the other.
+    edge = timedelta(minutes=PERIOD_EDGE_MINUTES)
     if name == "الشروق":
         return "makrooh", True
     # Makrooh in their own right, so they take the makrooh colour rather than the red
     # that only means the next athan is near - the same sense the countdown page uses.
-    if name in MAKROOH_AT_PERIOD_END and remaining <= PERIOD_EDGE_MINUTES:
+    if name in MAKROOH_AT_PERIOD_END and end - now <= edge:
         return ("red" if name in MAKROOH_KEEPS_RED else "makrooh"), True
-    if duration - PERIOD_EDGE_MINUTES < remaining:
+    if now - start <= edge:
         return "green", False
-    if remaining <= PERIOD_EDGE_MINUTES:
+    if end - now <= edge:
         return "red", False
     return "beige", False
 
