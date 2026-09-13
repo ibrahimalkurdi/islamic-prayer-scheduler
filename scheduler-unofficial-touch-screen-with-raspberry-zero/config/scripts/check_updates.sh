@@ -70,6 +70,17 @@ DEVICE_MODEL_FILE="${DEVICE_MODEL_FILE:-/proc/device-tree/model}"
 # megabytes.
 FORCED_BACKUP_MAX_MB="${FORCED_BACKUP_MAX_MB:-50}"
 
+# curl waits forever by default, and a mosque's connection half-opening is the normal
+# case, not the exotic one. This runs unattended from cron at 02:00, from init.sh during
+# a setup someone is watching, and from the Settings app behind a progress dialog with no
+# cancel button - so every fetch has to be able to give up on its own.
+#   small  a few hundred bytes of JSON: if it is not done in 30s it is not coming
+#   big    the payload, which is megabytes over whatever link the site has, so no flat
+#          deadline - it gives up only when the transfer itself stalls
+CURL_SMALL=(--fail --silent --show-error --location --connect-timeout 15 --max-time 30)
+CURL_BIG=(--fail --silent --show-error --location --connect-timeout 15 \
+          --speed-limit 1024 --speed-time 120)
+
 # Never replaced, whatever a release asks for. The manifest proposes; this disposes.
 # Without it a malformed or tampered release could name config.ini and a device would
 # obey. These are rsync patterns, applied to the transfer root.
@@ -208,7 +219,7 @@ except Exception: pass
 # because releases/latest resolves to the newest release in the repo regardless of
 # variant - without the prefix, a release for one variant would strand the other.
 published_versions() {
-    curl -fsSL "$UPDATE_API_URL" 2>/dev/null | python3 -c "
+    curl "${CURL_SMALL[@]}" "$UPDATE_API_URL" 2>/dev/null | python3 -c "
 import json, sys, re
 prefix = '${VARIANT}-v'
 try:
@@ -232,7 +243,7 @@ print('\n'.join(sorted(set(tags), key=key)))
 fetch_pointer() {
     local body
     rm -f "$POINTER_FILE"
-    body="$(curl -fsSL "$UPDATE_POINTER_URL" 2>/dev/null)" || return 1
+    body="$(curl "${CURL_SMALL[@]}" "$UPDATE_POINTER_URL" 2>/dev/null)" || return 1
     printf '%s' "$body" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null || return 2
     printf '%s' "$body" > "$POINTER_FILE"
 }
@@ -544,7 +555,7 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 MANIFEST="$UPDATE_DIR/version.json"
 
-if ! curl -fsSL "$UPDATE_DOWNLOAD_URL/$TAG/version.json" -o "$MANIFEST" 2>>"$LOG_FILE"; then
+if ! curl "${CURL_SMALL[@]}" "$UPDATE_DOWNLOAD_URL/$TAG/version.json" -o "$MANIFEST" 2>>"$LOG_FILE"; then
     log "ERROR: no manifest for $TAG"
     write_state "error" "no manifest for $TAG" ""
     exit 1
@@ -577,8 +588,9 @@ fi
 # ---------------------------------------------------------------------------
 ARCHIVE="$UPDATE_DIR/$M_ARCHIVE"
 log "Downloading $M_ARCHIVE..."
-if ! curl -fsSL "$UPDATE_DOWNLOAD_URL/$TAG/$M_ARCHIVE" -o "$ARCHIVE" 2>>"$LOG_FILE"; then
-    log "ERROR: download failed"
+if ! curl "${CURL_BIG[@]}" "$UPDATE_DOWNLOAD_URL/$TAG/$M_ARCHIVE" -o "$ARCHIVE" 2>>"$LOG_FILE"; then
+    log "ERROR: download failed or stalled - it will be retried on the next run"
+    rm -f "$ARCHIVE"
     write_state "error" "download failed" ""
     exit 1
 fi

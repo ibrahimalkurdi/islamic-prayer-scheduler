@@ -473,7 +473,33 @@ CALENDAR_YEAR_SPAN = 10
 
 dailyPrayerOrder = ["الفجر", "الشروق", "الضحى", "الظهر", "العصر", "المغرب", "العشاء"]
 
+# Prayer times read as a 12-hour clock, the way they are spoken. The hour drops its
+# leading zero but keeps its column - the pad is a space rather than a zero, so the
+# colons stay in line down the list in the monospace face the cards use.
+MERIDIEM_AM = "AM"
+MERIDIEM_PM = "PM"
+
+
+def clock_12h(when):
+    """A datetime as the clock is read here: " 5:12 AM", "12:18 PM".
+
+    The hour is padded rather than zeroed, so every row comes out the same width and the
+    colons stay in a column down the card list. One string rather than two labels: the
+    whole of it is left-to-right, so there is no bidi reordering to defend against."""
+    mark = MERIDIEM_AM if when.hour < 12 else MERIDIEM_PM
+    return f"{when.hour % 12 or 12:>2d}:{when.minute:02d} {mark}"
+
+
 MAKROOH_LABEL = "مكروه"
+
+# Shown on the countdown while a period's closing stretch is makrooh for nafl. The Duha
+# windows name that prayer because that is the one being waited for; the close of Asr is
+# makrooh for nafl generally, so it is worded that way.
+MAKROOH_NAFL_NOTICE = "(الوقت مكروه لصلاة النافلة)"
+
+# Periods whose last PERIOD_EDGE_MINUTES are makrooh for nafl, rather than merely close
+# to the next athan: zawal at the end of Duha, and the yellowing sun at the end of Asr.
+MAKROOH_AT_PERIOD_END = ("الضحى", "العصر")
 
 PERIOD_COLORS = {
     "green": "#198754",
@@ -549,17 +575,16 @@ def daily_rows(view_date, now, is_today):
 def period_state(name, start, end, now):
     """Colour of the running period, and whether praying nafl in it is makrooh.
 
-    The two makrooh windows are the ones the countdown page already warns about: from
-    sunrise until Duha opens, and the zawal stretch just before Dhuhr. The red state on
-    every other period only means the next athan is close - it is not makrooh."""
+    The makrooh windows are the ones the countdown page also warns about: from sunrise
+    until Duha opens, the zawal stretch just before Dhuhr, and the close of Asr. The red
+    state on every other period only means the next athan is close - it is not makrooh."""
     duration = int((end - start).total_seconds() // 60)
     remaining = int((end - now).total_seconds() // 60)
     if name == "الشروق":
         return "makrooh", True
-    # Zawal, the close of Duha. Makrooh in its own right, so it takes the makrooh
-    # colour rather than the red that only means the next athan is near - the same
-    # sense the countdown page uses for this window.
-    if name == "الضحى" and remaining <= PERIOD_EDGE_MINUTES:
+    # Makrooh in their own right, so they take the makrooh colour rather than the red
+    # that only means the next athan is near - the same sense the countdown page uses.
+    if name in MAKROOH_AT_PERIOD_END and remaining <= PERIOD_EDGE_MINUTES:
         return "makrooh", True
     if duration - PERIOD_EDGE_MINUTES < remaining:
         return "green", False
@@ -1005,7 +1030,7 @@ class DailyPrayersPage(QWidget):
                 color, makrooh = period_state(row["name"], row["start"], row["end"], now)
                 current_color = color
                 current_remaining = int((row["end"] - now).total_seconds() // 60)
-            text = row["time"].strftime("%H:%M") if row["time"] else "--:--"
+            text = clock_12h(row["time"]) if row["time"] else "--:--"
             self.cards[row["name"]].apply_state(text, color, makrooh)
 
         # A card that just grew or shrank leaves the layout stale, which shows up as an
@@ -1446,6 +1471,12 @@ class AdhanCounter(QWidget):
         # B. Red: Pre-Athan Warning (Last 20 mins)
         elif 0 < remaining <= 1200:
             bg = COUNTDOWN_BG_RED
+            # The close of Asr is makrooh for nafl, not just near Maghrib. It keeps the
+            # red rather than taking the makrooh orange the زوال window uses, because
+            # here both things are true at once and the athan is the more urgent of the
+            # two - the notice is what carries the makrooh.
+            if prev_p == "العصر":
+                title_text = MAKROOH_NAFL_NOTICE
 
         # =========================================================
         # 4. APPLY SETTINGS

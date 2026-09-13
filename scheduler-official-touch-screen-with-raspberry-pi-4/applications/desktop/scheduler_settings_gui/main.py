@@ -277,6 +277,12 @@ ATHKAR_ELSABAH_MAX_MINUTES = 1439  # minutes in a day - 1
 
 PRAYER_PREFIX = "enable_prayer_"
 
+# Every time this app puts on screen is a 12-hour clock, matching the daily prayer page
+# on the wall display. Only the display: the values written into config.ini stay 24-hour,
+# because the athan scheduler parses them.
+MERIDIEM_AM = "AM"
+MERIDIEM_PM = "PM"
+
 # (config key, display name, wording). Sunrise is listed here so it gets the same
 # section, checkbox and audio picker as the rest, but it is not a صلاة and has no أذان,
 # so it is worded as a تنبيه instead of reusing the prayer wording.
@@ -1056,11 +1062,22 @@ class ControlApp(QMainWindow):
         hour, minute = hhmm.split(":")
         return int(hour) * 60 + int(minute)
 
-    # --- Convert minutes since midnight to HH:MM ---
-    def minutes_to_hhmm(self, minutes: int) -> str:
-        h = minutes // 60
-        m = minutes % 60
-        return f"{h:02d}:{m:02d}"
+    # --- Convert minutes since midnight to the clock people read ---
+    def minutes_to_clock(self, minutes: int) -> str:
+        """For display only. No leading zero and no pad - these sit inside a sentence,
+        not in a column, so there is nothing to line up with.
+
+        Wrapped into a day first, because the callers can hand this an offset that
+        leaves one: Tahajjud is Fajr minus up to five hours, which goes negative on a
+        summer Fajr, and Athkar Elmasa is Maghrib plus up to five, which runs past
+        midnight. Without the wrap those land on the right digits with the wrong marker.
+
+        "6:48 AM" is one left-to-right run, so it sits inside the surrounding Arabic
+        sentence as a single unit and is not reordered - which is why no leading mark or
+        separate widget is needed here, unlike the ص/م this replaced."""
+        hour, minute = divmod(minutes % (24 * 60), 60)
+        mark = MERIDIEM_AM if hour < 12 else MERIDIEM_PM
+        return f"{hour % 12 or 12}:{minute:02d} {mark}"
 
     def effective_prayer_csv(self):
         """The file whose times actually get scheduled: the daylight-saving copy when
@@ -1107,8 +1124,8 @@ class ControlApp(QMainWindow):
         arabic_warning(
             self,
             "تنبيه",
-            f"وقت أذكار الصباح ({self.minutes_to_hhmm(athkar_time)}) يجب أن يكون قبل "
-            f"صلاة الظهر ({self.minutes_to_hhmm(dhuhr)}).\n"
+            f"وقت أذكار الصباح ({self.minutes_to_clock(athkar_time)}) يجب أن يكون قبل "
+            f"صلاة الظهر ({self.minutes_to_clock(dhuhr)}).\n"
             "الرجاء اختيار عدد دقائق أقل."
         )
         return True
@@ -1152,25 +1169,25 @@ class ControlApp(QMainWindow):
             for key, arabic_name, wording in PRAYER_TIMES:
                 labels = event_labels(arabic_name, wording)
                 self.prayer_time_labels[key].setText(
-                    f'{labels["time"]}: {self.minutes_to_hhmm(times[key])}'
+                    f'{labels["time"]}: {self.minutes_to_clock(times[key])}'
                 )
 
             # --- Update Duha/Tahajjud/Athkar ---
             sunrise, dhuhr = self.get_today_sunrise_dhuhr()
             # Duha
             duha_time = dhuhr - self.duha_spin.value()
-            self.duha_time_label.setText(f"وقت صلاة الضحى: {self.minutes_to_hhmm(duha_time)}")
+            self.duha_time_label.setText(f"وقت صلاة الضحى: {self.minutes_to_clock(duha_time)}")
             # Tahajjud
             fajr = times["fajr"]
             tahajjud_time = fajr - self.tahajjud_spin.value()
-            self.tahajjud_time_label.setText(f"وقت صلاة التهجد: {self.minutes_to_hhmm(tahajjud_time)}")
+            self.tahajjud_time_label.setText(f"وقت صلاة التهجد: {self.minutes_to_clock(tahajjud_time)}")
             # Athkar Sabh
             athkar_sabah_time = fajr + self.athkar_elsabah_spin.value()
-            self.athkar_elsabah_time_label.setText(f"وقت أذكار الصباح: {self.minutes_to_hhmm(athkar_sabah_time)}")
+            self.athkar_elsabah_time_label.setText(f"وقت أذكار الصباح: {self.minutes_to_clock(athkar_sabah_time)}")
             # Athkar Masa
             maghrib = times["maghrib"]
             athkar_masa_time = maghrib + self.athkar_elmasa_spin.value()
-            self.athkar_elmasa_time_label.setText(f"وقت أذكار المساء: {self.minutes_to_hhmm(athkar_masa_time)}")
+            self.athkar_elmasa_time_label.setText(f"وقت أذكار المساء: {self.minutes_to_clock(athkar_masa_time)}")
 
             # Surat Al-Kahf. Read against the coming Friday's own times rather than today's,
             # because that is the day it plays on - and in its own try, so a source CSV
@@ -1225,7 +1242,7 @@ class ControlApp(QMainWindow):
         when = self.clamp_friday_quran(wanted, row)
 
         text = (f"وقت قراءة سورة الكهف يوم الجمعة {friday.day:02d}/{friday.month:02d}: "
-                f"{self.minutes_to_hhmm(when)}")
+                f"{self.minutes_to_clock(when)}")
         if when != wanted:
             text += " (تم تعديله ليقع بين الشروق والعصر)"
         return text

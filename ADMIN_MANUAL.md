@@ -193,23 +193,29 @@ tools/make_release.sh pi4 1.2.0
 
 It will:
 
-1. refuse a dirty tree, an unknown variant, a malformed version, or an existing tag;
+1. refuse a dirty tree, an unknown variant, a malformed version, or a version that is
+   **already published** — read from the remote's tags, because `gh release create`
+   makes the tag there and never in this checkout;
 2. `git archive` that variant's subtree at `HEAD`, so only committed content ships;
 3. strip device data, the docs and the screenshots;
 4. **prove the strip worked** — it searches the built tree for `config.ini`, any
    `prayer_times_map.py`, `executed-events.json`, any `.mp3` outside `default-audio/`,
    and any `.csv` that is not a shipped preset. One hit and the build fails rather than
    shipping someone's data;
-5. check that every folder under `default-audio/` names a real event, and **ask** before
+5. compare `default-audio/` against the last published release and **ask** before
+   shipping an MP3 that already went out, offering to `git rm` it and stop. Audio added
+   for this release is not questioned (§3.7);
+6. check that every folder under `default-audio/` names a real event, and **ask** before
    building one that does not (§3.7);
-6. assert the files a device actually needs are present;
-7. refuse a payload over `MAX_RELEASE_MB` (25 MB) unless given `--allow-large` — every
+7. assert the files a device actually needs are present;
+8. refuse a payload over `MAX_RELEASE_MB` (25 MB) unless given `--allow-large` — every
    device downloads the whole thing on every update;
-8. write `dist/version.json` and `dist/SHA256SUMS`, and print the publish command.
+9. write `dist/version.json` and `dist/SHA256SUMS`, and print the publish command.
 
-Two flags, both for the checks above: `--yes` answers the folder-name prompt, and
-`--allow-large` lifts the size cap. With no terminal — in a script — the prompt refuses
-rather than hanging.
+Three flags, all for the checks above: `--yes` answers the folder-name prompt,
+`--keep-default-audio` ships audio a previous release already carried, and
+`--allow-large` lifts the size cap. With no terminal — in a script — every one of those
+prompts refuses rather than hanging.
 
 Output:
 
@@ -316,6 +322,26 @@ Four rules, all of them about not overruling the owner:
 - **It ships on every release**, with no flag — whatever is in the folder at build time
   travels with that release. Keep it small: 25 MB is the cap, and every device downloads
   the whole payload every time.
+- **Clear it out after the release that introduced it.** The build compares the folder
+  against the last published release for that variant and stops if anything is in both:
+
+  ```
+  ==> Checking default-audio against the last release
+      these already shipped in pi4-v1.1.1:
+        …/default-audio/quran/03-الإخلاص-والمعوذات-بصوت-مشاري-العفاسي.mp3  (1.3M)
+  Proceed with the release and ship them again? [y/N]
+  ```
+
+  The question is about the release, not the deletion. **Yes** ships them again and the
+  build carries on. **No** — and Enter — runs `git rm` on them and stops, because the
+  build only ever packages committed content; it prints the `git commit` and `git push`
+  to run before starting the release again. `--keep-default-audio` answers yes for a
+  scripted build; with no terminal the build refuses rather than hanging, the same as the
+  folder-name prompt.
+
+  **Audio added for this release is never questioned** — only a file that is in both this
+  tree and the last release counts as left over. Only `.mp3` is considered either way, so
+  the folder's `README.md` stays put.
 
 **Sending an MP3 to one customer and no one else.** Publish a version with the file in
 `default-audio/`, leave `VERSIONS.json` where it is, and have that customer install it
@@ -331,7 +357,10 @@ exists. Two things to know before doing it:
 
 **Taking a shipped file back is manual.** Removing it from `default-audio/` stops future
 devices getting it; devices that already have it keep it, because the ledger says it was
-seeded and nothing ever deletes inside `audio/`.
+seeded and nothing ever deletes inside `audio/`. That is why clearing the folder between
+releases is safe: three separate things guarantee it — `apply_settings.sh` only ever
+copies, `audio/` is on the deny-list so rsync never reaches it, and the path is already
+in `var/seeded-audio` so it would be skipped even if it came back.
 
 ---
 
@@ -1406,7 +1435,9 @@ the device or your own backup.
   Al-Kahf, 1.0.8) is the case this exists for.
 - **A `default-audio/` file removed from the repo stays on every device that already took
   it.** The ledger says it was seeded and nothing ever deletes inside `audio/`. Retracting
-  one is a manual visit.
+  one is a manual visit. This is also why the build asks you to clear the folder after the
+  release that introduced it (§3.7) — leaving a file there costs every device the download
+  on every later update and seeds nothing.
 - **A pointer `include` is keyed by variant, not version.** It keeps forcing its path on
   every release that follows until someone takes it out of `VERSIONS.json`, and nothing
   will remind you.

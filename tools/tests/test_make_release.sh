@@ -21,9 +21,19 @@ SUB="scheduler-official-touch-screen-with-raspberry-pi-4"
 git -C "$BUILD" rm -q --cached "$SUB/config/scripts/stray.mp3" > /dev/null 2>&1
 rm -f "$TREE/config/scripts/stray.mp3"
 rm -rf "$TREE/default-audio/shroq"
+rm -rf "$TREE/default-audio/fajr"
+# Section 4 deletes and commits default-audio/shorooq/sunrise.mp3 - that is the whole
+# point of it - so put the fixture's file back before starting, or every run after the
+# first finds nothing to flag. Restored before the reset commit, since the build refuses
+# a dirty tree.
+mkdir -p "$TREE/default-audio/shorooq"
+[ -f "$TREE/default-audio/shorooq/sunrise.mp3" ] \
+    || printf 'fixture default audio\n' > "$TREE/default-audio/shorooq/sunrise.mp3"
+git -C "$BUILD" add -f "$SUB/default-audio/shorooq/sunrise.mp3" > /dev/null 2>&1
 git -C "$BUILD" add -A > /dev/null 2>&1
 git -C "$BUILD" commit -qm "reset before run" > /dev/null 2>&1
 rm -f "$BUILD/dist/scheduler-pi4-2."*.tar.gz
+git -C "$BUILD" tag -d pi4-v2.0.9 > /dev/null 2>&1
 
 echo "1. default-audio ships; an MP3 anywhere else does not"
 out="$(build 2.0.0)"; chk "the build succeeds" "$?" "0"
@@ -70,6 +80,76 @@ grep -q "over the 1 MB limit" <<< "$out" \
 out="$(MAX_RELEASE_MB=1 build 2.0.3 --allow-large < /dev/null)"
 grep -q "sha256" <<< "$out" \
     && echo "  ✓ --allow-large builds it" || { echo "  ✗ --allow-large did not proceed"; fail=1; }
+
+echo "4. default-audio left over from the last release is caught"
+# The throwaway repo has no remote, so the check falls back to local tags - which is the
+# same path an offline build takes. sunrise.mp3 is already in default-audio/shorooq/, so
+# tagging HEAD makes it "a file the last release shipped".
+git -C "$BUILD" tag -f pi4-v2.0.9 > /dev/null 2>&1
+out="$(build 2.1.0 < /dev/null)"
+grep -q "already shipped in pi4-v2.0.9" <<< "$out" \
+    && echo "  ✓ the leftover file is named" || { echo "  ✗ the leftover was not noticed"; fail=1; }
+grep -q "default-audio/shorooq/sunrise.mp3" <<< "$out" \
+    && echo "  ✓ with its path" || { echo "  ✗ the path was not shown"; fail=1; }
+grep -q "refusing to ship default-audio" <<< "$out" \
+    && echo "  ✓ with no terminal it refuses rather than hangs" || { echo "  ✗ it did not refuse"; fail=1; }
+[ ! -f "$BUILD/dist/scheduler-pi4-2.1.0.tar.gz" ] \
+    && echo "  ✓ and nothing was built" || { echo "  ✗ it built anyway"; fail=1; }
+
+out="$(build 2.1.0 --keep-default-audio < /dev/null)"
+grep -q "as asked" <<< "$out" \
+    && echo "  ✓ --keep-default-audio ships it deliberately" || { echo "  ✗ the flag did not apply"; fail=1; }
+grep -q "sha256" <<< "$out" \
+    && echo "  ✓ and the build completes" || { echo "  ✗ the build did not finish"; fail=1; }
+
+# The prompt asks about the release, not about the deletion: yes ships them again, no
+# cleans up and stops. It only appears on a terminal - by design, so a scripted build
+# cannot be made to delete files by accident - so this needs a pty rather than a pipe.
+pty_build() { (cd "$BUILD" && printf '%s\n' "$1" | script -qec "bash tools/make_release.sh pi4 $2" /dev/null 2>&1); }
+
+out="$(pty_build y 2.1.1)"
+grep -q "shipping them again" <<< "$out" \
+    && echo "  ✓ answering yes releases with them" || { echo "  ✗ yes did not proceed"; fail=1; }
+[ -f "$TREE/default-audio/shorooq/sunrise.mp3" ] \
+    && echo "  ✓ and nothing was deleted" || { echo "  ✗ yes deleted the file"; fail=1; }
+
+out="$(pty_build n 2.1.2)"
+grep -q "Removed, and the release stopped" <<< "$out" \
+    && echo "  ✓ answering no cleans up instead" || { echo "  ✗ no did not clean up"; fail=1; }
+[ ! -f "$TREE/default-audio/shorooq/sunrise.mp3" ] \
+    && echo "  ✓ the file is gone from the tree" || { echo "  ✗ the file survived"; fail=1; }
+grep -q "git commit -m" <<< "$out" \
+    && echo "  ✓ and the commit command is printed" || { echo "  ✗ no commit instructions"; fail=1; }
+grep -q "git push" <<< "$out" \
+    && echo "  ✓ along with the push" || { echo "  ✗ no push instruction"; fail=1; }
+[ ! -f "$BUILD/dist/scheduler-pi4-2.1.2.tar.gz" ] \
+    && echo "  ✓ and no release was built" || { echo "  ✗ it built from a dirty tree"; fail=1; }
+
+# Once it is committed away, the next build is clean again.
+commit "clear default-audio"
+out="$(build 2.1.3 < /dev/null)"
+grep -q "nothing here was in pi4-v2.0.9" <<< "$out" \
+    && echo "  ✓ the next release passes the check" || { echo "  ✗ still flagged"; fail=1; }
+
+# Audio added for this release is an intentional act and must never be questioned.
+mkdir -p "$TREE/default-audio/fajr"
+echo new > "$TREE/default-audio/fajr/brand-new.mp3"
+git -C "$BUILD" add -f "$SUB/default-audio/fajr/brand-new.mp3" > /dev/null 2>&1
+commit "audio meant for this release"
+out="$(build 2.1.4 < /dev/null)"
+grep -q "already shipped" <<< "$out" \
+    && { echo "  ✗ new audio was questioned"; fail=1; } || echo "  ✓ new audio is not questioned"
+grep -q "brand-new.mp3" <<< "$out" \
+    && { echo "  ✗ new audio was named to the admin"; fail=1; } || echo "  ✓ and not mentioned at all"
+listing 2.1.4 | grep -q "default-audio/fajr/brand-new.mp3" \
+    && echo "  ✓ and it ships" || { echo "  ✗ new audio did not ship"; fail=1; }
+rm -rf "$TREE/default-audio/fajr"; commit "remove new audio"
+
+echo "5. a version that is already published is refused"
+out="$(build 2.0.9 < /dev/null)"
+grep -q "already published" <<< "$out" \
+    && echo "  ✓ rebuilding a published version is refused" || { echo "  ✗ a republish was allowed"; fail=1; }
+git -C "$BUILD" tag -d pi4-v2.0.9 > /dev/null 2>&1
 
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

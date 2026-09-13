@@ -197,9 +197,15 @@ chk("the date it previews is a Friday", friday.weekday(), FRIDAY)
 chk("today counts as Friday when it is one",
     (friday == date.today()) == (date.today().weekday() == FRIDAY), True)
 row = w.load_prayer_row_for(friday)
-expected = w.minutes_to_hhmm(
-    w.clamp_friday_quran(w.time_to_minutes(row["Dhuhr"]) - 45, row))
+when = w.clamp_friday_quran(w.time_to_minutes(row["Dhuhr"]) - 45, row)
+expected = w.minutes_to_clock(when)
 chk("the label carries that time", expected in w.friday_quran_label_text(), True)
+# Comparing the label against the app's own helper passes whatever the helper returns,
+# so pin the format itself: a 12-hour clock with a marker, not HH:MM.
+chk("shown as a 12-hour clock", expected.split()[-1] in ("AM", "PM"), True)
+chk("with the hour on a 12-hour dial and no leading zero",
+    expected,
+    f"{when // 60 % 12 or 12}:{when % 60:02d} {'AM' if when // 60 < 12 else 'PM'}")
 
 # The suite leaves the device's own settings as it found them.
 open(SETTINGS_INI_FILE, "w", encoding="utf-8").write(saved_ini)

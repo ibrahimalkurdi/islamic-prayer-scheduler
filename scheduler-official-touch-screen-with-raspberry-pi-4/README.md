@@ -239,6 +239,8 @@ Four buttons sit in the top-left corner:
 
 Tap **☰** for the whole day at a glance — الفجر, الشروق, الضحى, الظهر, العصر, المغرب and
 العشاء — with the running period highlighted and a badge counting down the time left in it.
+Times are shown on a 12-hour clock (`4:33 AM`, `7:38 PM`); the badge beside the date is
+time *remaining*, so it stays `HH:MM`.
 
 <p align="center">
   <img src="assets/screenshot-daily-prayers.png" alt="Daily prayer table" width="600" />
@@ -253,9 +255,15 @@ The colours use the same 20-minute rule as the countdown view:
 | Orange | مكروه — nafl prayer is discouraged right now |
 | Beige | the rest of the period (the countdown view shows plain grey here) |
 
-**مكروه** is shown beside the time during the two windows the countdown view also warns
-about: from الشروق until الضحى opens, and the zawal stretch just before الظهر. In those
-two windows the countdown view shows `(الوقت مكروه لصلاة الضحى)` above the prayer name.
+**مكروه** is shown beside the time during the three windows the countdown view also warns
+about: from الشروق until الضحى opens, the zawal stretch just before الظهر, and the last 20
+minutes of العصر. The countdown view names them above the prayer name —
+`(الوقت مكروه لصلاة الضحى)` for the first two, `(الوقت مكروه لصلاة النافلة)` for العصر,
+which is makrooh for nafl generally rather than for one named prayer.
+
+العصر is the one place the two views differ on colour. The card here turns orange, because
+on this table the colour is the only thing saying مكروه; the countdown view stays red,
+because المغرب really is minutes away and the line of text carries the makrooh instead.
 
 The countdown treats الشروق → الظهر as **الضحى's own period**, matching this table: the
 first 20 minutes after sunrise are الشروق on orange (مكروه), then الضحى runs to الظهر —

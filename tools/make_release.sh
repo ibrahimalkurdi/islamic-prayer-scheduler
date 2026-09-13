@@ -25,18 +25,24 @@ usage: make_release.sh <pi4|zero> <version> [--yes] [--allow-large]
   --allow-large  build even if the payload is over MAX_RELEASE_MB (default 25). Every
                  device downloads the whole payload on every update, so this is
                  deliberate, not routine.
+  --keep-default-audio
+                 ship default-audio/ files that a previous release already carried.
+                 Normally those are cleared out after the release that introduced them,
+                 because every device re-downloads them for nothing.
 USAGE
     exit 2
 }
 
 ASSUME_YES=0
 ALLOW_LARGE=0
+KEEP_DEFAULT_AUDIO=0
 MAX_RELEASE_MB="${MAX_RELEASE_MB:-25}"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --yes|-y)      ASSUME_YES=1 ;;
-        --allow-large) ALLOW_LARGE=1 ;;
+        --yes|-y)             ASSUME_YES=1 ;;
+        --allow-large)        ALLOW_LARGE=1 ;;
+        --keep-default-audio) KEEP_DEFAULT_AUDIO=1 ;;
         -h|--help)     usage ;;
         -*)            echo "ERROR: unknown option '$1'" >&2; usage ;;
         *)             POSITIONAL+=("$1") ;;
@@ -68,8 +74,25 @@ if [[ -n "$(git status --porcelain)" ]]; then
     git status --short >&2
     exit 1
 fi
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-    echo "ERROR: tag $TAG already exists" >&2
+# Releases are published with `gh release create`, which creates the tag on the remote
+# and never in this checkout - so a plain `git rev-parse "$TAG"` answers "no such tag"
+# for every version that has ever shipped, and guards nothing. Ask the remote, and fall
+# back to local tags when there is no network so an offline build still gets a check.
+published_tags() {
+    if git ls-remote --tags --quiet origin 2>/dev/null | grep -o 'refs/tags/.*$' \
+            | sed 's|refs/tags/||; s|\^{}$||' | sort -u | grep . ; then
+        return 0
+    fi
+    git tag
+}
+PUBLISHED="$(published_tags || true)"
+if [[ -z "$PUBLISHED" ]]; then
+    echo "WARNING: could not read published tags - version reuse is unchecked" >&2
+fi
+if grep -qxF "$TAG" <<< "$PUBLISHED"; then
+    echo "ERROR: $TAG is already published - pick a new version number" >&2
+    echo "       Rebuilding a published version hands devices different files under a" >&2
+    echo "       name they may already believe they have." >&2
     exit 1
 fi
 [[ -d "$SUBTREE" ]] || { echo "ERROR: no such tree: $SUBTREE" >&2; exit 1; }
@@ -130,6 +153,91 @@ for optional in "config/fonts/" "config/icons/" "config/arabic-fonts/" "config/p
         INCLUDE+=("$optional")
     fi
 done
+
+# default-audio/ is a delivery mechanism, not a library: a file belongs there for the one
+# release that introduces it, and should be taken out again afterwards. Leaving it means
+# every device re-downloads it on every later update for nothing - the seeding ledger has
+# already recorded it, so not one of them will even copy it a second time.
+#
+# Removing it is safe. apply_settings.sh only ever copies, audio/ is on the updater's
+# deny-list, and --delete never applies there - so taking a file out of this folder never
+# takes it off a device that already has it.
+if [[ -d "$WORK/default-audio" ]]; then
+    echo "==> Checking default-audio against the last release"
+
+    tag_commit() {
+        local tag="$1" sha
+        sha="$(git rev-parse --verify --quiet "$tag^{commit}" 2>/dev/null || true)"
+        if [[ -z "$sha" ]]; then
+            sha="$(git ls-remote origin "refs/tags/$tag^{}" 2>/dev/null | cut -f1)"
+            [[ -n "$sha" ]] || sha="$(git ls-remote origin "refs/tags/$tag" 2>/dev/null | cut -f1)"
+        fi
+        # Published from this repo, so the commit is normally already here. A shallow or
+        # fresh clone is the exception, and there the check is skipped rather than failed.
+        git cat-file -e "${sha}^{commit}" 2>/dev/null && printf '%s' "$sha"
+    }
+
+    # || true throughout: grep exits 1 on no match, and "no previous release" is an
+    # ordinary answer here, not a build failure.
+    PREV_VERSION="$(grep "^${VARIANT}-v" <<< "$PUBLISHED" | sed "s|^${VARIANT}-v||" \
+                    | sort -V | tail -1 || true)"
+    PREV_SHA=""
+    [[ -n "$PREV_VERSION" ]] && PREV_SHA="$(tag_commit "${VARIANT}-v${PREV_VERSION}" || true)"
+
+    if [[ -z "$PREV_VERSION" ]]; then
+        echo "    no earlier $VARIANT release to compare against"
+    elif [[ -z "$PREV_SHA" ]]; then
+        echo "    cannot read ${VARIANT}-v${PREV_VERSION} from this clone - skipping" >&2
+    else
+        # core.quotePath=false or the Arabic filenames come back octal-escaped and
+        # wrapped in quotes, and nothing downstream can match them. Only *.mp3 counts:
+        # the folder's README is permanent, and apply_settings.sh seeds nothing else.
+        shipped_audio() {
+            git -c core.quotePath=false ls-tree -r --name-only "$1" \
+                -- "$SUBTREE/default-audio" | grep '\.mp3$' | sort || true
+        }
+        STALE="$(comm -12 <(shipped_audio "$PREV_SHA") <(shipped_audio HEAD) || true)"
+
+        if [[ -z "$STALE" ]]; then
+            echo "    nothing here was in ${VARIANT}-v${PREV_VERSION}"
+        elif [[ $KEEP_DEFAULT_AUDIO -eq 1 ]]; then
+            echo "    shipping $(wc -l <<< "$STALE") file(s) that ${VARIANT}-v${PREV_VERSION} already carried, as asked"
+        else
+            echo "    these already shipped in ${VARIANT}-v${PREV_VERSION}:" >&2
+            while IFS= read -r f; do
+                echo "      $f  ($(du -h "$f" 2>/dev/null | cut -f1))" >&2
+            done <<< "$STALE"
+            echo "    Every device downloads them again and copies none of them - the" >&2
+            echo "    seeding ledger already has them. Taking them out does not remove" >&2
+            echo "    them from any device." >&2
+
+            if [[ ! -t 0 ]]; then
+                echo "ERROR: refusing to ship default-audio left over from the last release." >&2
+                echo "       Remove it, or pass --keep-default-audio if it is deliberate." >&2
+                exit 1
+            fi
+            # The question is about the release, not about the deletion: yes ships them
+            # again, no cleans up and stops. Enter takes the tidy path, which is only a
+            # `git rm` of files still in the last release's commit - `git checkout` on
+            # the paths puts them back if it was a slip.
+            read -r -p "Proceed with the release and ship them again? [y/N] " answer
+            if [[ "$answer" =~ ^[Yy] ]]; then
+                echo "    shipping them again, as answered"
+            else
+                while IFS= read -r f; do git rm -q -- "$f"; done <<< "$STALE"
+                find "$SUBTREE/default-audio" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+                echo
+                echo "Removed, and the release stopped. The build only ever packages"
+                echo "committed content, so commit and push, then run it again:"
+                echo
+                echo "    git commit -m \"[chore]: clear default-audio, shipped in ${VARIANT}-v${PREV_VERSION}\""
+                echo "    git push"
+                echo "    tools/make_release.sh $VARIANT $VERSION"
+                exit 1
+            fi
+        fi
+    fi
+fi
 
 # Folder names under default-audio/ have to match a real event folder, or the file
 # lands somewhere nothing will ever look for it and the release looks like it worked.
