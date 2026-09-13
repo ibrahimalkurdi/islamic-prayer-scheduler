@@ -159,6 +159,21 @@ api() {
          --request "$method" "$API$path" "$@"
 }
 
+# Same call, but keeping the body and the status code. Gitea says why it refused, and
+# the reasons are not interchangeable - a missing unit, a token that cannot write, and
+# a tag that already exists all arrive here and need different things done about them.
+api_checked() {
+    local method="$1" path="$2"; shift 2
+    local out status
+    out="$(curl --silent --show-error --location --write-out '\n%{http_code}' \
+                --header "Authorization: token $TOKEN" \
+                --request "$method" "$API$path" "$@")"
+    status="${out##*$'\n'}"
+    API_BODY="${out%$'\n'*}"
+    API_STATUS="$status"
+    [[ "$status" =~ ^2 ]]
+}
+
 json_field() { python3 -c '
 import json, sys
 try: doc = json.load(sys.stdin)
@@ -166,6 +181,28 @@ except Exception: sys.exit(0)
 v = doc.get(sys.argv[1]) if isinstance(doc, dict) else None
 if v is not None: print(v)
 ' "$1"; }
+
+# Releases are a repository "unit" in Gitea and ship disabled on a new repo. With the
+# unit off there is no /releases endpoint at all, so every call below 404s - which reads
+# exactly like a permissions problem and is not one. Checked first, by name.
+HAS_RELEASES="$(api GET "" | python3 -c '
+import json, sys
+try: print(json.load(sys.stdin).get("has_releases"))
+except Exception: print("unknown")
+')"
+if [[ "$HAS_RELEASES" == "False" ]]; then
+    cat >&2 <<UNITS
+ERROR: Releases are switched off on this repository, so it has no /releases endpoint
+       and nothing can be uploaded. The tree is mirrored; only this step is blocked.
+
+       Turn it on:
+         https://codeberg.org/$OWNER/$NAME/settings
+         -> Units -> tick "Releases" -> Update Settings
+
+       then run this again. Nothing above needs repeating.
+UNITS
+    exit 1
+fi
 
 echo "==> Codeberg release $TAG"
 RELEASE_ID="$(api GET "/releases/tags/$TAG" | json_field id)"
@@ -192,11 +229,17 @@ print(json.dumps({"tag_name": sys.argv[1], "target_commitish": sys.argv[2],
                   "name": sys.argv[3], "body": sys.argv[4]}))
 ' "$TAG" "$(git -C "$MIRROR" rev-parse --abbrev-ref HEAD)" "$TITLE" "$BODY")"
 
-    RELEASE_ID="$(api POST "/releases" \
+    if ! api_checked POST "/releases" \
                      --header "Content-Type: application/json" \
-                     --data "$PAYLOAD" | json_field id)"
+                     --data "$PAYLOAD"; then
+        echo "ERROR: could not create the release (HTTP $API_STATUS)" >&2
+        echo "       $(printf '%s' "$API_BODY" | head -c 400)" >&2
+        exit 1
+    fi
+    RELEASE_ID="$(printf '%s' "$API_BODY" | json_field id)"
     [[ -n "$RELEASE_ID" ]] || {
-        echo "ERROR: could not create the release - is the token allowed to write here?" >&2
+        echo "ERROR: the release was created but returned no id - check it by hand:" >&2
+        echo "       https://codeberg.org/$OWNER/$NAME/releases" >&2
         exit 1
     }
     echo "    created (id $RELEASE_ID)"
@@ -216,9 +259,12 @@ for asset in "${ASSETS[@]}"; do
         echo "    $base is already uploaded - left alone"
         continue
     fi
-    uploaded="$(api POST "/releases/$RELEASE_ID/assets?name=$base" \
-                   --form "attachment=@$asset" | json_field id)"
-    [[ -n "$uploaded" ]] || { echo "ERROR: upload failed for $base" >&2; exit 1; }
+    if ! api_checked POST "/releases/$RELEASE_ID/assets?name=$base" \
+                     --form "attachment=@$asset"; then
+        echo "ERROR: upload failed for $base (HTTP $API_STATUS)" >&2
+        echo "       $(printf '%s' "$API_BODY" | head -c 400)" >&2
+        exit 1
+    fi
     echo "    uploaded $base"
 done
 
