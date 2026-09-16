@@ -283,9 +283,18 @@ Live with it for as long as you want. When you are satisfied, point the fleet at
 this is the whole rollout:
 
 ```bash
-sed -i 's/"pi4": ".*"/"pi4": "1.2.0"/' VERSIONS.json
+sed -i '/^  "pi4": {/,/^  }/ s/"version": ".*"/"version": "1.2.0"/' VERSIONS.json
+python3 -m json.tool VERSIONS.json > /dev/null && git diff VERSIONS.json
 git add VERSIONS.json && git commit -m "roll pi4 out to 1.2.0" && git push
 ```
+
+The range address is what keeps the edit inside that hardware's block — `"version"` also
+appears in the `_readme` examples, and those are indented deeper, so `^  "pi4": {` to
+`^  }` is the whole of the real entry and nothing else. **Read the `git diff` before you
+commit**: one line, the version you meant. A rollout that edited nothing looks exactly
+like a rollout that worked until the devices do not move — which is also what happens if
+that hardware is written in the shorthand string form (`"pi4": "1.1.0"`), where there is
+no block for the range to find. Edit that by hand.
 
 Every unpinned `pi4` device installs it on its next 02:00 check. `zero` devices are
 untouched — their line did not change.
@@ -1151,8 +1160,9 @@ If a release is bad on every device, do not go device by device. Put the previou
 back in `VERSIONS.json` and push:
 
 ```bash
-sed -i 's/"pi4": ".*"/"pi4": "1.1.0"/' VERSIONS.json
+sed -i '/^  "pi4": {/,/^  }/ s/"version": ".*"/"version": "1.1.0"/' VERSIONS.json
 python3 -m json.tool VERSIONS.json          # a typo here delays the rollback
+git diff VERSIONS.json                      # one line, or the rollback is not happening
 git commit -am "roll pi4 back to 1.1.0" && git push
 ```
 
