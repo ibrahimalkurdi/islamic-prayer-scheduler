@@ -58,8 +58,9 @@ CODEBERG_API="https://codeberg.org/api/v1/repos/teleshops/islamic-prayer-schedul
 # The one file that decides what every device runs. Publishing a release does not roll
 # it out - this file does, and moving a value back one version rolls that fleet back on
 # the next check. Devices never pick a version for themselves.
-POINTER_REPO_RAW="https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main"
-POINTER_REPO_MIRROR="$CODEBERG_REPO/raw/branch/main"
+GITHUB_POINTER_RAW="https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main"
+POINTER_REPO_RAW="${POINTER_REPO_RAW:-$GITHUB_POINTER_RAW}"
+POINTER_REPO_MIRROR="${POINTER_REPO_MIRROR:-$CODEBERG_REPO/raw/branch/main}"
 POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
 UPDATE_POINTER_URL="${UPDATE_POINTER_URL:-}"
 
@@ -172,6 +173,18 @@ UPDATE_DOWNLOAD_MIRROR="${UPDATE_DOWNLOAD_MIRROR:-}"
 UPDATE_API_MIRROR="${UPDATE_API_MIRROR:-}"
 # shellcheck disable=SC1090
 [[ -f "$UPDATE_CONF" ]] && source "$UPDATE_CONF"
+
+# Every key in update.conf is documented as "empty means the default", and for PIN,
+# APPLY_MODE and EXTRA_EXCLUDE empty is the default. The ones whose default is not empty
+# have to be reapplied here, after the source, or the file's empty value wins. That is
+# what POINTER_NAME= did: it built a pointer URL with no file name on the end of it, and
+# froze every device installed since 1.1.0 at "cannot read the version pointer".
+: "${ENABLED:=true}"
+: "${POINTER_NAME:=VERSIONS.json}"
+: "${UPDATE_API_URL:=$GITHUB_API_URL}"
+: "${UPDATE_DOWNLOAD_URL:=$GITHUB_DOWNLOAD_URL}"
+: "${POINTER_REPO_RAW:=$GITHUB_POINTER_RAW}"
+: "${POINTER_REPO_MIRROR:=$CODEBERG_REPO/raw/branch/main}"
 
 # A device following anything but the fleet's own file is the quiet failure mode here -
 # it takes versions nobody rolled out and misses the ones everybody got. POINTER_NAME is

@@ -369,5 +369,35 @@ grep -qF "served by the mirror instead" <<< "$out" \
 
 echo "$SAVED_CONF" > "$SCH/config/update.conf"
 
+echo "19. an empty POINTER_NAME still means VERSIONS.json"
+# update.conf ships the key empty to mean "the default", and the default used to be
+# applied before the file was sourced - so the empty value won and the pointer URL came
+# out as .../main/ with no file name on the end. Every device installed since 1.1.0 was
+# frozen there, on every host, mirror included. --status resolves the pointer and exits
+# before any fetch, which is the whole of what this needs to see.
+grep -v '^UPDATE_POINTER_URL=' <<< "$SAVED_CONF" > "$SCH/config/update.conf"
+echo 'POINTER_NAME=' >> "$SCH/config/update.conf"
+out="$(run --status)"
+expect "the default file name is restored" "$out" '"pointer": "VERSIONS.json"'
+expect "and the device still counts as following the fleet" "$out" '"pointer_is_default": true'
+
+echo "20. and it really updates through the default pointer"
+# The gap that let 19 ship: every other case here names UPDATE_POINTER_URL, which takes
+# the other branch and recovers the name with basename, so the built-in host was never
+# once exercised. This leaves it unset and points the host itself at the fixture.
+run_default_host() { HOME="$DEV" DEVICE_MODEL_FILE="$HERE/fake_model" HEALTH_SETTLE_SECONDS=1 \
+        POINTER_REPO_RAW="file://$REL" POINTER_REPO_MIRROR="file://$REL/blocked" \
+        timeout 120 bash "$CU" "$@" 2>&1; }
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_default_host --now)"
+expect "the pointer is read from the built-in host" "$out" "==== Updated to 1.1.0 ===="
+chk_installed="$(cat "$SCH/var/installed_version")"
+[ "$chk_installed" = "1.1.0" ] \
+    && echo "  ✓ and the device is really on the new version" \
+    || { echo "  ✗ installed_version says $chk_installed"; fail=1; }
+
+echo "$SAVED_CONF" > "$SCH/config/update.conf"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

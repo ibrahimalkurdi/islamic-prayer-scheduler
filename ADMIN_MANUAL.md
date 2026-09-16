@@ -841,6 +841,12 @@ not from your disk — and raw caches for about five minutes.
 `UPDATE_POINTER_URL` still wins if both are set, which is what the off-device tests use to
 point at a `file://` directory.
 
+Empty has only meant `VERSIONS.json` since **1.1.6**. Before that an updater applied the
+default before it read `update.conf`, so an empty value survived and the pointer URL came
+out as `…/main/` with no file name on it — unreadable from GitHub and the mirror alike.
+Devices installed between 1.1.0 and 1.1.5 carry that line and cannot update until it is
+commented out by hand; §15 has the one-liner.
+
 **This is the setting most likely to be left behind.** A device on a test pointer takes
 versions nobody rolled out and misses the ones everybody got, quietly, for as long as the
 line is there. So it is loud about it: the log says
@@ -1386,6 +1392,7 @@ release notes when you cut one of those.
 | `Updates are disabled on this device` | `ENABLED=false` | set it to `true`, or use `--now` |
 | `Audio is playing - leaving this for the next run` | an athan or Quran playback is running | nothing; it retries. If it never clears, check for a stuck `cvlc` |
 | `Cannot read the version pointer` | the device is offline, or `VERSIONS.json` is malformed or missing from `main` | run `python3 -m json.tool VERSIONS.json` in the repo and confirm it is pushed. The device stayed where it was |
+| `Cannot read the version pointer at …/main/` — the URL ends in a slash with no file name, and `--status` shows `"pointer": ""` | `POINTER_NAME=` empty in `update.conf`, on a device whose updater predates 1.1.6 | `sed -i 's/^POINTER_NAME=$/#POINTER_NAME=/' ~/Desktop/scheduler/config/update.conf` — it then updates itself on the next check and the problem does not come back (§8) |
 | `The version pointer names no version for variant 'pi4'` | that variant's line is `""` | set it to a published version and push |
 | A device never moves although `VERSIONS.json` was changed | that device has a `PIN` | `grep ^PIN ~/Desktop/scheduler/config/update.conf` — a pin beats the pointer by design |
 | A device moved to the right version but no others did | you used `--target`, which is one run only | edit `VERSIONS.json` to roll the rest out |

@@ -43,7 +43,7 @@ EXTRA_EXCLUDE=
 # through a release before the fleet sees it; that device then ignores VERSIONS.json until
 # this is cleared, and says so in its log on every run.
 #   POINTER_NAME=VERSIONS-test.json
-POINTER_NAME=
+#POINTER_NAME=
 
 # Where releases come from, and where the version pointer lives. Only worth changing to
 # test the updater against a local directory - curl reads file:// URLs, so no server is
