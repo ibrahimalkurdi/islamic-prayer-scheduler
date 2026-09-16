@@ -137,7 +137,17 @@ tools/make_release.sh pi4 1.0.9
 The variant is `pi4` or `zero` — the two hardware builds are different software and every
 release belongs to exactly one. The script packages that subtree, strips out every device
 file (settings, prayer times, audio) and proves they are gone, then prints the
-`gh release create pi4-v1.0.9 …` command to publish it.
+`gh release create pi4-v1.0.9 …` command to publish it. Run that, then mirror it:
+
+```bash
+gh release create pi4-v1.0.9 \
+    dist/scheduler-pi4-1.0.9.tar.gz dist/version.json dist/SHA256SUMS \
+    --title "pi4 1.0.9" --notes "…"
+tools/mirror_codeberg.sh pi4 1.0.9
+```
+
+Do this **before** touching `VERSIONS.json`. The release is built from the current commit
+and never contains that file, so the pointer edit belongs in a later commit.
 
 Nothing is installed anywhere yet. The release simply exists.
 
@@ -150,7 +160,12 @@ Nothing is installed anywhere yet. The release simply exists.
 
 ```bash
 git commit -am "roll pi4 out to 1.0.9" && git push
+tools/mirror_codeberg.sh          # no arguments - copies the edit to Codeberg
 ```
+
+Push alone only moves GitHub. Codeberg is not a live mirror, and devices behind a GitHub
+block read the pointer from there, so they stay on the old version until that second line
+runs. It syncs the tree only — it creates no release.
 
 Every `pi4` device reads this file on its nightly 02:00 check and installs what it names.
 Putting an older version back here rolls the whole fleet back the same way — devices move
