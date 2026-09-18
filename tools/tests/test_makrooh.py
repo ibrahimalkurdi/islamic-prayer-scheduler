@@ -104,8 +104,15 @@ open(MAP_FILE, "w", encoding="utf-8").write(
            TIMES["Fajr"], TIMES["Sunrise"], TIMES["Dhuhr"],
            TIMES["Asr"], TIMES["Maghrib"], TIMES["Isha"])
         for d in (-1, 0, 1)) + "\n]\n")
-page.PRAYER_MAP_FILE = MAP_FILE
+# The map lives in shared.prayer_logic now, and assigning the old name here would be a
+# silent no-op - a new attribute nothing reads, which is how this test once passed while
+# measuring the device fixture's times instead of its own.
+page.prayer_logic.PRAYER_MAP_FILE = MAP_FILE
 page.load_prayer_times()
+
+loaded = page.prayer_logic.prayersByDate[page.key_for_date(TODAY)]
+chk("the countdown is reading the times written just above",
+    loaded["الظهر"], TIMES["Dhuhr"])
 
 real_datetime = page.datetime
 

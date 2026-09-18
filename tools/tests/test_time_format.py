@@ -88,7 +88,7 @@ open(MAP_FILE, "w", encoding="utf-8").write(
 
 spec = importlib.util.spec_from_file_location("page_render", PRAYER_GUI)
 page_mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(page_mod)
-page_mod.PRAYER_MAP_FILE = MAP_FILE
+page_mod.prayer_logic.PRAYER_MAP_FILE = MAP_FILE
 page_mod.load_prayer_times()
 page_view = page_mod.DailyPrayersPage()
 page_view.resize(800, 480); page_view.refresh(); page_view.show()

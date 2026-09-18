@@ -63,14 +63,17 @@ chk "the athan unit names a real user" \
     "$(grep -hc "^User=$(id -un)$" "$SCH/config/systemd/audio_event_scheduler.service" 2>/dev/null)" "1"
 chk "the website unit names a real user" \
     "$(grep -hc "^User=$(id -un)$" "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "1"
-# These two are what the website needs and what a careless substitution could eat: without
-# the capability it cannot bind port 80 at all, and without XDG_RUNTIME_DIR its mute button
-# silently kills the player instead of muting the speaker - which cannot be undone. %U is
-# systemd's own placeholder and must survive the user rewrite untouched.
+# Without this capability the website cannot bind port 80 at all, and a careless
+# substitution could eat it.
 chk "the website unit can still bind port 80" \
     "$(grep -hc '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "1"
-chk "the website unit can still reach PipeWire" \
-    "$(grep -hc '^Environment=XDG_RUNTIME_DIR=/run/user/%U$' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "1"
+# And the unit must NOT name XDG_RUNTIME_DIR. It did once, as /run/user/%U, and on a real
+# device %U resolved to 0 despite User= being set - so the service looked for PipeWire
+# under root's runtime directory and every mute fell back to killing the player. mute.py
+# derives it from the running process's own uid; a value here would override that and
+# bring the bug back.
+chk "the website unit does not hard-code a runtime directory" \
+    "$(grep -hc '^Environment=XDG_RUNTIME_DIR' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "0"
 
 echo
 [[ $fail -eq 0 ]] && echo "ALL PASS" || echo "FAILURES ABOVE"

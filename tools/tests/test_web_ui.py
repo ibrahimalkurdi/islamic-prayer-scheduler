@@ -528,11 +528,40 @@ try:
     check_true("and the flag is still set", os.path.isfile(mute_lib.MUTE_FLAG_FILE))
     check("the sink is reported unreachable", reply["sink_reachable"], False)
     check_true("but the device is still reported muted, from the flag", reply["muted"])
+    # "the speaker could not be reached" is not actionable on its own - what wpctl said
+    # has to come back with it, or nobody can tell whether it is a missing binary, a
+    # PipeWire that is not running, or the wrong XDG_RUNTIME_DIR.
+    check_true("and it says why", bool(reply.get("reason")))
+    check_true("naming the command that failed", "wpctl" in reply.get("reason", ""))
+    check_true("and which runtime dir it looked in",
+               "/run/user/" in reply.get("runtime_dir", ""))
 finally:
     with open(WPCTL, "w", encoding="utf-8") as handle:
         handle.write(working_stub)
     mute_lib.clear_mute_flag()
     post("/api/mute", {"muted": False}, origin=BASE)
+
+# A systemd service inherits no usable XDG_RUNTIME_DIR, and wpctl finds both the PipeWire
+# socket and the session bus through it. This is not a "fill it in if blank" - the unit
+# used to set it to /run/user/%U, systemd resolved %U to 0 on a real device even with
+# User= set, and a wrong value that is present is worse than none. mute.py takes the
+# running process's own uid whenever that directory exists.
+check("XDG_RUNTIME_DIR is derived from this process's uid",
+      os.environ.get("XDG_RUNTIME_DIR"), f"/run/user/{os.getuid()}")
+check_true("and the session bus is named rather than left to autolaunch",
+           os.environ.get("DBUS_SESSION_BUS_ADDRESS", "").startswith("unix:path=")
+           or not os.path.exists(f"/run/user/{os.getuid()}/bus"))
+
+# The case that actually shipped: an inherited value that is set, and wrong.
+import importlib  # noqa: E402
+_saved = dict(os.environ)
+os.environ["XDG_RUNTIME_DIR"] = "/run/user/0"
+importlib.reload(mute_lib)
+check("a wrong inherited runtime dir is corrected, not kept",
+      os.environ.get("XDG_RUNTIME_DIR"), f"/run/user/{os.getuid()}")
+os.environ.clear()
+os.environ.update(_saved)
+importlib.reload(mute_lib)
 
 print("20. the device names itself for a phone that cannot resolve .local")
 status, body, _ = get("/api/device")

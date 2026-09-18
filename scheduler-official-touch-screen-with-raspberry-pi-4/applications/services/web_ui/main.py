@@ -337,11 +337,20 @@ class Handler(BaseHTTPRequestHandler):
     def api_mute_get(self):
         expiry = mute_lib.mute_expiry()
         sink = mute_lib.audio_is_muted()
+        reason = mute_lib.last_error()
+        if sink is None and reason:
+            # Logged as well as sent: the page has room for one short line, and this is
+            # the sentence that says which of wpctl, PipeWire or XDG_RUNTIME_DIR is at
+            # fault. Without it "the speaker could not be reached" is a dead end.
+            self.log_message("mute: %s (XDG_RUNTIME_DIR=%s)", reason,
+                             os.environ.get("XDG_RUNTIME_DIR", "unset"))
         self.send_json({
             "muted": sink if sink is not None else mute_lib.is_muted(),
             "flag_until": (datetime.fromtimestamp(expiry).isoformat(timespec="seconds")
                            if expiry else None),
             "sink_reachable": sink is not None,
+            "reason": reason if sink is None else "",
+            "runtime_dir": os.environ.get("XDG_RUNTIME_DIR", ""),
             "minutes": mute_lib.MUTE_DURATION_MINUTES,
         })
 

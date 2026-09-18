@@ -397,6 +397,70 @@ chk_installed="$(cat "$SCH/var/installed_version")"
     && echo "  ✓ and the device is really on the new version" \
     || { echo "  ✗ installed_version says $chk_installed"; fail=1; }
 
+echo "21. an update restarts the website as well as the athan service"
+# Case 19 stripped UPDATE_POINTER_URL to exercise the built-in host, and 20 pointed that
+# host at the fixture. Without putting the original conf back, this would try the real
+# GitHub, fail to read a pointer, and never reach the restart step at all - passing for
+# the wrong reason or failing for one.
+echo "$SAVED_CONF" > "$SCH/config/update.conf"
+# The website holds the previous version's Python until it is restarted, so a release
+# that changes it would be installed and not running. Neither systemctl nor sudo can do
+# anything useful in a fixture, so both are stubbed onto PATH and asked only what was
+# called - which is the whole of what this needs to prove.
+STUB="$HERE/stub-bin"
+mkdir -p "$STUB"
+CALLED="$HERE/systemctl-calls"
+: > "$CALLED"
+cat > "$STUB/systemctl" <<STUBEOF
+#!/bin/bash
+echo "systemctl \$*" >> "$CALLED"
+# The website's unit counts as installed and enabled; everything else is answered the
+# way the real one answers for a unit that is running.
+case "\$*" in
+    "list-unit-files scheduler_web_ui.service") exit 0 ;;
+    "is-enabled --quiet scheduler_web_ui.service") exit 0 ;;
+esac
+exit 0
+STUBEOF
+cat > "$STUB/sudo" <<'STUBEOF'
+#!/bin/bash
+# Drop -n and any other flag, then run the real command - which here is the stub above.
+while [[ "$1" == -* ]]; do shift; done
+exec "$@"
+STUBEOF
+chmod +x "$STUB/systemctl" "$STUB/sudo"
+
+run_stubbed() { HOME="$DEV" DEVICE_MODEL_FILE="$HERE/fake_model" HEALTH_SETTLE_SECONDS=1 \
+        PATH="$STUB:$PATH" timeout 120 bash "$CU" "$@" 2>&1; }
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "the athan service is restarted" "$(cat "$CALLED")" "systemctl restart audio_event_scheduler.service"
+expect "and so is the website" "$(cat "$CALLED")" "systemctl restart scheduler_web_ui.service"
+
+echo "22. but not on a device where the website was never installed"
+: > "$CALLED"
+cat > "$STUB/systemctl" <<STUBEOF
+#!/bin/bash
+echo "systemctl \$*" >> "$CALLED"
+# No such unit - a device that has not run init.sh since the website arrived.
+case "\$*" in
+    "list-unit-files scheduler_web_ui.service") exit 1 ;;
+    "is-enabled --quiet scheduler_web_ui.service") exit 1 ;;
+esac
+exit 0
+STUBEOF
+chmod +x "$STUB/systemctl"
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "the athan service is still restarted" "$(cat "$CALLED")" "systemctl restart audio_event_scheduler.service"
+if grep -qF "systemctl restart scheduler_web_ui.service" "$CALLED"; then
+    echo "  ✗ the website was restarted on a device that has no such unit"; fail=1
+else
+    echo "  ✓ the website is left alone, and reported rather than warned about"
+fi
+rm -rf "$STUB" "$CALLED"
+
 echo "$SAVED_CONF" > "$SCH/config/update.conf"
 
 echo

@@ -13,11 +13,12 @@ RestartSec=5
 # the device user, not as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-# wpctl reaches PipeWire through this. A desktop session sets it; a service does not, and
-# without it the mute button silently falls back to killing the player instead of muting
-# the speaker - which works, but cannot be undone. %U is the numeric uid systemd resolves
-# from User= above.
-Environment=XDG_RUNTIME_DIR=/run/user/%U
+# XDG_RUNTIME_DIR is deliberately NOT set here. It was, as /run/user/%U, and on a real
+# device %U resolved to 0 even with User= set above - so the service looked for PipeWire
+# and for the session bus under root's runtime directory, found neither, and every mute
+# fell back to killing the player. applications/shared/mute.py derives it from the
+# running process's own uid instead, which cannot be wrong, and sets the session bus
+# address with it.
 StandardOutput=append:/home/ihms/Desktop/scheduler/logs/web_ui.log
 StandardError=append:/home/ihms/Desktop/scheduler/logs/web_ui.log
 

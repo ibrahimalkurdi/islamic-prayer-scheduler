@@ -38,6 +38,7 @@ GUI_LOG="$MAIN_DIR/logs/prayer_times_gui.log"
 # app's, and so health_check.sh's traceback check does not read this run's noise.
 GUI_VERIFY_LOG="$MAIN_DIR/logs/prayer_times_gui_check.log"
 SERVICE="audio_event_scheduler.service"
+WEB_SERVICE="scheduler_web_ui.service"
 
 # Overridable from update.conf so the whole flow can be pointed at a local directory for
 # testing - curl reads file:// URLs, so no server is needed to exercise this end to end.
@@ -452,6 +453,18 @@ restart_apps() {
     log "Restarting the athan service..."
     sudo -n systemctl restart "$SERVICE" 2>>"$LOG_FILE" \
         || log "WARNING: could not restart $SERVICE"
+
+    # The website holds the previous version's Python until it is restarted, so a release
+    # that changes it would be installed and not running - the files on disk saying one
+    # thing and the service another until someone rebooted. Only restarted if it is
+    # already installed: a device that has not run init.sh since the website arrived has
+    # no such unit, and that is reported separately rather than warned about here.
+    if systemctl list-unit-files "$WEB_SERVICE" > /dev/null 2>&1 \
+        && systemctl is-enabled --quiet "$WEB_SERVICE" 2>/dev/null; then
+        log "Restarting the website..."
+        sudo -n systemctl restart "$WEB_SERVICE" 2>>"$LOG_FILE" \
+            || log "WARNING: could not restart $WEB_SERVICE - run init.sh once"
+    fi
 
     # The old countdown process is holding the previous version's code either way, so it
     # goes. What differs is whether we put it back on the screen.

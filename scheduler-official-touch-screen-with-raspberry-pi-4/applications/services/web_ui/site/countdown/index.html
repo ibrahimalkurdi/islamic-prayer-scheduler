@@ -152,6 +152,12 @@ async function paintMute() {
     }
     if (!state.sink_reachable) {
         label += (label ? " — " : "") + "تعذّر الوصول إلى مكبر الصوت";
+        /* The reason belongs where whoever can act on it will see it. It is one short
+           line from wpctl, in English, so it goes in the title rather than on the page -
+           and the same line is in logs/web_ui.log. */
+        document.querySelector("#mute-state").title = state.reason || "";
+    } else {
+        document.querySelector("#mute-state").title = "";
     }
     document.querySelector("#mute-state").textContent = label;
 }

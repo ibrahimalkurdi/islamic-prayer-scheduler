@@ -39,25 +39,93 @@ AUDIO_MUTE_CMD = ["wpctl", "set-mute", AUDIO_SINK]
 AUDIO_STATE_CMD = ["wpctl", "get-volume", AUDIO_SINK]
 AUDIO_CMD_TIMEOUT = 3
 
+def _runtime_dir():
+    """Where wpctl should look for the PipeWire socket.
+
+    A desktop session exports XDG_RUNTIME_DIR; a systemd service does not, and the unit's
+    own Environment= line leans on systemd resolving %U to the User= uid. An inherited
+    value is therefore not trusted on its own - a wrong one is worse than none, because
+    it is set, and merely filling in a blank would leave it in place. This process's own
+    uid is the answer whenever that directory is really there.
+    """
+    own = f"/run/user/{os.getuid()}"
+    if os.path.isdir(own):
+        return own
+    inherited = os.environ.get("XDG_RUNTIME_DIR")
+    if inherited and os.path.isdir(inherited):
+        return inherited
+    return own
+
+
+os.environ["XDG_RUNTIME_DIR"] = _runtime_dir()
+
+
+def _session_bus():
+    """The session bus socket, for the same reason and with the same caution.
+
+    PipeWire's rt module asks the session bus for realtime scheduling. With no address
+    set, libdbus tries to autolaunch a daemon, which needs $DISPLAY - and a service has
+    none, so wpctl exits 2 with "Unable to autolaunch a dbus-daemon without a $DISPLAY".
+    Naming the socket that is already there avoids the autolaunch entirely.
+    """
+    own = os.path.join(os.environ["XDG_RUNTIME_DIR"], "bus")
+    if os.path.exists(own):
+        return f"unix:path={own}"
+    return os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+
+
+_bus = _session_bus()
+if _bus:
+    os.environ["DBUS_SESSION_BUS_ADDRESS"] = _bus
+
+# Why the last wpctl call failed, for the log and for the website - "the speaker could
+# not be reached" on its own is not something anyone can act on.
+_last_error = ""
+
+
+def last_error():
+    return _last_error
+
+
+def _record(command, error=None, result=None):
+    global _last_error
+    if error is not None:
+        _last_error = f"{' '.join(command)}: {error}"
+    elif result is not None and result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        _last_error = (f"{' '.join(command)}: exit {result.returncode}"
+                       + (f" - {detail[0]}" if detail else ""))
+    else:
+        _last_error = ""
+    return _last_error
+
 
 def audio_set_mute(muted):
     """Silence or restore the output device. False if the device could not be reached."""
+    command = AUDIO_MUTE_CMD + ["1" if muted else "0"]
     try:
-        subprocess.run(AUDIO_MUTE_CMD + ["1" if muted else "0"], check=True,
-                       capture_output=True, timeout=AUDIO_CMD_TIMEOUT)
-        return True
-    except (OSError, subprocess.SubprocessError):
+        result = subprocess.run(command, capture_output=True, text=True,
+                                timeout=AUDIO_CMD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as error:
+        _record(command, error=error)
         return False
+    _record(command, result=result)
+    return result.returncode == 0
 
 
 def audio_is_muted():
     """Whether the output device is silenced, or None if it cannot be asked."""
     try:
-        state = subprocess.run(AUDIO_STATE_CMD, check=True, capture_output=True,
-                               text=True, timeout=AUDIO_CMD_TIMEOUT).stdout
-    except (OSError, subprocess.SubprocessError):
+        result = subprocess.run(AUDIO_STATE_CMD, capture_output=True, text=True,
+                                timeout=AUDIO_CMD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as error:
+        _record(AUDIO_STATE_CMD, error=error)
         return None
-    return "[MUTED]" in state
+    if result.returncode != 0:
+        _record(AUDIO_STATE_CMD, result=result)
+        return None
+    _record(AUDIO_STATE_CMD, result=result)
+    return "[MUTED]" in result.stdout
 
 
 def mute_expiry():

@@ -151,7 +151,10 @@ bash "$SCRIPTS_DIR/set_device_user.sh" "$BASE_DIR"
 SUDOERS_FILE="/etc/sudoers.d/010_scheduler-restart"
 # Both paths are listed because sudo matches the resolved binary, and systemctl lives
 # in /bin on some images and /usr/bin on others.
-SUDOERS_RULE="$USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart $AUDIO_EVENT_SCHEDULER_SERVICE_NAME, /bin/systemctl restart $AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
+# Restarting an already-installed unit, and nothing else - not writing one, which is
+# what would make this a root grant. Both units run as this same user and start a script
+# out of their home, so a restart runs code they could already run as themselves.
+SUDOERS_RULE="$USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart $AUDIO_EVENT_SCHEDULER_SERVICE_NAME, /bin/systemctl restart $AUDIO_EVENT_SCHEDULER_SERVICE_NAME, /usr/bin/systemctl restart $WEB_UI_SERVICE_NAME, /bin/systemctl restart $WEB_UI_SERVICE_NAME"
 
 if [[ ! -f "$SUDOERS_FILE" ]] || ! sudo grep -qF "$SUDOERS_RULE" "$SUDOERS_FILE"; then
     echo "Installing sudoers rule for the scheduler restart..."
