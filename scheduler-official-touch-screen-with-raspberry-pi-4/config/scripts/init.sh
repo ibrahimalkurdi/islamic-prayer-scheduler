@@ -10,9 +10,8 @@ AUTOSTART_DIR="$HOME/.config/autostart"
 DONE_DIR="$BASE_DIR/var/setup_done"
 SYSTEMCTL_OS_CONFIG_DIR="/etc/systemd/system"
 AUDIO_EVENT_SCHEDULER_SERVICE_NAME="audio_event_scheduler.service"
-AUDIO_EVENT_SCHEDULER_SERVICE_PATH="$SYSTEMCTL_OS_CONFIG_DIR/$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
 WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME="wifi_connectivity_resolver.service"
-WIFI_CONNECTIVITY_RESOLVER_SERVICE_PATH="$SYSTEMCTL_OS_CONFIG_DIR/$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
+WEB_UI_SERVICE_NAME="scheduler_web_ui.service"
 PIPEWIRE_CONFIG_FILE="$BASE_DIR/config/pipewire-pulse.conf"
 CRONTAB_FILE="$BASE_DIR/config/crontab.txt"
 BT_AUTOCONNECT_FILE="/usr/local/bin/bt-autoconnect.sh"
@@ -20,7 +19,10 @@ BT_AUTOCONNECT_FILE="/usr/local/bin/bt-autoconnect.sh"
 USER_PRAYERS_CSV="$HOME/Desktop/إدخال-مواقيت-الصلاة-للمستخدم.csv"
 DEFAULT_PRAYERS_CSV="$BASE_DIR/config/prayers-config/برلين.csv"
 
-mkdir -p "$DONE_DIR" "$BASE_DIR/var/update/rollback"
+# logs/ is this device's own history, so it is never in a release payload - which means
+# a fresh tree has no such folder. Three systemd units write into it with append:, and a
+# unit whose log file cannot be opened does not start at all.
+mkdir -p "$DONE_DIR" "$BASE_DIR/var/update/rollback" "$BASE_DIR/logs"
 
 echo "==== Scheduler setup started ===="
 
@@ -172,10 +174,9 @@ fi
 if [[ ! -f "$DONE_DIR/settings_applied" ]]; then
     echo "Applying settings..."
     
-    # Copy both systemd service files
-    sudo cp "$BASE_DIR/config/systemd/$AUDIO_EVENT_SCHEDULER_SERVICE_NAME" "$AUDIO_EVENT_SCHEDULER_SERVICE_PATH"
-    sudo cp "$BASE_DIR/config/systemd/$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME" "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_PATH"
-    
+    # The unit files themselves are copied further down, on every run rather than only
+    # here - see the Systemd services section.
+
     bash "$BASE_DIR/config/scripts/apply_settings.sh"
     touch "$DONE_DIR/settings_applied"
 else
@@ -351,6 +352,21 @@ sudo gtk-update-icon-cache /usr/share/icons/hicolor
 #######################################
 echo "Configuring systemd services..."
 
+# Copied on every run, not only on a first install. Putting units in /etc needs root, so
+# check_updates.sh will not do it: an update that changes or adds one only logs
+# "run init.sh to install it" and leaves the old copy in place. That advice is only true
+# if this copy happens outside the settings_applied run-once guard - inside it, a device
+# set up before the change would never pick the new unit up, which is the same trap the
+# icons above are copied every run to avoid.
+for unit in "$BASE_DIR"/config/systemd/*.service; do
+    [[ -f "$unit" ]] || continue
+    installed="$SYSTEMCTL_OS_CONFIG_DIR/$(basename "$unit")"
+    if [[ ! -f "$installed" ]] || ! diff -q "$unit" "$installed" > /dev/null 2>&1; then
+        echo "Installing $(basename "$unit")"
+        sudo cp "$unit" "$installed"
+    fi
+done
+
 # Always reload daemon to ensure systemd sees any newly copied or updated unit files
 sudo systemctl daemon-reload
 
@@ -370,6 +386,21 @@ fi
 
 if ! systemctl is-active --quiet "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"; then
     sudo systemctl start "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
+fi
+
+# 3. The website, reachable from the LAN at http://<hostname>.local
+if ! systemctl is-enabled --quiet "$WEB_UI_SERVICE_NAME"; then
+    sudo systemctl enable "$WEB_UI_SERVICE_NAME"
+fi
+
+# Restarted rather than only started, so an update that changes the pages or the unit is
+# actually serving the new ones by the time this script finishes.
+sudo systemctl restart "$WEB_UI_SERVICE_NAME"
+
+if systemctl is-active --quiet "$WEB_UI_SERVICE_NAME"; then
+    echo "Website running at http://$(hostname).local"
+else
+    echo "WARNING: $WEB_UI_SERVICE_NAME did not start - see logs/web_ui.log"
 fi
 
 #######################################

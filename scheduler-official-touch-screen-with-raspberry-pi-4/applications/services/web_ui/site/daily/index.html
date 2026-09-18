@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>قائمة اليومية للصلوات</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<a class="back" href="/">→ الصفحة الرئيسية</a>
+
+<h1>قائمة اليومية للصلوات</h1>
+
+<div class="list-nav">
+    <input type="date" id="pick">
+    <button class="ghost" id="today">اليوم</button>
+</div>
+
+<div class="badge-row hidden" id="badge-row"><span class="badge" id="badge">--:--</span></div>
+
+<div class="rows" id="rows"></div>
+<div class="note bad hidden" id="error"></div>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+/* One page serves every date: the date is read from the query string, so a static host
+   needs no rewrite rule and the address can be shared as it stands. */
+function requestedDate() {
+    const asked = new URLSearchParams(location.search).get("date");
+    return Site.parseLocal(asked) ? asked : Site.isoDate(new Date());
+}
+
+let shown = requestedDate();
+/* Kept from the last render so the badge can tick every second without asking the device
+   for anything, and so a colour change can be noticed as it happens rather than at the
+   next full redraw. */
+let currentDay = null;
+let lastState = null;
+
+async function render() {
+    const day = await Site.dayData(shown);
+    currentDay = day;
+    const now = new Date();
+    const isToday = shown === Site.isoDate(now);
+    const container = document.querySelector("#rows");
+    container.textContent = "";
+
+    for (const period of day.periods) {
+        const row = document.createElement("div");
+        row.className = "row";
+
+        /* Only today has a period in force - a browsed date is a list, not a state. */
+        const span = isToday ? Site.spanAt(period, now) : null;
+        const start = Site.parseLocal(period.start);
+        const end = Site.parseLocal(period.end);
+        const running = isToday && start && end && start <= now && now < end;
+
+        /* Painted the way PrayerCard.apply_state paints it: a left-to-right gradient
+           into the darker shade, a derived border and a glow of the same colour - except
+           makrooh, which is flat so it matches the orange the counter paints exactly.
+           Every one of these shades is worked out on the device, not here. */
+        const style = running && span ? day.cards.active[span.color] : null;
+        if (style) {
+            row.style.background = style.flat
+                ? style.from
+                : `linear-gradient(to left, ${style.from}, ${style.to})`;
+            row.style.color = style.text;
+            row.style.borderColor = style.border;
+            row.style.boxShadow = `0 0 16px ${style.glow}`;
+            row.classList.add("running");
+        } else {
+            row.style.background = day.cards.idle.background;
+            row.style.color = day.cards.idle.text;
+            row.style.borderColor = day.cards.idle.border;
+        }
+
+        const name = document.createElement("span");
+        name.textContent = period.display;
+        row.appendChild(name);
+
+        const right = document.createElement("span");
+        if (span && span.makrooh && running) {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = day.makrooh_label;
+            right.appendChild(tag);
+            right.appendChild(document.createTextNode(" "));
+        }
+        const clock = document.createElement("span");
+        clock.className = "clock";
+        clock.textContent = period.clock || "--:--";
+        right.appendChild(clock);
+        row.appendChild(right);
+
+        container.appendChild(row);
+    }
+
+    document.querySelector("#pick").value = shown;
+    document.querySelector("#error").classList.add("hidden");
+    paintBadge(now);
+}
+
+/* How long the running period still has to run, in the pill above the list. Hidden when
+   nothing is running - on a browsed date there is no such thing, which is also when the
+   app hides it. */
+function runningState(now) {
+    if (!currentDay || shown !== Site.isoDate(now)) return null;
+    const period = Site.runningPeriod(currentDay, now);
+    if (!period) return null;
+    const span = Site.spanAt(period, now);
+    if (!span) return null;
+    return { period, color: span.color, end: Site.parseLocal(period.end) };
+}
+
+function paintBadge(now) {
+    const badge = document.querySelector("#badge");
+    const state = runningState(now);
+
+    /* The row itself is hidden, not just the pill: hide() takes the widget out of the
+       layout on the device, so the gap closes rather than being left empty. */
+    const row = document.querySelector("#badge-row");
+    if (!state) {
+        row.classList.add("hidden");
+        return;
+    }
+
+    const minutes = Math.max(0, Math.floor((state.end - now) / 60000));
+    badge.textContent = `${Site.pad(Math.floor(minutes / 60))}:${Site.pad(minutes % 60)}`;
+
+    const style = currentDay.cards.badge[state.color];
+    badge.style.background =
+        `linear-gradient(to bottom left, ${style.from}, ${style.to})`;
+    badge.style.borderColor = style.border;
+    badge.style.color = style.text;
+    badge.style.boxShadow = `0 0 26px ${style.glow}`;
+    row.classList.remove("hidden");
+}
+
+function show(date) {
+    shown = date;
+    const url = new URL(location.href);
+    url.searchParams.set("date", date);
+    history.replaceState(null, "", url);
+    render().catch((e) => Site.fail(e.message));
+}
+
+document.querySelector("#pick").addEventListener("change", (event) => {
+    if (event.target.value) show(event.target.value);
+});
+document.querySelector("#today").addEventListener("click", () => {
+    show(Site.isoDate(new Date()));
+});
+
+render().catch((e) => Site.fail(e.message));
+
+/* The badge counts down in minutes, so it is repainted every second from the data
+   already in hand - no request. The same tick notices when the running period or its
+   colour has changed and redraws the list then, which is what keeps the highlight as
+   sharp as the app's without polling the device for it. */
+setInterval(() => {
+    const now = new Date();
+    const state = runningState(now);
+    const key = state ? `${state.period.name}/${state.color}` : null;
+
+    if (key !== lastState) {
+        lastState = key;
+        render().catch(() => {});
+        return;
+    }
+    paintBadge(now);
+}, 1000);
+
+/* And a full redraw on the minute regardless, so a day that rolls over at midnight is
+   picked up even though nothing about the running period changed. */
+setInterval(() => {
+    if (shown === Site.isoDate(new Date())) render().catch(() => {});
+}, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مواقيت الصلاة</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<h1>مواقيت الصلاة</h1>
+<p class="sub" id="where"></p>
+
+<nav class="tiles">
+    <a class="tile" href="/countdown/">باقي للصلاة</a>
+    <a class="tile" href="/daily/">قائمة اليومية للصلوات</a>
+    <a class="tile" href="/settings/" id="settings-tile">الاعدادات</a>
+</nav>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+if (!window.DEVICE) {
+    document.querySelector("#settings-tile").remove();
+}
+
+/* The address is printed because an older Android phone may not resolve .local, and
+   then this is the number to write down. */
+if (window.DEVICE) {
+    Site.json("/api/device").then((info) => {
+        const bits = [];
+        if (info.hostname) bits.push(`${info.hostname}.local`);
+        if (info.ip) bits.push(info.ip);
+        document.querySelector("#where").textContent = bits.join(" · ");
+    }).catch(() => {});
+}
+</script>
+</body>
+</html>

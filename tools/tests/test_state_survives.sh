@@ -61,6 +61,16 @@ chk "no empty User= after a run with no \$USER" \
     "$(grep -rc '^User=$' "$SCH/config/systemd/" 2>/dev/null | grep -c ':[1-9]')" "0"
 chk "the athan unit names a real user" \
     "$(grep -hc "^User=$(id -un)$" "$SCH/config/systemd/audio_event_scheduler.service" 2>/dev/null)" "1"
+chk "the website unit names a real user" \
+    "$(grep -hc "^User=$(id -un)$" "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "1"
+# These two are what the website needs and what a careless substitution could eat: without
+# the capability it cannot bind port 80 at all, and without XDG_RUNTIME_DIR its mute button
+# silently kills the player instead of muting the speaker - which cannot be undone. %U is
+# systemd's own placeholder and must survive the user rewrite untouched.
+chk "the website unit can still bind port 80" \
+    "$(grep -hc '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "1"
+chk "the website unit can still reach PipeWire" \
+    "$(grep -hc '^Environment=XDG_RUNTIME_DIR=/run/user/%U$' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "1"
 
 echo
 [[ $fail -eq 0 ]] && echo "ALL PASS" || echo "FAILURES ABOVE"

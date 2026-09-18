@@ -195,6 +195,12 @@ sudo systemctl status audio_event_scheduler.service
 ```
 The service should be in an active (running) state.
 
+The same check for the website, which serves the three screens to the LAN (see
+[From a phone on the same wifi](#from-a-phone-on-the-same-wifi)):
+```
+sudo systemctl status scheduler_web_ui.service
+```
+
 ## Step 10: Running the Prayer Time GUIs
 
 To start the **Prayer Time Countdown GUI** and the **Scheduler Settings GUI**, simply double-click the corresponding icons on the Raspberry Pi Desktop.
@@ -458,6 +464,55 @@ If a release changes a systemd unit, the updater applies everything else and rep
 `needs_attention` — the Settings app shows a banner asking for `init.sh` to be run. That
 step needs root, and granting it to the automatic path would be a root grant in all but
 name for something that changes almost never.
+
+---
+
+## From a phone on the same wifi
+
+The same three screens are also served as a website, so a prayer time can be checked or a
+setting changed without walking to the device. On the home wifi, open:
+
+```
+http://<hostname>.local
+```
+
+The hostname is the device's user name — `louay.local`, `ahmad.local`. Step 7's
+`init.sh` already sets that and installs `avahi-daemon`, so nothing extra is needed.
+
+| page | |
+|---|---|
+| `http://louay.local/` | the three links |
+| `http://louay.local/countdown/` | باقي للصلاة — the countdown, and the mute button |
+| `http://louay.local/daily/` | قائمة اليومية للصلوات — any date |
+| `http://louay.local/settings/` | الاعدادات — the same settings, applied the same way |
+
+Saving from the browser runs the same `apply_settings.sh` the Settings app runs, and
+refuses the same values with the same messages. The touch screen picks the change up on
+its own; neither screen has to be restarted.
+
+Two things worth knowing:
+
+- **There is no password.** Anyone on the wifi can change this device's settings, the
+  same as anyone standing in front of its touch screen. It listens on the LAN only —
+  nothing is reachable from the internet — but if the wifi is shared with guests, that
+  is who can reach it.
+- **`.local` needs mDNS.** iPhone, Mac and Windows 10+ resolve it out of the box. Some
+  older Android phones do not; the home page prints the device's IP address so it can be
+  used instead.
+
+To check it is running:
+
+```bash
+sudo systemctl status scheduler_web_ui.service
+tail -f ~/Desktop/scheduler/logs/web_ui.log
+```
+
+On a device set up before this existed, the update delivers the files but cannot install
+the systemd unit, because that needs root and the nightly check runs unattended. The
+device owner finishes it from the touch screen: the Settings app says the update needs
+completing, and tapping **تثبيت مكونات النظام** on the desktop runs setup in a terminal
+where sudo can ask for the password. Re-running Step 7's `init.sh` over SSH does the same
+thing.
 
 ---
 

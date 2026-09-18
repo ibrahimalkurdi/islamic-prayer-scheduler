@@ -28,6 +28,7 @@ Audience: whoever holds the GitHub repo and SSH access to the devices.
 15. [Troubleshooting](#15-troubleshooting)
 16. [Emergency recovery](#16-emergency-recovery)
 17. [Known limits and quirks](#17-known-limits-and-quirks)
+18. [The website on the LAN](#18-the-website-on-the-lan)
 
 ---
 
@@ -70,6 +71,11 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_state_survives.sh` | proves an update keeps the owner's data |
 | `tools/tests/test_settings_updates.py` | drives the Settings app's update section headlessly |
 | `tools/tests/test_friday_quran.py` | the Friday Surat Al-Kahf event, end to end: scheduler, player and Settings section |
+| `tools/tests/test_prayer_logic.py` | the prayer period rules — colours, makrooh windows, Isha across midnight |
+| `tools/tests/test_web_ui.py` | the website, against a fixture device: every route, the settings write, mute |
+| `tools/tests/test_site_js.py` | the website's JavaScript, held to the same answers the device gives |
+| `tools/tests/test_layout.py` | measures the pages in a real browser at phone sizes: nothing wider than the screen, and a whole day visible without scrolling |
+| `tools/build_static_site.py` | bakes the prayer pages into a directory a static host can serve (§18) |
 
 **On each device, under `~/Desktop/scheduler/`**
 
@@ -456,12 +462,28 @@ python3 test_settings_updates.py  # the Settings app's buttons, headless (slow, 
 python3 test_friday_quran.py      # Surat Al-Kahf on Fridays, headless
 ```
 
+Three more need no fixture — they build their own throwaway device — and are run from the
+repo root:
+
+```bash
+python3 tools/tests/test_prayer_logic.py   # the prayer period rules
+python3 tools/tests/test_web_ui.py         # the website, every route
+python3 tools/tests/test_site_js.py        # its JavaScript (skipped where there is no node)
+python3 tools/tests/test_layout.py         # it fits a phone (skipped where there is no Chrome)
+```
+
 | suite | what it proves |
 |---|---|
 | `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` overrides the deny-list but resolves to nothing because no release ships that file, a pointer naming `var/update/` is still refused, and the plain-string shorthand still resolves; `--rollback` restores; a release's `default-audio/` is seeded into `audio/`, a seeded file the owner deletes does not come back, and one they put there themselves is not overwritten; a forced `include` installs over the deny-list without `--delete` touching the owner's own recitations beside it; a device pointed at its own version file follows it and says so in the log and in `--status` |
 | `test_make_release.sh` | `default-audio/` ships while `audio/` is still stripped; an `.mp3` anywhere else fails the build; a folder name matching no event is reported with the real name suggested and refuses to build with no terminal, while `--yes` proceeds; a payload over the cap is refused and the archive removed, while `--allow-large` builds it |
 | `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does |
 | `test_settings_updates.py` | the version list is fetched newest-first; choosing a version writes `PIN` **and** installs it; the checkbox writes `ENABLED`; choosing nothing raises an error rather than doing nothing; the pin line and **العودة إلى التحديث المركزي** are on screen only while the device is pinned; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest; both lists show five rows at a time |
+| `test_prayer_logic.py` | Duha opens 20 minutes after sunrise and its period ends at Dhuhr; Isha's period crosses midnight for today but not for a browsed date; green holds to exactly 20 minutes past the athan and red begins exactly 20 before the next; الشروق is makrooh throughout, zawal takes the makrooh colour while the close of العصر keeps red and is makrooh too; and `period_boundaries` gives the same answer as `period_state` at **every second** of every period — which is what lets the website carry no rules of its own |
+| `test_web_ui.py` | every page and asset is served and nothing else is, including six traversal attempts; the day payload carries spans that agree with the rules second by second over the wire; a save writes exactly the keys it was given and a no-change save is byte-identical; the Duha and Athkar rules are refused in the Settings app's own words and nothing is written; an unknown key, a missing audio file, a bad clock and a negative number are all refused; a save really runs `apply_settings.sh`, off the request; a foreign `Origin` cannot post; mute round-trips through a real `wpctl` subprocess and falls back to stopping the player when there is none; the prayer map is re-read when it changes underneath; and the static build carries no settings page and no unguarded call to the device |
+| `test_web_ui.py` (small hours) | the period in force at 00:30, 02:30 and 04:30 is the evening before's Isha, beginning the previous day and running to this morning's Fajr while the card still shows tonight's; exactly one period covers every hour asked about; and a browsed date keeps its own Isha rather than borrowing the evening before it |
+| `test_web_ui.py` (palette) | the counter's green, red, makrooh and neutral grey are read out of `prayer_times_gui/main.py` and compared; the counter is confirmed to have no beige; and every card shade is re-derived with a real `QColor.darker()`/`lighter()` so a colour changed in the app but not on the website fails with both values side by side |
+| `test_layout.py` | at 360x640, 412x732 and 1440x820, no page scrolls sideways - measured by framing it at that exact size and comparing `scrollWidth` against `clientWidth`, not judged from a screenshot - and the daily list shows all seven prayers with the last one ending inside the screen. Both of these have gone wrong once: a `<fieldset>` will not shrink below its content's min-content width unless told to, which took the settings form off a 360px screen; and the rows inherited the body's prose line-height, which pushed two prayers off a 640px-tall one |
+| `test_site_js.py` | `site/app.js` loaded for real and driven against a baked year: timestamps are read as local time rather than UTC, the clock reads as `clock_12h` writes it, and the span the page would paint matches `period_state` at every sampled second |
 | `test_friday_quran.py` | Surat Al-Kahf is scheduled on Fridays and no other day; the default is an hour after Jumu'ah; before/after and the minute count both take effect; the time is clamped into the day's own Sunrise→Asr window; the checkbox switches it off; a nonsense or missing setting falls back to an hour after; its audio selection is separate from the daily one; the player routes `friday_quran` to its own folder and treats an empty folder as a no-op; the Settings section round-trips all three keys |
 
 Poke at the fixture device by hand the same way the tests do — `HOME` and the model file
@@ -1409,6 +1431,9 @@ release notes when you cut one of those.
 | `the version pointer asks to replace '<path>', which is device data` | `include` in `VERSIONS.json` names a protected path | remove it. Nothing on the device was touched |
 | A file keeps being replaced despite an exclude | the exclude does not match the include entry exactly — a directory entry needs its trailing slash | read the `Protecting:` line in the log, which lists all four layers |
 | A path in the pointer's `include` never arrives | `skipping <path> - not in this release` — the archive does not contain it | the pointer can only claim paths the release actually ships |
+| `systemd unit changed: <name> - run init.sh to install it` | a release added or changed a unit. The updater never writes to `/etc`, because that needs root and it runs unattended | `bash ~/Desktop/scheduler/config/scripts/init.sh` on that device, once. It is idempotent |
+| `http://<hostname>.local` does not open, but the device is up | either the service is not installed yet, or the phone cannot resolve `.local` | `systemctl status scheduler_web_ui.service`; if it is missing, run `init.sh` (§18). If it is running, try the device's IP — some older Android phones have no mDNS |
+| The website's mute button silences the athan but cannot unmute it | `wpctl` could not reach PipeWire, so the player was killed instead of the speaker muted. Almost always a missing `XDG_RUNTIME_DIR` in the unit | `systemctl cat scheduler_web_ui.service \| grep XDG_RUNTIME_DIR` — it must be there. Re-run `init.sh` to reinstall the unit (§18) |
 | The pointer says 1.2.0 but the device logs `no manifest for pi4-v1.2.0` | the pointer names a version that was never published, or the release was deleted | publish it, or point back at a version that exists |
 | `ERROR: this release is for 'zero', this device is 'pi4'` | wrong variant published, or wrong tag | fix the release; the device was never touched |
 | `update.conf says VARIANT=pi4 but this is a zero` | an SD card cloned from the other device | correct `VARIANT` in `update.conf` — and be sure the card really is running the right build |
@@ -1561,3 +1586,165 @@ the device or your own backup.
 - **The fixture's `health_check.sh` is a stub.** Its passes say nothing about whether the
   real checks would pass on real hardware — which is exactly why §5.2 puts a supervised
   device before an unattended fleet.
+
+---
+
+## 18. The website on the LAN
+
+Every device also serves its three screens over the local network, so a prayer time can be
+checked or a setting changed from a phone instead of at the touch screen.
+
+```
+http://<hostname>.local/            the three links
+http://<hostname>.local/countdown/  باقي للصلاة, and the mute button
+http://<hostname>.local/daily/      قائمة اليومية للصلوات, any date
+http://<hostname>.local/settings/   الاعدادات
+```
+
+The hostname is the device's user name, set by `init.sh` along with `avahi-daemon`
+(`init.sh:243-280`), so `louay.local` has resolved on every device since well before this
+existed.
+
+### What it is
+
+`applications/services/web_ui/main.py`, run by `scheduler_web_ui.service`. Python standard
+library only — no pip dependency, nothing to keep updated. About 20 MB resident and no CPU
+at all while nobody has a page open: the countdown ticks in the browser and comes back to
+the device only at the instants a colour changes.
+
+It serves no HTML of its own. The pages under `site/` are plain files that fetch JSON, and
+all the prayer rules stay in Python — `/api/day` hands the browser the instants at which
+`period_state` changes its answer, never the rule. That is what stops the website and the
+touch screen ever painting different colours, and it is also what makes
+`tools/build_static_site.py` possible: the same pages, with a year computed ahead of time.
+
+Both apps and the website read one copy of those rules, in
+`applications/shared/prayer_logic.py`. A change to a makrooh window lands on both screens
+at once, by construction.
+
+The **colours** are a copy rather than a shared module, because the app's live in PyQt
+terms — `QColor.darker()`, a `qlineargradient`, a drop shadow — and the web service is to
+stay free of Qt. `api.py` therefore carries two palettes, and each mirrors what one screen
+does:
+
+- `COUNTDOWN_FILL` — a flat fill and white text, as `paint_counter_page` draws it. Note
+  that the counter has **no beige**: `period_state` returns beige for the ordinary middle
+  of a period, and there the app paints `COUNTDOWN_BG_DEFAULT`, the neutral grey.
+- `CARD_ACTIVE` / `CARD_IDLE` — the running card's gradient, derived border and glow as
+  `PrayerCard.apply_state` draws them, with makrooh flat on purpose so it matches the
+  orange the counter paints exactly; and the dark card the rest of the list keeps.
+- `CARD_BADGE` — the pill above the list, counting down the running period. Its own
+  recipe: a diagonal `lighter(112) → darker(122)` rather than the card's horizontal
+  gradient. It is hidden whenever nothing is running, which includes every browsed date,
+  and the row collapses with it as `hide()` does on the device.
+
+Because it is a copy, `tools/tests/test_web_ui.py` re-reads the constants out of
+`prayer_times_gui/main.py` and re-derives every shade with a real `QColor`. Change a
+colour in the app and forget the website, and that test fails with both values.
+
+### Installing it on a device that predates it
+
+An update delivers the files but cannot install the unit — `/etc` needs root, and the
+nightly check runs unattended with no terminal to answer a sudo prompt on
+(`check_updates.sh:992`). **No SSH visit is needed for this, and no admin has to be
+involved.** The device owner completes it from the touch screen:
+
+1. the nightly check installs the files and records `needs_attention`
+2. the Settings app shows, in Arabic: *هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة
+   «تثبيت مكونات النظام» من سطح المكتب*
+3. the owner taps **تثبيت مكونات النظام** on the desktop, which runs
+   `init_from_desktop.sh` in a terminal so sudo can prompt, and reports success or
+   failure in Arabic when it finishes
+
+That is the whole rollout. The same path handles every future release that adds or
+changes a unit; nothing here is specific to the website.
+
+Over SSH, if you would rather not wait for the owner:
+
+```bash
+bash ~/Desktop/scheduler/config/scripts/init.sh
+```
+
+`init.sh` is idempotent, and since this release it copies every changed unit on every run
+rather than only on a first install — before that, re-running it on a set-up device
+copied nothing, which made both the log's advice and the Settings app's notice untrue.
+
+### The hours after midnight
+
+Between midnight and Fajr the period in force is the previous evening's Isha — the one
+stretch of the day that belongs to the day before it. `daily_rows` models that, but only
+when it is told the date it is being asked about is today, and `api.py` has to work that
+out rather than assume it. Getting it wrong leaves those hours inside no period at all,
+and the countdown reads `--:--` with no prayer named.
+
+A baked static year has no "today" — every day in it is written as it stands at noon — so
+there the running period is on the previous day's table, and the countdown page looks
+back a day when it finds nothing running. That is a lookup of which table to read; the
+rules stay where they were computed.
+
+Worth knowing when testing: a bug in this only shows between midnight and Fajr, so a test
+run at any other hour will not see it. `tools/tests/test_web_ui.py` therefore asks for an
+explicit clock rather than whatever time it happens to run at.
+
+### Checking it
+
+```bash
+sudo systemctl status scheduler_web_ui.service
+tail -f ~/Desktop/scheduler/logs/web_ui.log
+curl -s http://localhost/api/day | head -c 200
+```
+
+### Access
+
+**There is no authentication, by choice.** Anyone on the wifi can change that device's
+settings and cause a scheduler restart — the same as anyone standing in front of its touch
+screen. It binds the LAN only and nothing is reachable from the internet. Two guards are in
+place regardless: every write is a `POST` whose `Origin` must be the device itself, so a
+page in another tab cannot drive it; and static files come from a fixed allow-list, so no
+part of a URL is ever turned into a file name.
+
+If a device sits on a guest network, that is the thing to think about before rolling this
+out to it.
+
+### Saving from the browser
+
+A save writes `config.ini` and then runs `apply_settings.sh`, which is exactly what the
+Settings app's own button does, under the same lock. It refuses the same values in the same
+words — the two rules live in `applications/shared/settings_rules.py` and are read by both.
+The touch screen picks up the change on its own; neither screen needs restarting.
+
+What the website deliberately does **not** do: upload a prayer-times CSV. The touch screen
+has no upload either, so a new file still arrives on the Desktop or on a USB stick, and is
+chosen there.
+
+### Serving the prayer pages publicly
+
+```bash
+tools/build_static_site.py --scheduler-dir ~/Desktop/scheduler --out dist/site
+```
+
+Writes a directory any static host can serve: the same pages, with the year baked into
+`data/year.json` by running the same `prayer_logic` over every date. The settings page and
+the mute button are not copied — both exist to manage one Raspberry Pi and mean nothing
+away from it — and the home page is written with two links instead of three.
+
+Two limits worth stating before anyone asks for it:
+
+- the prayer times baked in are the ones on the device it was built from, one city
+- a page served over HTTPS cannot talk to `http://<hostname>.local`, so a public copy can
+  show prayer times but can never control a device
+
+### Files
+
+| path | |
+|---|---|
+| `applications/services/web_ui/main.py` | the server: routing, static files, the API |
+| `applications/services/web_ui/api.py` | the JSON, and the settings write |
+| `applications/services/web_ui/site/` | the pages, plain files |
+| `applications/shared/prayer_logic.py` | the prayer rules, read by the app and the website |
+| `applications/shared/settings_rules.py` | the validation, likewise |
+| `applications/shared/mute.py` | the mute, likewise |
+| `config/systemd/scheduler_web_ui.service` | the unit |
+| `logs/web_ui.log` | its log |
+| `tools/build_static_site.py` | the public build |
+| `tools/tests/test_web_ui.py` | the tests |

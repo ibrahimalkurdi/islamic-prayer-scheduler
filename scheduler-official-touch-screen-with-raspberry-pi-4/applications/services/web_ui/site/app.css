@@ -1,0 +1,433 @@
+/* The website's own look. Deliberately not a copy of the touch screen's: that one is a
+   kiosk seen from across a room, this one is a phone held in a hand. The one thing the
+   two do share is the period colours, and those arrive from the server rather than
+   living here - see api.py PERIOD_COLORS. */
+
+@font-face {
+    font-family: "Amiri";
+    src: url("/static/Amiri.ttf") format("truetype");
+    font-display: swap;
+}
+
+:root {
+    --page: #0F172A;
+    --page-2: #1B2437;
+    --card: #1E293B;
+    --border: #475569;
+    --text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+}
+
+body {
+    background: linear-gradient(180deg, var(--page) 0%, var(--page-2) 100%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: Amiri, "Noto Naskh Arabic", "Segoe UI", serif;
+    font-size: 20px;
+    line-height: 1.7;
+    padding: 1.25rem;
+    max-width: 44rem;
+    margin: 0 auto;
+}
+
+h1 {
+    font-size: 1.9rem;
+    margin: 0 0 .25rem;
+}
+
+.sub {
+    color: var(--muted);
+    font-size: .95rem;
+    margin: 0 0 1.5rem;
+}
+
+a { color: var(--accent); }
+
+/* ---- home ---- */
+.tiles {
+    display: grid;
+    gap: 1rem;
+}
+
+.tile {
+    display: block;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.35rem 1.5rem;
+    text-decoration: none;
+    color: var(--text);
+    font-size: 1.45rem;
+}
+
+.tile:active { background: #24324a; }
+
+.tile small {
+    display: block;
+    color: var(--muted);
+    font-size: .85rem;
+}
+
+/* ---- countdown ----
+   The counter is the whole screen, the way it is on the touch screen: nothing else is
+   on this page, so there is no reason for it to sit in a column with margins. The back
+   link and the mute button are corner overlays on the card itself, which is also where
+   the app puts them - see window_button_box() and paint_mute_button() in
+   prayer_times_gui/main.py. */
+body.full {
+    padding: 0;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;   /* the real height on a phone, excluding the browser's own chrome */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.counter {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .4rem;
+    position: relative;
+    padding: 3.2rem 1rem 1.2rem;
+    text-align: center;
+    transition: background-color .4s ease;
+    background: #333333;
+}
+
+/* Sized off the viewport rather than in rem, and off whichever of the two dimensions
+   runs out first, so the digits are as large as they can be on a phone held either way
+   and still fit on a desktop window. */
+.counter .digits {
+    font-size: clamp(3.5rem, min(40vw, 34vh), 20rem);
+    font-weight: 700;
+    line-height: .95;
+    font-variant-numeric: tabular-nums;
+    /* The digits are one left-to-right run inside an RTL page; without this the colon
+       can be laid out on the wrong side of them. */
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+/* Above the digits and nearly as large, which is the balance the device strikes: the
+   name's ink is 0.265 of the window height there against the digits' 0.35, and the name
+   is painted at the top (COUNTDOWN_NAME_INK_TOP_RATIO). Those are ratios of a 800x480
+   landscape window, so they are not copied literally onto a tall phone - what is kept is
+   the order and the weight relative to the digits. */
+.counter .name {
+    font-size: clamp(1.6rem, min(15vw, 11vh), 5rem);
+    line-height: 1.25;
+    max-width: 100%;
+    /* In its own em, so the two stay this far apart at every size. Amiri paints well
+       inside its line box, so without this the name's ink sits straight on the digits. */
+    margin-bottom: .22em;
+}
+
+.counter .notice {
+    font-size: clamp(.9rem, min(4.2vw, 3.4vh), 1.7rem);
+    opacity: .9;
+    min-height: 1.6em;
+}
+
+.counter .mute-state {
+    font-size: clamp(.75rem, min(3.4vw, 2.6vh), 1.1rem);
+    opacity: .75;
+    min-height: 1.5em;
+}
+
+/* The two corner controls. `color: inherit` is the point: the counter's text colour is
+   set from the period, so the glyph follows the background exactly as the app's
+   page_button_color does. */
+.corner {
+    position: absolute;
+    top: .6rem;
+    background: transparent;
+    border: none;
+    padding: .35rem .55rem;
+    line-height: 1;
+    color: inherit;
+    opacity: .7;
+    cursor: pointer;
+    text-decoration: none;
+    font: inherit;
+    font-size: clamp(1rem, 3.6vw, 1.35rem);
+}
+
+.corner:hover, .corner:focus-visible { opacity: 1; }
+
+.back-corner { inset-inline-start: .6rem; }
+
+.mute-corner {
+    inset-inline-end: .6rem;
+    display: inline-flex;
+    align-items: center;
+}
+
+.mute-corner svg {
+    width: clamp(1.9rem, 7vw, 2.6rem);
+    height: clamp(1.9rem, 7vw, 2.6rem);
+    fill: currentColor;
+}
+
+/* Muted reads as an alarm, not as a state: the same red the app uses, and drawn a shade
+   larger because the crossed-out glyph carries less ink than the plain one. */
+.mute-corner.muted {
+    color: #dc3545;
+    opacity: 1;
+}
+
+.mute-corner.muted svg {
+    width: clamp(2.2rem, 8vw, 3rem);
+    height: clamp(2.2rem, 8vw, 3rem);
+}
+
+.counter .error-line {
+    position: absolute;
+    inset-inline: 1rem;
+    bottom: .8rem;
+    font-size: .9rem;
+}
+
+/* The pill above the list: 130x38 and a 20px radius on the device, centred in its own
+   row. Its colours are set from the payload. */
+.badge-row {
+    display: flex;
+    justify-content: center;
+    margin: .2rem 0 1rem;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 8.2rem;
+    padding: .25rem 1rem;
+    border: 2px solid transparent;
+    border-radius: 20px;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    font-variant-numeric: tabular-nums;
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+/* ---- daily list ----
+   The card geometry follows PrayerCard: a 2px border and a 12px radius, and the running
+   row a little taller and bolder than the rest. The colours themselves are set from the
+   payload, never here - see the daily page. */
+.rows { display: grid; gap: .5rem; }
+
+.row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    border-radius: 12px;
+    padding: .62rem 1.1rem;
+    border: 2px solid transparent;
+    font-weight: 600;
+    /* A row is one line in a list, not a paragraph - the body's 1.7 is prose spacing and
+       pushed the seventh prayer off a short phone. */
+    line-height: 1.3;
+    transition: background .4s ease, border-color .4s ease;
+}
+
+.row .clock {
+    direction: ltr;
+    unicode-bidi: isolate;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.2rem;
+}
+
+.row .tag {
+    font-size: .8rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    padding: 0 .5rem;
+    opacity: .85;
+}
+
+/* IDLE_HEIGHT 42 -> ACTIVE_HEIGHT 52 on the device, with the fonts going up a step and
+   from DemiBold to Bold. The same shift, in the proportions a phone wants. */
+.row.running {
+    padding: .85rem 1.1rem;
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+.row.running .clock { font-size: 1.35rem; letter-spacing: 1px; }
+
+/* ---- settings ---- */
+fieldset {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    margin: 0 0 1rem;
+    padding: .75rem 1rem 1rem;
+    /* A fieldset refuses to shrink below its content's min-content width by default,
+       which is a rule of its own that no other element has. On a 360px phone that pushed
+       two of these wider than the screen and took the whole page sideways with them. */
+    min-width: 0;
+}
+
+legend { padding: 0 .4rem; font-size: 1.15rem; }
+
+/* A label is its text and its control side by side, and on a narrow phone the control
+   has to be allowed to drop under the text instead of pushing the line off the screen -
+   "عدد الدقائق قبل صلاة الفجر:" plus a number field is already wider than 360px. */
+label {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .2rem .45rem;
+    margin: .55rem 0;
+}
+
+input[type="number"], input[type="time"], input[type="date"], select {
+    background: #0F172A;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .4rem .6rem;
+    font: inherit;
+    font-size: 1rem;
+    min-width: 6rem;
+    /* Nothing in a form may be wider than the screen it is on. */
+    max-width: 100%;
+}
+
+input[type="checkbox"] {
+    width: 1.15rem;
+    height: 1.15rem;
+    flex: none;
+}
+
+.audio {
+    flex-basis: 100%;
+    min-width: 0;
+    max-height: 13rem;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .4rem .6rem;
+    margin-top: .4rem;
+    background: #0F172A;
+}
+
+.audio label { font-size: .95rem; margin: .3rem 0; }
+
+button {
+    font: inherit;
+    font-size: 1.15rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: #04202e;
+    padding: .7rem 1.6rem;
+    cursor: pointer;
+}
+
+button[disabled] { opacity: .55; cursor: default; }
+
+button.ghost {
+    background: transparent;
+    color: var(--text);
+}
+
+.bar {
+    display: flex;
+    gap: .75rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 1rem 0;
+}
+
+.note {
+    border-radius: 10px;
+    padding: .7rem 1rem;
+    margin: 1rem 0;
+    white-space: pre-line;
+    border: 1px solid var(--border);
+}
+
+.note.bad { background: #4c1d24; border-color: #b3505f; }
+.note.good { background: #14532d; border-color: #3f9668; }
+.note.busy { background: #1e293b; }
+
+.back {
+    display: inline-block;
+    margin-bottom: 1rem;
+    color: var(--muted);
+    text-decoration: none;
+}
+
+.list-nav {
+    display: flex;
+    gap: .6rem;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.hidden { display: none !important; }
+
+/* ---- short viewports ----
+   Seven prayers, the date row and the badge have to fit a phone that is only ~640 CSS
+   pixels tall once its browser chrome is taken out. Keyed on height, because that is
+   what runs out - a narrow but tall screen needs none of this. */
+@media (max-height: 820px) {
+    body {
+        font-size: 17px;
+        line-height: 1.5;
+        padding: .8rem;
+    }
+
+    h1 { font-size: 1.5rem; }
+
+    .sub { margin-bottom: .9rem; }
+
+    .back { margin-bottom: .5rem; }
+
+    .list-nav { margin-bottom: .6rem; }
+
+    .badge-row { margin: 0 0 .6rem; }
+
+    .badge {
+        min-width: 7rem;
+        padding: .15rem .8rem;
+        font-size: 1.05rem;
+    }
+
+    .rows { gap: .4rem; }
+
+    .row { padding: .5rem .9rem; }
+
+    .row .clock { font-size: 1.1rem; }
+
+    .row.running { padding: .7rem .9rem; }
+
+    .row.running .clock { font-size: 1.2rem; }
+
+    .tile { padding: 1rem 1.2rem; font-size: 1.3rem; }
+
+    fieldset { padding: .6rem .7rem .8rem; }
+
+    input[type="number"], input[type="time"], input[type="date"], select {
+        min-width: 5rem;
+        font-size: .95rem;
+    }
+}

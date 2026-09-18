@@ -1,0 +1,25 @@
+[Unit]
+Description=Prayer Scheduler Website (LAN)
+After=network.target
+
+[Service]
+User=ihms
+WorkingDirectory=/home/ihms/Desktop/scheduler
+ExecStart=/usr/bin/python3 /home/ihms/Desktop/scheduler/applications/services/web_ui/main.py
+Restart=always
+RestartSec=5
+# Port 80, so the address is plain http://<hostname>.local with nothing to remember.
+# This grants the one capability that needs, and nothing else - the process still runs as
+# the device user, not as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# wpctl reaches PipeWire through this. A desktop session sets it; a service does not, and
+# without it the mute button silently falls back to killing the player instead of muting
+# the speaker - which works, but cannot be undone. %U is the numeric uid systemd resolves
+# from User= above.
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+StandardOutput=append:/home/ihms/Desktop/scheduler/logs/web_ui.log
+StandardError=append:/home/ihms/Desktop/scheduler/logs/web_ui.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>الاعدادات</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<a class="back" href="/">→ الصفحة الرئيسية</a>
+
+<h1>الاعدادات</h1>
+<p class="sub">التغييرات تُطبَّق على هذا الجهاز فقط.</p>
+
+<div class="note bad hidden" id="error"></div>
+<div class="note good hidden" id="ok"></div>
+<div class="note busy hidden" id="busy"></div>
+
+<form id="form"></form>
+
+<div class="bar">
+    <button id="save">حفظ وتطبيق الإعدادات</button>
+</div>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+/* The form is built from what the device reports it has, not from a list written here:
+   the events, the recitations in each folder and the prayer-times files all come from
+   /api/settings. A release that adds an audio folder shows up with no change to this
+   page. */
+const SECTIONS = [
+    {
+        legend: "النوافل والأذكار",
+        fields: [
+            { enable: "enable_tahajjud_prayer", time: "tahajjud_time",
+              audio: "tahajjud_audio_checked", label: "صلاة التهجد",
+              hint: "عدد الدقائق قبل صلاة الفجر" },
+            { enable: "enable_duha_prayer", time: "duha_time",
+              audio: "duha_audio_checked", label: "صلاة الضحى",
+              hint: "عدد الدقائق قبل صلاة الظهر" },
+            { enable: "enable_athkar_elsabah", time: "athkar_elsabah_time",
+              audio: "athkar_elsabah_audio_checked", label: "أذكار الصباح",
+              hint: "عدد الدقائق بعد صلاة الفجر" },
+            { enable: "enable_athkar_elmasa", time: "athkar_elmasa_time",
+              audio: "athkar_elmasa_audio_checked", label: "أذكار المساء",
+              hint: "عدد الدقائق بعد صلاة المغرب" },
+        ],
+    },
+    {
+        legend: "القرآن الكريم",
+        fields: [
+            { enable: "enable_listen_to_quran", clock: "listen_to_quran",
+              audio: "quran_audio_checked", label: "تشغيل القرآن يوميًا" },
+            { enable: "enable_friday_quran", time: "friday_quran_time",
+              position: "friday_quran_position", audio: "friday_quran_audio_checked",
+              label: "سورة الكهف يوم الجمعة",
+              hint: "عدد الدقائق قبل أو بعد صلاة الجمعة" },
+        ],
+    },
+    {
+        legend: "الأذان",
+        fields: [
+            { enable: "enable_prayer_fajr", audio: "fajr_audio_checked", label: "الفجر" },
+            { enable: "enable_prayer_sunrise", audio: "sunrise_audio_checked", label: "الشروق" },
+            { enable: "enable_prayer_dhuhr", audio: "dhuhr_audio_checked", label: "الظهر" },
+            { enable: "enable_prayer_asr", audio: "asr_audio_checked", label: "العصر" },
+            { enable: "enable_prayer_maghrib", audio: "maghrib_audio_checked", label: "المغرب" },
+            { enable: "enable_prayer_isha", audio: "isha_audio_checked", label: "العشاء" },
+        ],
+    },
+];
+
+let state = null;
+
+function el(tag, props, children) {
+    const node = document.createElement(tag);
+    Object.assign(node, props || {});
+    for (const child of children || []) node.appendChild(child);
+    return node;
+}
+
+function audioBox(key) {
+    const info = state.audio[key];
+    const box = el("div", { className: "audio" });
+    if (!info || info.folder_missing) {
+        box.appendChild(el("div", { textContent: "مجلد الملفات غير موجود" }));
+        return box;
+    }
+    if (!info.available.length) {
+        box.appendChild(el("div", { textContent: "لا توجد ملفات صوتية في هذا المجلد" }));
+        return box;
+    }
+    for (const name of info.available) {
+        const input = el("input", { type: "checkbox", value: name,
+                                    checked: info.checked.includes(name) });
+        input.dataset.audio = key;
+        box.appendChild(el("label", {}, [input, document.createTextNode(name)]));
+    }
+    return box;
+}
+
+function buildField(field) {
+    const wrap = el("div", { style: "margin:.9rem 0" });
+
+    const toggle = el("input", { type: "checkbox", id: field.enable,
+                                 checked: !!state.values[field.enable] });
+    toggle.dataset.bool = field.enable;
+    wrap.appendChild(el("label", {}, [toggle,
+        el("strong", { textContent: field.label })]));
+
+    if (field.time) {
+        const input = el("input", { type: "number", min: "0", id: field.time,
+                                    value: state.values[field.time] });
+        input.dataset.int = field.time;
+        wrap.appendChild(el("label", {}, [
+            document.createTextNode((field.hint || "الدقائق") + ": "), input]));
+    }
+
+    if (field.clock) {
+        const input = el("input", { type: "time", id: field.clock,
+                                    value: state.values[field.clock] || "" });
+        input.dataset.text = field.clock;
+        wrap.appendChild(el("label", {}, [
+            document.createTextNode("الوقت: "), input]));
+    }
+
+    if (field.position) {
+        const select = el("select", { id: field.position });
+        select.dataset.text = field.position;
+        for (const [value, label] of [["before", "قبل الصلاة"], ["after", "بعد الصلاة"]]) {
+            const option = el("option", { value, textContent: label });
+            if (state.values[field.position] === value) option.selected = true;
+            select.appendChild(option);
+        }
+        wrap.appendChild(el("label", {}, [
+            document.createTextNode("الموضع: "), select]));
+    }
+
+    if (field.audio) wrap.appendChild(audioBox(field.audio));
+    return wrap;
+}
+
+function buildForm() {
+    const form = document.querySelector("#form");
+    form.textContent = "";
+
+    for (const section of SECTIONS) {
+        const set = el("fieldset", {}, [el("legend", { textContent: section.legend })]);
+        for (const field of section.fields) set.appendChild(buildField(field));
+        form.appendChild(set);
+    }
+
+    /* Daylight saving, and the prayer-times file in use. The file is shown but not
+       chosen here: picking one runs a conversion and rewrites the Desktop reference
+       file, which belongs with the touch screen. */
+    const extra = el("fieldset", {}, [el("legend", { textContent: "مواقيت الصلاة" })]);
+    const dst = el("input", { type: "checkbox", id: "enable_daylight_saving",
+                              checked: !!state.values.enable_daylight_saving });
+    dst.dataset.bool = "enable_daylight_saving";
+    extra.appendChild(el("label", {}, [dst,
+        document.createTextNode("تفعيل التوقيت الصيفي")]));
+
+    const csv = state.csv;
+    const name = csv.current ? csv.current.split("/").pop() : "غير محدد";
+    extra.appendChild(el("p", { className: "sub",
+        textContent: `الملف المستخدم: ${name}` +
+                     (csv.current_valid ? "" : " — الملف غير صالح") }));
+    extra.appendChild(el("p", { className: "sub",
+        textContent: "لتغيير ملف المواقيت، استخدم تطبيق الإعدادات على شاشة الجهاز." }));
+    document.querySelector("#form").appendChild(extra);
+}
+
+function collect() {
+    const payload = {};
+    for (const node of document.querySelectorAll("[data-bool]")) {
+        payload[node.dataset.bool] = node.checked;
+    }
+    for (const node of document.querySelectorAll("[data-int]")) {
+        payload[node.dataset.int] = node.value;
+    }
+    for (const node of document.querySelectorAll("[data-text]")) {
+        payload[node.dataset.text] = node.value;
+    }
+    /* A daily recitation that is switched off keeps no time, the same as the Settings
+       app writes an empty listen_to_quran when its checkbox is clear. */
+    if (payload.enable_listen_to_quran === false) payload.listen_to_quran = "";
+
+    const audio = {};
+    for (const node of document.querySelectorAll("[data-audio]")) {
+        if (!audio[node.dataset.audio]) audio[node.dataset.audio] = [];
+        if (node.checked) audio[node.dataset.audio].push(node.value);
+    }
+    Object.assign(payload, audio);
+    return payload;
+}
+
+function show(id, message) {
+    for (const box of ["error", "ok", "busy"]) {
+        document.querySelector("#" + box).classList.add("hidden");
+    }
+    if (!id) return;
+    const box = document.querySelector("#" + id);
+    box.textContent = message;
+    box.classList.remove("hidden");
+}
+
+async function pollApply() {
+    const status = await Site.json("/api/apply");
+    if (status.state === "running") {
+        setTimeout(() => pollApply().catch((e) => show("error", e.message)), 1500);
+        return;
+    }
+    document.querySelector("#save").disabled = false;
+    if (status.state === "ok") {
+        show("ok", "تم حفظ الإعدادات وتطبيقها.");
+    } else {
+        show("error", "تعذّر تطبيق الإعدادات.\n" + (status.log || ""));
+    }
+}
+
+document.querySelector("#save").addEventListener("click", async () => {
+    const button = document.querySelector("#save");
+    button.disabled = true;
+    show("busy", "جارٍ حفظ الإعدادات وتطبيقها...");
+    try {
+        await Site.json("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(collect()),
+        });
+        await pollApply();
+    } catch (e) {
+        button.disabled = false;
+        show("error", e.message);
+    }
+});
+
+Site.json("/api/settings").then((payload) => {
+    state = payload;
+    buildForm();
+}).catch((e) => show("error", e.message));
+</script>
+</body>
+</html>

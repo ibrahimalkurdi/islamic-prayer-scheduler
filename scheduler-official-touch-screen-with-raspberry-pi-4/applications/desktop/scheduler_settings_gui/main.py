@@ -73,6 +73,18 @@ RAW_IMPORTS_DIR = os.path.join(PRAYERS_CONFIG_DIR, "raw-imports")
 AL_AWAIL_CONVERT_SCRIPT = os.path.join(MAIN_DIR, "config", "scripts", "00_al_awail_convert_csv.py")
 SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
 
+# The settings rules and the audio listing live in applications/shared/, so the website
+# refuses what this app refuses, in the same words, and ticks the same files.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+from shared import audio_lists
+from shared.settings_rules import (
+    EXPECTED_CSV_HEADER, csv_is_valid_prayer_format, detect_csv_format, version_key,
+    duha_time_is_makrooh as duha_rule,
+    athkar_elsabah_conflicts_with_dhuhr as athkar_rule,
+    time_to_minutes as minutes_of,
+)
+
 # ---- updates ----
 CHECK_UPDATES_SCRIPT_FILE = os.path.join(SCRIPTS_DIR, "check_updates.sh")
 UPDATE_CONF_FILE = os.path.join(MAIN_DIR, "config", "update.conf")
@@ -131,10 +143,6 @@ ATHKAR_ELMASA_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "athkar_elmasa")
 FRIDAY_QURAN_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "friday_quran")
 
 
-EXPECTED_CSV_HEADER = [
-    "Month", "Day", "Fajr", "Sunrise",
-    "Dhuhr", "Asr", "Maghrib", "Isha"
-]
 
 INIT_SCRIPT_FILE = os.path.join(
     DESKTOP_DIR, "scheduler", "config", "scripts", "init.sh"
@@ -173,52 +181,10 @@ def scan_prayers_config_candidates():
     return candidates
 
 
-def detect_csv_format(path):
-    """Return 'ready' (already Month,Day,... format), 'al_awail' (raw semicolon
-    export, needs 00_al_awail_convert_csv.py), or 'unknown'."""
-    try:
-        with open(path, newline="", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if [h.strip() for h in stripped.split(",")] == EXPECTED_CSV_HEADER:
-                    return "ready"
-                if stripped.startswith("Date") and ";" in stripped:
-                    return "al_awail"
-    except Exception:
-        pass
-    return "unknown"
 
 
-def version_key(text):
-    """Sort key for a version string, so 1.0.10 comes after 1.0.9 rather than before it.
-
-    Tolerant of anything that is not a plain number: an unparseable segment sorts as 0
-    rather than raising, because this only ever orders a dropdown.
-    """
-    parts = []
-    for chunk in str(text).split("."):
-        digits = "".join(c for c in chunk if c.isdigit())
-        parts.append(int(digits) if digits else 0)
-    return tuple(parts)
 
 
-def csv_is_valid_prayer_format(path):
-    """Header matches EXPECTED_CSV_HEADER and there's at least one data row."""
-    if not os.path.isfile(path):
-        return False
-    try:
-        with open(path, newline="", encoding="utf-8") as f:
-            rows = list(csv.reader(f))
-        if not rows:
-            return False
-        header = [h.strip() for h in rows[0]]
-        if header != EXPECTED_CSV_HEADER:
-            return False
-        return len(rows) >= 2
-    except Exception:
-        return False
 
 # ---------------- Defaults ----------------
 TAHAJJUD_ENABLE = "enable_tahajjud_prayer"
@@ -1065,9 +1031,7 @@ class ControlApp(QMainWindow):
         return lbl
 
     def time_to_minutes(self, hhmm: str) -> int:
-        """Convert HH:MM to minutes since midnight"""
-        hour, minute = hhmm.split(":")
-        return int(hour) * 60 + int(minute)
+        return minutes_of(hhmm)
 
     # --- Convert minutes since midnight to the clock people read ---
     def minutes_to_clock(self, minutes: int) -> str:
@@ -1122,20 +1086,12 @@ class ControlApp(QMainWindow):
         actual Fajr/Dhuhr - the same times shown in the label under the spinbox.
         Shows the warning and returns True when the current value is invalid."""
         times = self.get_today_prayer_times()
-        athkar_time = times["fajr"] + self.athkar_elsabah_spin.value()
-        dhuhr = times["dhuhr"]
-
-        if athkar_time < dhuhr:
-            return False
-
-        arabic_warning(
-            self,
-            "تنبيه",
-            f"وقت أذكار الصباح ({self.minutes_to_clock(athkar_time)}) يجب أن يكون قبل "
-            f"صلاة الظهر ({self.minutes_to_clock(dhuhr)}).\n"
-            "الرجاء اختيار عدد دقائق أقل."
-        )
-        return True
+        conflicts, message = athkar_rule(self.athkar_elsabah_spin.value(),
+                                         times["fajr"], times["dhuhr"],
+                                         self.minutes_to_clock)
+        if conflicts:
+            arabic_warning(self, "تنبيه", message)
+        return conflicts
 
     def validate_athkar_elsabah_time(self):
         try:
@@ -1267,27 +1223,11 @@ class ControlApp(QMainWindow):
         """Duha must be at least 20 minutes before Dhuhr and at least 20 minutes after
         sunrise. Shows the matching warning and returns True when the current value
         falls in either makrooh window."""
-        U = self.duha_spin.value()  # user minutes before Dhuhr
-
-        if U < 20:
-            arabic_warning(
-                self,
-                "تنبيه",
-                "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة من صلاة الظهر"
-            )
-            return True
-
         sunrise, dhuhr = self.get_today_sunrise_dhuhr()
-
-        if (dhuhr - U) <= (sunrise + 20):
-            arabic_warning(
-                self,
-                "تنبيه",
-                "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة بعد طلوع الشمس"
-            )
-            return True
-
-        return False
+        makrooh, message = duha_rule(self.duha_spin.value(), sunrise, dhuhr)
+        if makrooh:
+            arabic_warning(self, "تنبيه", message)
+        return makrooh
 
     def validate_duha_time(self):
         try:
@@ -1363,7 +1303,7 @@ class ControlApp(QMainWindow):
             list_widget.addItem(item)
             return list_widget
 
-        for fname in sorted(f for f in os.listdir(directory) if f.lower().endswith(".mp3")):
+        for fname in audio_lists.available_audio(directory):
             item = QListWidgetItem(fname)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
@@ -1372,8 +1312,8 @@ class ControlApp(QMainWindow):
         return list_widget
 
     def load_audio_checked_state(self, list_widget, config_key):
-        checked_files = self.config["Settings"].get(config_key, "")
-        checked_set = {f.strip() for f in checked_files.split(",") if f.strip()}
+        checked_set = audio_lists.checked_from_config(
+            self.config["Settings"].get(config_key, ""))
 
         for i in range(list_widget.count()):
             item = list_widget.item(i)
@@ -1389,7 +1329,7 @@ class ControlApp(QMainWindow):
             if item.checkState() == Qt.Checked:
                 checked_files.append(item.text())
 
-        self.config["Settings"][config_key] = ",".join(checked_files)
+        self.config["Settings"][config_key] = audio_lists.checked_to_config(checked_files)
 
     def load_quran_audio_checked_state(self):
         """Load checked state from config.ini"""
