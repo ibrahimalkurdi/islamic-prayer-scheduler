@@ -1002,11 +1002,17 @@ if [[ $FAILED -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Anything that needs root is reported, never attempted
+# The root work a release brings with it
 # ---------------------------------------------------------------------------
-# Copying unit files into /etc or installing fonts needs root, and cron has no terminal
-# to answer a sudo prompt. Granting NOPASSWD for those would be a root grant in all but
-# name, for something that changes on first install and almost never again.
+# Packages, unit files, icons and the PipeWire config all need root, and cron has no
+# terminal to answer a sudo prompt on. They go through one root-owned helper at a fixed
+# path, named by a single NOPASSWD rule, rather than through a sudo rule for cp or apt -
+# a wildcard on either of those is an arbitrary root write, so it would be the same grant
+# with more moving parts. The helper decides for itself what is out of date, so this asks
+# first and stays silent on the nights there is nothing to do.
+#
+# A device from before the helper existed has no rule for it. There this falls back to
+# what it always did: report the change and leave it for somebody to run setup.
 ATTENTION=""
 # A forced path too large for the rollback copy is not an error, but it is the one thing
 # about this update that cannot be undone, so it is reported rather than only logged.
@@ -1014,14 +1020,32 @@ if [[ -n "$NOT_BACKED_UP" ]]; then
     ATTENTION="not backed up, cannot be rolled back: $NOT_BACKED_UP"
     log "NOTE: $ATTENTION"
 fi
-for unit in "$STAGING_DIR"/config/systemd/*.service; do
-    [[ -f "$unit" ]] || continue
-    installed_unit="/etc/systemd/system/$(basename "$unit")"
-    if [[ ! -f "$installed_unit" ]] || ! diff -q "$unit" "$installed_unit" > /dev/null 2>&1; then
-        ATTENTION="systemd unit changed: $(basename "$unit")"
-        log "NOTE: $ATTENTION - run init.sh to install it"
-    fi
-done
+SYSTEM_APPLY="/usr/local/sbin/scheduler-apply-system"
+sudo -n "$SYSTEM_APPLY" --check > /dev/null 2>&1
+case $? in
+    0)
+        : # nothing this release needs at the root level
+        ;;
+    10)
+        log "Applying the system changes this release brings..."
+        if sudo -n "$SYSTEM_APPLY" >> "$LOG_FILE" 2>&1; then
+            log "  done"
+        else
+            ATTENTION="system setup failed - open «تثبيت مكونات النظام» on the desktop"
+            log "ERROR: $ATTENTION"
+        fi
+        ;;
+    *)
+        for unit in "$STAGING_DIR"/config/systemd/*.service; do
+            [[ -f "$unit" ]] || continue
+            installed_unit="/etc/systemd/system/$(basename "$unit")"
+            if [[ ! -f "$installed_unit" ]] || ! diff -q "$unit" "$installed_unit" > /dev/null 2>&1; then
+                ATTENTION="systemd unit changed: $(basename "$unit")"
+                log "NOTE: $ATTENTION - run init.sh to install it"
+            fi
+        done
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Rebuild, restart, verify

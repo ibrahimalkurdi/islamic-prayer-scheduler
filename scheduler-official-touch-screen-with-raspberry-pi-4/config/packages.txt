@@ -1,0 +1,10 @@
+# Debian packages this release needs. One name per line; blank lines and # comments are
+# ignored. Installed by config/scripts/system_apply.sh, which takes names only - no
+# flags, no paths, no .deb files and no URLs - so a release can ask for something from
+# the distro's own repositories and nothing else.
+#
+# Already-installed packages are skipped, so adding a line here costs nothing on devices
+# that have it, and the nightly update installs it on the ones that do not.
+python3-pandas
+xdotool
+avahi-daemon

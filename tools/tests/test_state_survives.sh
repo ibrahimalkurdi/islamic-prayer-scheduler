@@ -75,6 +75,30 @@ chk "the website unit can still bind port 80" \
 chk "the website unit does not hard-code a runtime directory" \
     "$(grep -hc '^Environment=XDG_RUNTIME_DIR' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "0"
 
+# ---------------------------------------------------------------------------
+# A desktop tap must never meet a password prompt
+# ---------------------------------------------------------------------------
+# The shortcut has no terminal any more, so a sudo call that asks for a password has
+# nowhere to ask and hangs until somebody kills it. Every root command in init.sh goes
+# through root(), which skips and reports when there is no way to prompt - except the
+# helper, which is NOPASSWD and is called as sudo -n, and the three blocks that install
+# the helper and the sudoers files themselves, which are guarded by CAN_PROMPT.
+INIT="$SCH/config/scripts/init.sh"
+# Anchored on any sudo that is not sudo -n, wherever it sits on the line. The first
+# version of this check only looked at the start of a line or just after | && or ; - and
+# the two sudoers blocks call it after "|| !", so both slipped through the check *and*
+# through the rewrite that was supposed to convert them. A device with no terminal then
+# ran sudo tee, set -e killed the script, and the desktop icon reported failure.
+# [^-[:alnum:]_] keeps visudo from matching.
+stray="$(grep -n '\(^\|[^-[:alnum:]_]\)sudo ' "$INIT" \
+    | grep -v 'sudo -n \|sudo "\$@"' \
+    | grep -vc '^[0-9]*:[[:space:]]*#')"
+chk "no root command in init.sh can stall waiting for a password" "$stray" "0"
+chk "the setup shortcut opens no terminal" \
+    "$(grep -hc '^Terminal=false$' "$SCH/config/scheduler_setup.desktop" 2>/dev/null)" "1"
+chk "the helper is only ever called non-interactively" \
+    "$(grep -c 'sudo "\$SYSTEM_APPLY_INSTALLED"' "$INIT")" "0"
+
 echo
 [[ $fail -eq 0 ]] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

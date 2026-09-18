@@ -26,6 +26,37 @@ mkdir -p "$DONE_DIR" "$BASE_DIR/var/update/rollback" "$BASE_DIR/logs"
 
 echo "==== Scheduler setup started ===="
 
+# Two ways in, and they can do different amounts.
+#
+#   from a terminal - sudo has somewhere to ask, so everything here is available. This is
+#                     a first install, or a deliberate repair.
+#   from the desktop icon - no terminal, so a password prompt has nowhere to appear and
+#                     would hang forever. Only the one NOPASSWD helper can be used, which
+#                     covers packages, units, icons and restarts: everything a release is
+#                     expected to change. The rest - apt beyond the manifest, the boot
+#                     command line, the hostname, the sudoers files themselves - is one
+#                     time work from the build bench, and is skipped and reported rather
+#                     than attempted.
+#
+# sudo -n true first, because a device where the user has passwordless sudo outright
+# should use the full path whichever way it was started.
+if sudo -n true 2>/dev/null || [[ -t 0 ]]; then
+    CAN_PROMPT=1
+else
+    CAN_PROMPT=0
+fi
+
+SKIPPED_ROOT=()
+
+root() {
+    if [[ $CAN_PROMPT -eq 1 ]]; then
+        sudo "$@"
+    else
+        SKIPPED_ROOT+=("$*")
+    fi
+}
+
+
 #######################################
 # Ensure user prayer times CSV exists
 #######################################
@@ -44,43 +75,47 @@ else
     echo "User prayer times CSV already exists"
 fi
 
-#######################################
-# Install required python packages
-#######################################
-if ! dpkg -s python3-pandas >/dev/null 2>&1; then
-    echo "Installing python3-pandas..."
-    sudo apt update
-    sudo apt install -y python3-pandas
-else
-    echo "python3-pandas already installed"
+SYSTEM_APPLY_INSTALLED="/usr/local/sbin/scheduler-apply-system"
+SYSTEM_APPLY_SOURCE="$SCRIPTS_DIR/system_apply.sh"
+SYSTEM_APPLY_SUDOERS="/etc/sudoers.d/011_scheduler-apply-system"
+
+# The root half of setup, put where the update cannot reach it. Everything under
+# $BASE_DIR is replaced by check_updates.sh, so a helper left there would be rewritable
+# by the releases it exists to install; at /usr/local/sbin it is root-owned and only this
+# script - which asked for a password - ever refreshes it.
+#
+# $BASE_DIR is written into the copy rather than passed to it, so holding the sudoers
+# rule does not also mean choosing which tree gets installed from.
+if [[ -f "$SYSTEM_APPLY_SOURCE" && $CAN_PROMPT -eq 1 ]]; then
+    STAGED_APPLY="$(mktemp)"
+    sed "s|__SCHEDULER_DIR__|$BASE_DIR|g" "$SYSTEM_APPLY_SOURCE" > "$STAGED_APPLY"
+    if ! root cmp -s "$STAGED_APPLY" "$SYSTEM_APPLY_INSTALLED" 2>/dev/null; then
+        echo "Installing $SYSTEM_APPLY_INSTALLED..."
+        root install -m 0755 -o root -g root "$STAGED_APPLY" "$SYSTEM_APPLY_INSTALLED"
+    fi
+    rm -f "$STAGED_APPLY"
 fi
 
 #######################################
-# Install xdotool
+# Packages this release needs
 #######################################
-# health_check.sh uses it to ask whether the countdown actually has a window on the
-# display, which is the only evidence that separates a working app from one that died
-# on a traceback but left a process behind. Without it that check is skipped, and a
-# frozen wall-mounted screen can go unnoticed for a long time - so it is worth the one
-# small package. check_updates.sh rolls an update back when health_check.sh fails, so
-# this is what lets a broken GUI be caught automatically.
-if ! dpkg -s xdotool >/dev/null 2>&1; then
-    echo "Installing xdotool..."
-    sudo apt install -y xdotool
-else
-    echo "xdotool already installed"
-fi
+# Listed in config/packages.txt and installed by the helper, so that a release which
+# needs a new package can say so and have the nightly update put it on every device -
+# rather than needing somebody to re-run setup on each one. It costs nothing on a device
+# that already has them: the helper skips whatever dpkg reports as installed.
+echo "Installing packages this release asks for..."
+sudo -n "$SYSTEM_APPLY_INSTALLED" --packages
 
 #######################################
 # Install Amiri font
 #######################################
 if [[ ! -d "$FONT_DIR" ]]; then
     echo "Installing Amiri Arabic Font..."
-    sudo mkdir -p "$FONT_DIR"
-    sudo cp "$BASE_DIR/config/fonts/arabic-fonts/Amiri.zip" "$FONT_DIR/"
-    sudo unzip -o "$FONT_DIR/Amiri.zip" -d "$FONT_DIR"
-    sudo rm -f "$FONT_DIR/Amiri.zip" "$FONT_DIR/OFL.txt"
-    sudo fc-cache -fv
+    root mkdir -p "$FONT_DIR"
+    root cp "$BASE_DIR/config/fonts/arabic-fonts/Amiri.zip" "$FONT_DIR/"
+    root unzip -o "$FONT_DIR/Amiri.zip" -d "$FONT_DIR"
+    root rm -f "$FONT_DIR/Amiri.zip" "$FONT_DIR/OFL.txt"
+    root fc-cache -fv
 else
     echo "Amiri font already installed"
 fi
@@ -94,9 +129,9 @@ fi
 # note on its own if this is missing, so an older device is never left with a blank box.
 if [[ ! -d "$SYMBOL_FONT_DIR" ]]; then
     echo "Installing Noto Sans Symbols2 font..."
-    sudo mkdir -p "$SYMBOL_FONT_DIR"
-    sudo cp "$BASE_DIR/config/fonts/symbol-fonts/NotoSansSymbols2-Regular.ttf" "$SYMBOL_FONT_DIR/"
-    sudo fc-cache -fv
+    root mkdir -p "$SYMBOL_FONT_DIR"
+    root cp "$BASE_DIR/config/fonts/symbol-fonts/NotoSansSymbols2-Regular.ttf" "$SYMBOL_FONT_DIR/"
+    root fc-cache -fv
 else
     echo "Noto Sans Symbols2 font already installed"
 fi
@@ -155,20 +190,37 @@ SUDOERS_FILE="/etc/sudoers.d/010_scheduler-restart"
 # what would make this a root grant. Both units run as this same user and start a script
 # out of their home, so a restart runs code they could already run as themselves.
 SUDOERS_RULE="$USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart $AUDIO_EVENT_SCHEDULER_SERVICE_NAME, /bin/systemctl restart $AUDIO_EVENT_SCHEDULER_SERVICE_NAME, /usr/bin/systemctl restart $WEB_UI_SERVICE_NAME, /bin/systemctl restart $WEB_UI_SERVICE_NAME"
+# And the root half of setup, as one named path rather than as the commands it runs.
+# Listing cp or tee here instead would not narrow anything: a wildcard on either is an
+# arbitrary root write, so it would be this same grant with more steps and less of it
+# visible. What it allows is bounded by the file at that path, which the device user
+# cannot write.
+APPLY_RULE="$USER ALL=(ALL) NOPASSWD: $SYSTEM_APPLY_INSTALLED, $SYSTEM_APPLY_INSTALLED --check"
 
-if [[ ! -f "$SUDOERS_FILE" ]] || ! sudo grep -qF "$SUDOERS_RULE" "$SUDOERS_FILE"; then
-    echo "Installing sudoers rule for the scheduler restart..."
-    echo "$SUDOERS_RULE" | sudo tee "$SUDOERS_FILE" > /dev/null
-    sudo chmod 0440 "$SUDOERS_FILE"
-    # A malformed sudoers file can lock the user out of sudo entirely, so validate
-    # and remove it again if it does not parse.
-    if ! sudo visudo -cf "$SUDOERS_FILE" > /dev/null; then
+if [[ $CAN_PROMPT -eq 1 ]] && { [[ ! -f "$SYSTEM_APPLY_SUDOERS" ]] || ! root grep -qF "$APPLY_RULE" "$SYSTEM_APPLY_SUDOERS"; }; then
+    echo "Installing sudoers rule: unattended setup..."
+    echo "$APPLY_RULE" | root tee "$SYSTEM_APPLY_SUDOERS" > /dev/null
+    root chmod 0440 "$SYSTEM_APPLY_SUDOERS"
+    if ! root visudo -cf "$SYSTEM_APPLY_SUDOERS" > /dev/null; then
         echo "ERROR: generated sudoers file is invalid - removing it"
-        sudo rm -f "$SUDOERS_FILE"
+        root rm -f "$SYSTEM_APPLY_SUDOERS"
         exit 1
     fi
-else
-    echo "Sudoers rule already installed"
+fi
+
+if [[ $CAN_PROMPT -eq 1 ]] && { [[ ! -f "$SUDOERS_FILE" ]] || ! root grep -qF "$SUDOERS_RULE" "$SUDOERS_FILE"; }; then
+    echo "Installing sudoers rule: scheduler restart..."
+    echo "$SUDOERS_RULE" | root tee "$SUDOERS_FILE" > /dev/null
+    root chmod 0440 "$SUDOERS_FILE"
+    # A malformed sudoers file can lock the user out of sudo entirely, so validate
+    # and remove it again if it does not parse.
+    if ! root visudo -cf "$SUDOERS_FILE" > /dev/null; then
+        echo "ERROR: generated sudoers file is invalid - removing it"
+        root rm -f "$SUDOERS_FILE"
+        exit 1
+    fi
+elif [[ $CAN_PROMPT -eq 1 ]]; then
+    echo "Sudoers rule already installed: scheduler restart"
 fi
 
 #######################################
@@ -200,11 +252,11 @@ if [[ -f "$WIFI_CONF" ]]; then
         echo "Wi-Fi powersave already disabled in NetworkManager"
     else
         echo "Updating Wi-Fi powersave setting..."
-        echo -e "[connection]\nwifi.powersave = 2" | sudo tee "$WIFI_CONF" > /dev/null
+        echo -e "[connection]\nwifi.powersave = 2" | root tee "$WIFI_CONF" > /dev/null
     fi
 else
     echo "Creating Wi-Fi powersave config..."
-    echo -e "[connection]\nwifi.powersave = 2" | sudo tee "$WIFI_CONF" > /dev/null
+    echo -e "[connection]\nwifi.powersave = 2" | root tee "$WIFI_CONF" > /dev/null
 fi
 
 # Disable SDIO runtime power management
@@ -214,7 +266,7 @@ if grep -q "sdio_disable_runtime_pm=1" "$CMDLINE_FILE"; then
     echo "SDIO runtime power management already disabled"
 else
     echo "Disabling SDIO runtime power management..."
-    sudo sed -i '1 s/$/ sdio_disable_runtime_pm=1/' "$CMDLINE_FILE"
+    root sed -i '1 s/$/ sdio_disable_runtime_pm=1/' "$CMDLINE_FILE"
 fi
 
 # Configure brcmfmac driver options
@@ -235,7 +287,7 @@ fi
 
 if [[ "$NEED_WRITE" = true ]]; then
     echo "Configuring brcmfmac Wi-Fi driver..."
-    sudo tee "$BRCM_CONF" > /dev/null <<EOF
+    root tee "$BRCM_CONF" > /dev/null <<EOF
 options brcmfmac roamoff=1
 options brcmfmac feature_disable=0x82000
 EOF
@@ -249,20 +301,15 @@ fi
 # Every image ships as "raspberrypi", so two of these on one network answer to the same
 # raspberrypi.local and mDNS quietly renames one of them raspberrypi-2. Naming each
 # device after its own user gives it an address that is stable, memorable, and does not
-# move when the DHCP lease does. Avahi does the advertising - Raspberry Pi OS ships it,
-# but not every image does, so it is installed here if missing.
+# move when the DHCP lease does. Avahi does the advertising - it is listed in
+# config/packages.txt and enabled by scheduler-apply-system, because enabling a service
+# is root work and a run from the desktop icon has no way to ask for a password.
 #
 # Not run-once guarded: re-running init.sh should put a renamed device back.
 TARGET_HOSTNAME="${USER,,}"
 TARGET_HOSTNAME="${TARGET_HOSTNAME//[^a-z0-9-]/-}"
 TARGET_HOSTNAME="${TARGET_HOSTNAME#-}"
 TARGET_HOSTNAME="${TARGET_HOSTNAME%-}"
-
-if ! dpkg -s avahi-daemon >/dev/null 2>&1; then
-    echo "Installing avahi-daemon..."
-    sudo apt install -y avahi-daemon
-fi
-sudo systemctl enable --now avahi-daemon
 
 if [[ -z "$TARGET_HOSTNAME" || "$TARGET_HOSTNAME" == "root" ]]; then
     # Running this as root would name the device "root" and leave the real user's
@@ -272,34 +319,28 @@ elif [[ "$(hostname)" == "$TARGET_HOSTNAME" ]]; then
     echo "Hostname already $TARGET_HOSTNAME - reachable at $TARGET_HOSTNAME.local"
 else
     echo "Setting hostname to $TARGET_HOSTNAME (was $(hostname))..."
-    sudo hostnamectl set-hostname "$TARGET_HOSTNAME"
+    root hostnamectl set-hostname "$TARGET_HOSTNAME"
     # sudo looks the machine's own name up through this line. Left pointing at the old
     # name, every later sudo call sits through a DNS timeout before it runs.
     if grep -q '^127\.0\.1\.1' /etc/hosts; then
-        sudo sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$TARGET_HOSTNAME/" /etc/hosts
+        root sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$TARGET_HOSTNAME/" /etc/hosts
     else
-        printf '127.0.1.1\t%s\n' "$TARGET_HOSTNAME" | sudo tee -a /etc/hosts > /dev/null
+        printf '127.0.1.1\t%s\n' "$TARGET_HOSTNAME" | root tee -a /etc/hosts > /dev/null
     fi
-    sudo systemctl restart avahi-daemon
+    root systemctl restart avahi-daemon
     echo "Now reachable at $TARGET_HOSTNAME.local"
 fi
 
 #######################################
-# Configure PipeWire audio
+# The PipeWire conf is there to be installed
 #######################################
-echo "Configuring PipeWire audio..."
-
+# scheduler-apply-system installs it and skips quietly if it is missing, which is right
+# for the helper and wrong here: a release that shipped without this file should say so
+# while somebody is looking at the output, not leave the audio on whatever was there.
 if [[ ! -f "$PIPEWIRE_CONFIG_FILE" ]]; then
     echo "ERROR: PipeWire config file not found at $PIPEWIRE_CONFIG_FILE"
     exit 1
 fi
-
-sudo mkdir -p /etc/pipewire
-sudo cp "$PIPEWIRE_CONFIG_FILE" /etc/pipewire/
-
-echo "Restarting PipeWire services..."
-systemctl --user restart pipewire pipewire-pulse
-echo "PipeWire configured and restarted successfully"
 
 #######################################
 # Desktop shortcuts
@@ -346,65 +387,26 @@ cd - > /dev/null
 # and a device that has the marker from an earlier setup would never copy the new one -
 # leaving a shortcut with no artwork and no way to repair it short of deleting the marker
 # by hand. Copying a few PNGs is cheap enough to just do every time.
-echo "Installing icons..."
-sudo cp "$BASE_DIR/config/icons/athan-"*.png /usr/share/icons/hicolor/48x48/apps/
-sudo gtk-update-icon-cache /usr/share/icons/hicolor
-
-#######################################
-# Systemd services
-#######################################
-echo "Configuring systemd services..."
-
-# Copied on every run, not only on a first install. Putting units in /etc needs root, so
-# check_updates.sh will not do it: an update that changes or adds one only logs
-# "run init.sh to install it" and leaves the old copy in place. That advice is only true
-# if this copy happens outside the settings_applied run-once guard - inside it, a device
-# set up before the change would never pick the new unit up, which is the same trap the
-# icons above are copied every run to avoid.
-for unit in "$BASE_DIR"/config/systemd/*.service; do
-    [[ -f "$unit" ]] || continue
-    installed="$SYSTEMCTL_OS_CONFIG_DIR/$(basename "$unit")"
-    if [[ ! -f "$installed" ]] || ! diff -q "$unit" "$installed" > /dev/null 2>&1; then
-        echo "Installing $(basename "$unit")"
-        sudo cp "$unit" "$installed"
-    fi
-done
-
-# Always reload daemon to ensure systemd sees any newly copied or updated unit files
-sudo systemctl daemon-reload
-
-# 1. Audio Event Scheduler
-if ! systemctl is-enabled --quiet "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"; then
-    sudo systemctl enable "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
+echo "Installing icons and systemd services..."
+# Both are root work, and both are done by the helper rather than here, so that a tap on
+# the desktop icon and an unattended update install exactly the same things in exactly
+# the same way. Before this existed the two paths had drifted: check_updates.sh could not
+# write to /etc at all, so a release that changed a unit was delivered and left inert
+# until somebody re-ran setup.
+if ! sudo -n "$SYSTEM_APPLY_INSTALLED"; then
+    echo "ERROR: system setup did not finish - see the output above"
+    exit 1
 fi
-
-if ! systemctl is-active --quiet "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"; then
-    sudo systemctl start "$AUDIO_EVENT_SCHEDULER_SERVICE_NAME"
-fi
-
-# 2. Wi-Fi Connectivity Resolver
-if ! systemctl is-enabled --quiet "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"; then
-    sudo systemctl enable "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
-fi
-
-if ! systemctl is-active --quiet "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"; then
-    sudo systemctl start "$WIFI_CONNECTIVITY_RESOLVER_SERVICE_NAME"
-fi
-
-# 3. The website, reachable from the LAN at http://<hostname>.local
-if ! systemctl is-enabled --quiet "$WEB_UI_SERVICE_NAME"; then
-    sudo systemctl enable "$WEB_UI_SERVICE_NAME"
-fi
-
-# Restarted rather than only started, so an update that changes the pages or the unit is
-# actually serving the new ones by the time this script finishes.
-sudo systemctl restart "$WEB_UI_SERVICE_NAME"
 
 if systemctl is-active --quiet "$WEB_UI_SERVICE_NAME"; then
     echo "Website running at http://$(hostname).local"
-else
-    echo "WARNING: $WEB_UI_SERVICE_NAME did not start - see logs/web_ui.log"
 fi
+
+# After the helper, not before it: the conf it installs is the one these should come up
+# reading. Run as this user rather than through root(), because the sockets wpctl talks
+# to belong to this user's session - root's pipewire is not the one playing the athan.
+echo "Restarting PipeWire audio..."
+systemctl --user restart pipewire pipewire-pulse
 
 #######################################
 # Bluetooth auto-reconnect helper
@@ -423,13 +425,13 @@ else
 
     if [[ -n "$BT_MAC" ]]; then
         echo "Installing Bluetooth auto-reconnect for $BT_MAC..."
-        sudo tee "$BT_AUTOCONNECT_FILE" > /dev/null <<EOF
+        root tee "$BT_AUTOCONNECT_FILE" > /dev/null <<EOF
 #!/bin/bash
 bluetoothctl <<'BLUETOOTHEOF'
 connect $BT_MAC
 BLUETOOTHEOF
 EOF
-        sudo chmod +x "$BT_AUTOCONNECT_FILE"
+        root chmod +x "$BT_AUTOCONNECT_FILE"
     else
         echo "No paired Bluetooth speaker found - skipping auto-reconnect setup."
         echo "Pair one (see the Bluetooth section of the README), then re-run this script."
@@ -522,6 +524,17 @@ else
     # fails its health check is not a reason to report the device unprovisioned.
     bash "$SCRIPTS_DIR/check_updates.sh" --now \
         || echo "Update check did not complete - see logs/check_updates.log"
+fi
+
+if [[ ${#SKIPPED_ROOT[@]} -gt 0 ]]; then
+    # Not an error. These are the one-time, build-bench parts of setup, and a device that
+    # reaches them on a desktop tap has already had them done - or has never had them, in
+    # which case it needs a terminal and a password, not a louder warning here.
+    echo "Skipped, because setup was run without a way to ask for a password:"
+    for skipped in "${SKIPPED_ROOT[@]}"; do
+        echo "  $skipped"
+    done
+    echo "Run this script from a terminal if any of the above is actually needed."
 fi
 
 echo "==== Scheduler setup completed successfully ===="

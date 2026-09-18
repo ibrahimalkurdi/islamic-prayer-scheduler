@@ -463,5 +463,64 @@ rm -rf "$STUB" "$CALLED"
 
 echo "$SAVED_CONF" > "$SCH/config/update.conf"
 
+echo "23. an update applies the root work a release brings, without anyone present"
+# Units, icons and packages all need root, and 02:00 has nobody to type a password. The
+# updater asks the NOPASSWD helper whether there is anything to do and runs it if so.
+STUB="$HERE/stub-bin"
+mkdir -p "$STUB"
+APPLIED="$HERE/apply-calls"
+: > "$APPLIED"
+mkdir -p "$STUB/usr/local/sbin"
+cat > "$STUB/sudo" <<STUBEOF
+#!/bin/bash
+while [[ "\$1" == -* ]]; do shift; done
+if [[ "\$1" == "/usr/local/sbin/scheduler-apply-system" ]]; then
+    shift
+    echo "apply \$*" >> "$APPLIED"
+    # --check answers "yes, there is work", the way a release with a new unit would.
+    [[ "\${1:-}" == "--check" ]] && exit 10
+    exit 0
+fi
+exec "\$@"
+STUBEOF
+cat > "$STUB/systemctl" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$STUB/sudo" "$STUB/systemctl"
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "it asks whether there is root work to do" "$(cat "$APPLIED")" "apply --check"
+if grep -qx "apply " "$APPLIED"; then
+    echo "  ✓ and runs it when the answer is yes"
+else
+    echo "  ✗ it never ran the helper after being told there was work"; fail=1
+fi
+expect "and says so in the log" "$out" "Applying the system changes"
+
+echo "24. a device without the helper is told, not broken"
+# Every device in the field predates this. There the sudo call fails outright, which must
+# read as "cannot be asked" - the old report - and never as "nothing to do".
+: > "$APPLIED"
+cat > "$STUB/sudo" <<'STUBEOF'
+#!/bin/bash
+while [[ "$1" == -* ]]; do shift; done
+# sudo's own exit code when no rule matches the command.
+[[ "$1" == "/usr/local/sbin/scheduler-apply-system" ]] && exit 1
+exec "$@"
+STUBEOF
+chmod +x "$STUB/sudo"
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "it falls back to reporting the unit" "$out" "run init.sh to install it"
+if grep -q "Applying the system changes" <<< "$out"; then
+    echo "  ✗ it tried to apply anyway after sudo refused"; fail=1
+else
+    echo "  ✓ and does not pretend the work was done"
+fi
+rm -rf "$STUB" "$APPLIED"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
