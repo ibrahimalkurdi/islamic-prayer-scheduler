@@ -81,7 +81,7 @@ run() {
     echo $?
 }
 build() {
-    sed "s|__SCHEDULER_DIR__|$SCHED|g" "$SRC" > "$ROOT/apply.sh"
+    sed "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$SCHED\"|" "$SRC" > "$ROOT/apply.sh"
 }
 build
 
@@ -138,7 +138,7 @@ echo "6. nothing to do is quiet, and distinguishable from a failure"
 # The updater tells these apart by exit code alone, so this is the contract it relies on.
 EMPTY="$ROOT/empty"
 mkdir -p "$EMPTY/config/systemd" "$EMPTY/config/icons"
-sed "s|__SCHEDULER_DIR__|$EMPTY|g" "$SRC" > "$ROOT/apply-empty.sh"
+sed "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$EMPTY\"|" "$SRC" > "$ROOT/apply-empty.sh"
 PATH="$BIN:$PATH" bash "$ROOT/apply-empty.sh" --check > /dev/null 2>&1
 chk "exit 0 when a release brings no root work at all" "$?" "0"
 
@@ -263,12 +263,13 @@ STUB
     mkdir -p "$FAKE_SCH/var/setup_done"
     touch "$FAKE_SCH/var/setup_done/settings_applied"
 
-    set +e
+    # No set +e/-e around this. Errexit is not on in this script and never was, and
+    # switching it on at the end of the pair left every later section running under it -
+    # where the helper's deliberate exit 10 reads as a failure and kills the run.
     PATH="$UNATT:$PATH" HOME="$FAKE_HOME" DEVICE_MODEL_FILE="$ROOT/fake_model" \
         timeout 180 bash "$FAKE_SCH/config/scripts/init.sh" < /dev/null \
         > "$ROOT/unattended.log" 2>&1
     unattended_rc=$?
-    set -e
 
     chk "it finishes instead of dying on a password prompt" "$unattended_rc" "0"
     chk "nothing asked for a terminal" \
@@ -288,6 +289,13 @@ STUB
     # hostname needs a password whatever happens. Enabling it does not belong there.
     chk "nor is enabling avahi, for the same reason" \
         "$(skipped | grep -c 'enable --now avahi')" "0"
+    # This machine has no helper at /usr/local/sbin, which is the same position every
+    # existing device is in before the release that introduces self-updating. Such a
+    # device cannot replace the helper on its own, and used to say nothing at all: the
+    # install was guarded by CAN_PROMPT and simply did not happen. A silent no-op is the
+    # wrong answer for the one root job every other root job is routed through.
+    chk "a helper that could not be replaced is named on that list" \
+        "$(skipped | grep -c 'scheduler-apply-system')" "1"
 fi
 
 echo "12. the .local name keeps working without anyone typing a password"
@@ -326,6 +334,50 @@ chk "and no attempt to enable a unit that is not installed" \
     "$(grep -c 'systemctl enable --now avahi' "$CALLS")" "0"
 export SYSTEMCTL_DISABLED=""
 export ALREADY_INSTALLED=""
+
+echo "13. a release can change this script without anyone typing a password"
+# The helper sits outside the tree, so the updater cannot rsync over it. Left as it was,
+# every release that touched it would need a person at each device running init.sh with a
+# password - which is the thing all of this exists to avoid.
+mkdir -p "$EMPTY/config/scripts"
+sed 's|^UNIT_DIR=.*|UNIT_DIR="/etc/systemd/system"  # release marker|' "$SRC" \
+    > "$EMPTY/config/scripts/system_apply.sh"
+sed "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$EMPTY\"|" "$SRC" > "$ROOT/apply-self.sh"
+chmod +x "$ROOT/apply-self.sh"
+
+: > "$CALLS"
+PATH="$BIN:$PATH" bash "$ROOT/apply-self.sh" --check > "$ROOT/out.log" 2>&1
+chk "--check sees the newer copy as work pending" "$?" "10"
+chk "but leaves the installed one alone" \
+    "$(grep -c 'release marker' "$ROOT/apply-self.sh")" "0"
+
+: > "$CALLS"
+PATH="$BIN:$PATH" bash "$ROOT/apply-self.sh" > "$ROOT/out.log" 2>&1
+chk "a full run succeeds" "$?" "0"
+chk "and the script has replaced itself" \
+    "$(grep -c 'release marker' "$ROOT/apply-self.sh")" "1"
+chk "the caller's tree was baked into the new copy, not the placeholder" \
+    "$(grep -c '__SCHEDULER_DIR__' "$ROOT/apply-self.sh")" "0"
+chk "nothing is left staged beside it" \
+    "$(find "$ROOT" -maxdepth 1 -name '.scheduler-apply-system.*' | wc -l)" "0"
+chk "and it did not loop replacing itself for ever" \
+    "$(grep -c 'updating ' "$ROOT/out.log")" "1"
+
+: > "$CALLS"
+PATH="$BIN:$PATH" bash "$ROOT/apply-self.sh" --check > "$ROOT/out.log" 2>&1
+chk "once it matches, there is nothing pending" "$?" "0"
+
+# A release that ships a helper which does not parse must not replace a working one - on
+# every device at once, with nobody watching.
+printf 'if this is not bash\n' > "$EMPTY/config/scripts/system_apply.sh"
+: > "$CALLS"
+PATH="$BIN:$PATH" bash "$ROOT/apply-self.sh" > "$ROOT/out.log" 2>&1
+chk "a broken new copy is refused" "$?" "0"
+chk "the working script is still in place" \
+    "$(grep -c 'release marker' "$ROOT/apply-self.sh")" "1"
+chk "and the refusal is said out loud" \
+    "$(grep -c 'does not parse' "$ROOT/out.log")" "1"
+rm -rf "$EMPTY/config/scripts"
 
 echo
 if [[ ${#fails[@]} -eq 0 ]]; then

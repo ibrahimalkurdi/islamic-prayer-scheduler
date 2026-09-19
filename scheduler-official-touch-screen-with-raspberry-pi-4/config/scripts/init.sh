@@ -88,8 +88,15 @@ SYSTEM_APPLY_SUDOERS="/etc/sudoers.d/011_scheduler-apply-system"
 # rule does not also mean choosing which tree gets installed from.
 if [[ -f "$SYSTEM_APPLY_SOURCE" && $CAN_PROMPT -eq 1 ]]; then
     STAGED_APPLY="$(mktemp)"
-    sed "s|__SCHEDULER_DIR__|$BASE_DIR|g" "$SYSTEM_APPLY_SOURCE" > "$STAGED_APPLY"
-    if ! root cmp -s "$STAGED_APPLY" "$SYSTEM_APPLY_INSTALLED" 2>/dev/null; then
+    # The one line that carries the path, matching the helper's own bake() exactly - it
+    # restages itself on every run and compares, so a different expression here would
+    # leave the two disagreeing about a file they both write.
+    sed "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$BASE_DIR\"|" "$SYSTEM_APPLY_SOURCE" \
+        > "$STAGED_APPLY"
+    # Plain cmp, not root cmp: the installed helper is 0755, so comparing needs no
+    # privilege, and asking for a password purely to find out that nothing changed is a
+    # prompt for nothing on every terminal run.
+    if ! cmp -s "$STAGED_APPLY" "$SYSTEM_APPLY_INSTALLED" 2>/dev/null; then
         echo "Installing $SYSTEM_APPLY_INSTALLED..."
         root install -m 0755 -o root -g root "$STAGED_APPLY" "$SYSTEM_APPLY_INSTALLED"
     fi
@@ -105,6 +112,21 @@ fi
 # that already has them: the helper skips whatever dpkg reports as installed.
 echo "Installing packages this release asks for..."
 sudo -n "$SYSTEM_APPLY_INSTALLED" --packages
+
+# That call was the helper's chance to replace itself from the tree. If it still does not
+# match, this device's helper predates self-updating, so only a person can replace it -
+# and the one root job every other root job goes through should not be quietly out of
+# date. Checked here rather than beside the install above, because up there the helper
+# has not had its chance yet and the answer would be wrong on exactly the devices that
+# can fix themselves.
+if [[ $CAN_PROMPT -eq 0 && -f "$SYSTEM_APPLY_SOURCE" ]]; then
+    RECHECK_APPLY="$(mktemp)"
+    sed "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$BASE_DIR\"|" "$SYSTEM_APPLY_SOURCE" \
+        > "$RECHECK_APPLY"
+    cmp -s "$RECHECK_APPLY" "$SYSTEM_APPLY_INSTALLED" 2>/dev/null \
+        || SKIPPED_ROOT+=("install -m 0755 -o root -g root <this release's system_apply.sh> $SYSTEM_APPLY_INSTALLED")
+    rm -f "$RECHECK_APPLY"
+fi
 
 #######################################
 # Install Amiri font

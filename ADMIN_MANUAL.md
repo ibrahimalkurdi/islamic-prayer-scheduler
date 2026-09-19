@@ -29,6 +29,7 @@ Audience: whoever holds the GitHub repo and SSH access to the devices.
 16. [Emergency recovery](#16-emergency-recovery)
 17. [Known limits and quirks](#17-known-limits-and-quirks)
 18. [The website on the LAN](#18-the-website-on-the-lan)
+19. [Unattended system setup — `scheduler-apply-system`](#19-unattended-system-setup--scheduler-apply-system)
 
 ---
 
@@ -189,6 +190,11 @@ forward: pinning to an older version downgrades the device, using exactly the sa
   uncommitted work cannot be reproduced later, and this artefact goes to every device.
 - Decide which variant you are releasing. Releasing both means running the tool twice
   with two version numbers and publishing two tags.
+- **Does the new code import anything the devices do not have?** If so, add it to
+  `config/packages.txt` and the update installs it (§19.3). Nothing else picks this up —
+  code that imports a missing module will simply fail on every device.
+- **Does it change `/boot/cmdline.txt`, the fonts or the sudoers rules?** Those still need
+  a person at the device. Say so in the release notes (§19.5).
 
 ### 3.2 Build
 
@@ -525,8 +531,11 @@ cd ~/Desktop/scheduler/config/scripts && bash init.sh
 ```
 
 `init.sh` creates `config/update.conf` with the right `VARIANT` for the board, installs
-the cron line, and installs the sudoers rule the updater needs to restart the athan
-service. It is idempotent — running it again is safe.
+the cron line, and installs the sudoers rules the updater needs — one to restart the athan
+service, one for the root helper that lets later releases install packages and units
+without anyone present (§19). It is idempotent — running it again is safe.
+
+This run needs a password, and it is the only one that does.
 
 Then tell the device what it is on. **Seed a version older than the one you are about to
 roll out** — the updater stops with `Already on <x> - nothing to do` when they match, so
@@ -1082,7 +1091,7 @@ completely untouched.
 | 11 | resolve the effective path set — `(manifest.include + pointer.include) − manifest.exclude − pointer.exclude − EXTRA_EXCLUDE − DENY_LIST` — and log it in full | refuses the update if the *manifest* names protected data; a path the *pointer* names is forced past the deny-list and logged as `FORCED:` (§8b) |
 | 12 | back up those paths to `var/update/rollback/<current>/` | a forced path over 50 MB is skipped and reported as `not backed up` |
 | 13 | rsync staging → live, per `apply_mode` | restores the backup, restarts, exits 1 |
-| 14 | compare shipped `config/systemd/*.service` against `/etc/systemd/system/` | records `needs_attention`; does not stop the update |
+| 14 | ask `scheduler-apply-system --check` whether root work is pending, and run it if so (§19) | if the helper cannot be reached, falls back to comparing units and recording `needs_attention`; either way, does not stop the update |
 | 15 | run `apply_settings.sh` — rebuilds the prayer map from this device's own CSV, creates any missing `audio/<event>/` folder, and seeds `default-audio/` into `audio/` (§3.7) | logs a warning and continues |
 | 16 | restart the athan service; kill the countdown, and relaunch it on `:0` **only in cron mode** | logs a warning |
 | 17 | wait `HEALTH_SETTLE_SECONDS`, run `health_check.sh` — with `--no-gui` plus an offscreen countdown start in `--now` mode | **restores the backup, restarts, verifies again** |
@@ -1380,40 +1389,32 @@ by itself — `default-audio/`, which seeds a file once per device and never ove
 (§3.7), and an `include` in `VERSIONS.json`, which forces the path and is logged as
 `FORCED:` (§8b). Neither ever deletes: `--delete` is not applied to a forced path.
 
-**It never uses `sudo`, apart from restarting the athan service** (permitted by a narrow
-rule in `/etc/sudoers.d/010_scheduler-restart` that `init.sh` installs and validates).
+**It never runs `init.sh`,** and it still does not. `init.sh` sets the hostname, edits
+`/boot/cmdline.txt`, writes the sudoers files and rebuilds the font cache — all of it
+needing a password that cron has no way to answer.
 
-**It never runs `init.sh`.** That script installs apt packages, copies unit files into
-`/etc/systemd/system`, sets the hostname and rebuilds the font cache. From cron there is
-no terminal to answer a `sudo` prompt, so an update that needed one would hang
-indefinitely — and granting NOPASSWD for copying into `/etc/systemd/system` is a root
-grant in all but name.
+What it *does* run is one narrow root helper, `scheduler-apply-system`, which installs the
+packages and the systemd units a release asks for. That is §19, and it is the part of a
+release the updater can now finish on its own. Everything else in `init.sh` stays a job
+for a person.
 
-So root-owned drift is **detected and reported, never applied**. If a release ships a
-changed `config/systemd/*.service`, the updater installs everything else, then records:
+Root-owned drift outside the helper's remit is still **detected and reported, never
+applied**. When the helper cannot be reached at all — a device that has never had
+`init.sh` run on it, for instance — the updater falls back to the old behaviour and
+records:
 
 ```json
 "needs_attention": "systemd unit changed: audio_event_scheduler.service"
 ```
 
 The Settings app shows an amber banner — *هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة
-«تثبيت مكونات النظام» من سطح المكتب* — and the log names the file.
+«تثبيت مكونات النظام» من سطح المكتب* — and the log names the file. Tapping that icon
+finishes the job; see §19.2 for what happens when it is tapped on a device that has never
+been set up.
 
-The owner can finish it themselves: **تثبيت مكونات النظام** on the Desktop runs `init.sh` in a
-terminal window that stays open, so the sudo prompt is answerable and the report is
-readable. That is the only step of this system that needs a person, and it no longer needs
-a person who knows SSH. Or do it yourself:
-
-```bash
-ssh louay.local 'cd ~/Desktop/scheduler/config/scripts && bash init.sh'
-```
-
-Unit files change on first install and almost never afterwards, so the cost of that human
-step is low and the alternative is a permanent root grant on every device.
-
-Note that only **systemd units** are compared this way. A release that changes fonts or
-the sudoers rule installs its files but raises no banner — mention `init.sh` in the
-release notes when you cut one of those.
+Note that only **packages and systemd units** are applied this way. A release that changes
+fonts, `/boot/cmdline.txt` or the sudoers rules themselves installs its files but cannot
+put them into effect — mention `init.sh` in the release notes when you cut one of those.
 
 ---
 
@@ -1431,9 +1432,10 @@ release notes when you cut one of those.
 | `the version pointer asks to replace '<path>', which is device data` | `include` in `VERSIONS.json` names a protected path | remove it. Nothing on the device was touched |
 | A file keeps being replaced despite an exclude | the exclude does not match the include entry exactly — a directory entry needs its trailing slash | read the `Protecting:` line in the log, which lists all four layers |
 | A path in the pointer's `include` never arrives | `skipping <path> - not in this release` — the archive does not contain it | the pointer can only claim paths the release actually ships |
-| `systemd unit changed: <name> - run init.sh to install it` | a release added or changed a unit. The updater never writes to `/etc`, because that needs root and it runs unattended | `bash ~/Desktop/scheduler/config/scripts/init.sh` on that device, once. It is idempotent |
+| `systemd unit changed: <name> - run init.sh to install it` | a release added or changed a unit **and** `scheduler-apply-system` could not be reached — normally a device that has never had `init.sh` run on it (§19.6) | `bash ~/Desktop/scheduler/config/scripts/init.sh` on that device, once, with a password. Afterwards this applies itself |
+| `system setup failed - open «تثبيت مكونات النظام» on the desktop` | the helper was reachable and ran, but something in it failed — most often apt could not reach the network | `sudo -n /usr/local/sbin/scheduler-apply-system` on the device and read the output; `logs/update.log` has the run that failed |
 | `http://<hostname>.local` does not open, but the device is up | either the service is not installed yet, or the phone cannot resolve `.local` | `systemctl status scheduler_web_ui.service`; if it is missing, run `init.sh` (§18). If it is running, try the device's IP — some older Android phones have no mDNS |
-| The website's mute button silences the athan but cannot unmute it | `wpctl` could not reach PipeWire, so the player was killed instead of the speaker muted. Almost always a missing `XDG_RUNTIME_DIR` in the unit | `systemctl cat scheduler_web_ui.service \| grep XDG_RUNTIME_DIR` — it must be there. Re-run `init.sh` to reinstall the unit (§18) |
+| The website's mute button silences the athan but cannot unmute it | `wpctl` could not reach PipeWire, so the player was killed instead of the speaker muted | `systemctl cat scheduler_web_ui.service \| grep XDG_RUNTIME_DIR` — it must **not** be there. The unit once set it to `/run/user/%U`, and on real hardware systemd resolved `%U` to `0` despite `User=`, so the service looked for PipeWire under root's runtime directory and every mute fell back to killing the player. `mute.py` derives it from the running process's own uid instead. Re-run `init.sh` to reinstall the unit (§18) |
 | The pointer says 1.2.0 but the device logs `no manifest for pi4-v1.2.0` | the pointer names a version that was never published, or the release was deleted | publish it, or point back at a version that exists |
 | `ERROR: this release is for 'zero', this device is 'pi4'` | wrong variant published, or wrong tag | fix the release; the device was never touched |
 | `update.conf says VARIANT=pi4 but this is a zero` | an SD card cloned from the other device | correct `VARIANT` in `update.conf` — and be sure the card really is running the right build |
@@ -1545,8 +1547,10 @@ the device or your own backup.
   things to check before handover.
 - **A failed release retries every night** until you pin the device or publish a fix.
   Each retry re-downloads the archive.
-- **Only systemd units are checked for root-owned drift** — not fonts, not the sudoers
-  rule. See [§14](#14-things-this-system-deliberately-will-not-do).
+- **Packages and systemd units are applied unattended; nothing else is** — not fonts, not
+  `/boot/cmdline.txt`, not the sudoers rules. A release that changes one of those installs
+  the file but cannot put it into effect, and raises no banner either. Say so in the
+  release notes. See [§19.5](#195-what-is-still-skipped).
 - **The whole archive is downloaded every time**, ~4 MB, of which fonts and icons are most
   of it and change almost never. There are no delta updates.
 - **The GitHub API is called unauthenticated**, which allows 60 requests an hour per IP.
@@ -1644,20 +1648,20 @@ colour in the app and forget the website, and that test fails with both values.
 
 ### Installing it on a device that predates it
 
-An update delivers the files but cannot install the unit — `/etc` needs root, and the
-nightly check runs unattended with no terminal to answer a sudo prompt on
-(`check_updates.sh:992`). **No SSH visit is needed for this, and no admin has to be
-involved.** The device owner completes it from the touch screen:
+On a device set up since §19, the nightly check installs the files and then installs and
+starts the unit itself, through `scheduler-apply-system`. Nothing is needed from anyone.
+
+On a device that predates it, the update delivers the files but cannot install the unit,
+and **no SSH visit is needed** — the device owner completes it from the touch screen:
 
 1. the nightly check installs the files and records `needs_attention`
 2. the Settings app shows, in Arabic: *هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة
    «تثبيت مكونات النظام» من سطح المكتب*
-3. the owner taps **تثبيت مكونات النظام** on the desktop, which runs
-   `init_from_desktop.sh` in a terminal so sudo can prompt, and reports success or
-   failure in Arabic when it finishes
+3. the owner taps **تثبيت مكونات النظام** on the desktop, which runs `init.sh` — in a
+   terminal, for this first run only, so the password can be typed — and reports success
+   or failure in Arabic when it finishes
 
-That is the whole rollout. The same path handles every future release that adds or
-changes a unit; nothing here is specific to the website.
+That also installs the helper, so this is the last release that device needs a person for.
 
 Over SSH, if you would rather not wait for the owner:
 
@@ -1748,3 +1752,166 @@ Two limits worth stating before anyone asks for it:
 | `logs/web_ui.log` | its log |
 | `tools/build_static_site.py` | the public build |
 | `tools/tests/test_web_ui.py` | the tests |
+
+---
+
+## 19. Unattended system setup — `scheduler-apply-system`
+
+Some releases need something done as root: a new systemd unit, or an apt package the new
+code imports. Until this existed, those releases were delivered and then sat there —
+every device needed a person to walk up to it, open a terminal and type a password.
+
+This section is the mechanism that removes that step, and the limits on it.
+
+### 19.1 The shape of it
+
+```
+config/packages.txt          what apt should install, one name per line
+config/scripts/system_apply.sh   the root half of setup, kept in the tree
+/usr/local/sbin/scheduler-apply-system   the copy that actually runs, root:root 0755
+/etc/sudoers.d/011_scheduler-apply-system  the grant: that one path, no password
+```
+
+`init.sh` bakes the scheduler directory into a copy of `system_apply.sh` and installs it
+at that fixed path. From then on the device user can run **that file and nothing else** as
+root without a password, and the file takes no path from its caller — so holding the grant
+is not the same as choosing what gets installed.
+
+It does four things: install the packages named in `config/packages.txt`, install
+`config/systemd/*.service` into `/etc/systemd/system`, install `config/icons/athan-*.png`
+and `config/pipewire-pulse.conf`, and make sure `avahi-daemon` is enabled so the `.local`
+name keeps answering. Then it reloads systemd and enables and restarts the units.
+
+**What this grants, said plainly.** The helper installs whatever `.service` files a
+release ships and starts them, and a systemd unit runs as root. So this is root by way of
+the update channel. That is the cost of installing units unattended, and it is why the
+rest of `init.sh` — apt beyond the manifest, `/boot/cmdline.txt`, the hostname, the
+sudoers files themselves — is deliberately not in it.
+
+Listing raw commands in the sudoers file instead would not have been narrower. A wildcard
+on `cp` or `tee` is an arbitrary root write; it would be this same grant with more steps
+and less of it visible.
+
+### 19.2 Who calls it, and when
+
+| caller | how |
+|---|---|
+| `check_updates.sh`, after an update | `--check`; if that says work is pending, runs it |
+| **تثبيت مكونات النظام** on the Desktop | `init.sh`, which calls it directly |
+| `init.sh` from a terminal | the same, plus the work that needs a password |
+
+`--check` answers *would anything change?* without changing it. It exits **0** for nothing
+to do and **10** for work pending — a distinct code, because every other non-zero exit
+means the question could not be asked at all, which is a different situation and gets a
+different answer. That is the contract the updater relies on: on `0` it stays quiet, on
+`10` it applies, on anything else it falls back to the amber banner of §14.
+
+**The desktop icon opens no terminal any more.** It runs setup in the background and
+reports with a dialog — either *تم تثبيت مكونات النظام بنجاح* or the error, with the last
+lines of the log behind **التفاصيل**. The full log is `logs/setup.log`.
+
+One exception, and it is the bootstrap: on a device where the helper is not installed yet,
+there is nothing to run without a password, so the icon **does** open a terminal for that
+one run. After it succeeds, every later tap is silent.
+
+### 19.3 The package manifest
+
+`config/packages.txt` is a list of names, one per line, `#` for comments:
+
+```
+python3-pandas
+xdotool
+avahi-daemon
+```
+
+Names are matched against `^[a-z0-9][a-z0-9+.-]*$` and nothing else reaches apt: no
+leading dash, so no options; no slash, so no local `.deb` and no path; no space or colon,
+so nothing can be appended to the command. A name that fails is skipped with a warning in
+the log rather than quietly repaired — a manifest edited into something valid is worse
+than one rejected out loud.
+
+A release can name anything in the distro's repositories, which is real power. It cannot
+turn this into *run apt however you like*.
+
+Already-installed packages are skipped, so the file is a statement of what the device
+needs, not a list of what is new. Add to it; do not rewrite it per release.
+
+### 19.4 It updates itself
+
+The helper lives outside `~/Desktop/scheduler`, so the updater cannot rsync over it. Left
+at that, every release that changed the helper would need a person at every device again —
+the exact problem this was built to solve.
+
+So on each run it compares itself against the copy in the tree, and if they differ it
+replaces itself and hands over to the new one. A staged copy that does not parse is
+refused and the working one kept, because a broken helper shipped to every device at once,
+unattended, is the failure that has no way back.
+
+This grants nothing new: a channel that can install a `.service` file can already replace
+this file *through* the unit it installs.
+
+**The one-time cost.** A device running a helper from before self-updating existed cannot
+update it by itself. Those devices need one run of `init.sh` with a password — once, ever.
+See §19.6.
+
+Such a device says so rather than leaving it to be noticed. After the helper has had its
+chance to replace itself, `init.sh` compares the two once more, and if they still differ on
+a run with no way to prompt, the install goes on the skipped list:
+
+```
+Skipped, because setup was run without a way to ask for a password:
+  install -m 0755 -o root -g root <this release's system_apply.sh> /usr/local/sbin/scheduler-apply-system
+```
+
+The comparison happens *after* the helper has run, not beside the install that starts the
+script. Up there a self-updating device has not yet had its turn, and would be reported as
+stale a moment before fixing itself.
+
+### 19.5 What is still skipped
+
+Run without a way to ask for a password, `init.sh` does everything it can and lists the
+rest:
+
+```
+Skipped, because setup was run without a way to ask for a password:
+  hostnamectl set-hostname louay
+Run this script from a terminal if any of the above is actually needed.
+```
+
+That list is the honest boundary of what a desktop tap can do. Anything on it needs a
+terminal run. Fonts are the one to watch: a release that adds an Arabic font installs the
+file but cannot rebuild the font cache, so it will not appear until someone runs `init.sh`
+properly.
+
+An empty list is the normal state, and on a converged device nothing is printed at all.
+
+### 19.6 Rolling this out to existing devices
+
+Every device in the field predates the helper, so each needs **one** password run:
+
+```bash
+ssh louay.local 'cd ~/Desktop/scheduler/config/scripts && bash init.sh'
+```
+
+Or, at the device, tap **تثبيت مكونات النظام** — with no helper installed it opens a
+terminal for that one run, and the password can be typed there.
+
+Check it took:
+
+```bash
+ssh louay.local 'sudo -n /usr/local/sbin/scheduler-apply-system --check; echo "exit: $?"'
+```
+
+`0` or `10` means the grant is in place. Anything else means it is not, and that device
+will keep raising the amber banner instead of applying releases itself.
+
+### 19.7 Files
+
+| path | |
+|---|---|
+| `config/packages.txt` | the apt manifest |
+| `config/scripts/system_apply.sh` | the helper, as shipped |
+| `config/scripts/init_from_desktop.sh` | the launcher behind the desktop icon |
+| `config/scheduler_setup.desktop` | the icon itself, `Terminal=false` |
+| `logs/setup.log` | every run from the icon, with its exit code |
+| `tools/tests/test_system_apply.sh` | the tests, including an unattended `init.sh` run |

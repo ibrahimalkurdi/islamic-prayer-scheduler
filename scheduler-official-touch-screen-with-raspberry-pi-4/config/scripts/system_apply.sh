@@ -5,9 +5,10 @@
 # not writable by the device user, with a sudoers rule naming that one path. Two things
 # follow from where it lives, and both are the point:
 #
-#   - a release cannot rewrite it. Everything under ~/Desktop/scheduler is replaced by
-#     the updater, so a helper kept there would be editable by whatever it is meant to be
-#     guarding. Refreshing this copy needs a password, through init.sh.
+#   - the device user cannot edit it. Everything under ~/Desktop/scheduler is theirs to
+#     write, so a helper kept there would be editable by whatever it is meant to be
+#     guarding. A release can still replace it, through the self-update below - but that
+#     goes past root's own copy of the file, not around it.
 #   - it takes no path from its caller. SCHEDULER_DIR below is written in by init.sh at
 #     install time, so being able to run it is not the same as being able to choose what
 #     it reads.
@@ -52,6 +53,62 @@ note() {
 differs() {
     [[ ! -f "$2" ]] || ! diff -q "$1" "$2" > /dev/null 2>&1
 }
+
+# Write the scheduler path into a copy of this script, on the one line that carries it.
+# Anchored on that line rather than substituting the placeholder wherever it appears: this
+# file once did the latter, and the substitution also rewrote the copy of the placeholder
+# inside the substitution itself. An installed helper could then no longer recognise the
+# placeholder, so the next release it staged kept the literal placeholder as its scheduler
+# directory and every path built from it pointed at nothing.
+#
+# init.sh stages the first install with the same expression, so the file it writes and the
+# file this produces are byte-identical and the check below stays quiet.
+bake() {
+    sed "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$1\"|" "$2"
+}
+
+# ---------------------------------------------------------------------------
+# Keep this file current
+# ---------------------------------------------------------------------------
+# Without this, a release that changes this script needs somebody sitting at every device
+# typing a password into init.sh - which is the thing the mechanism exists to avoid. So
+# the first thing a run does is ask whether the tree holds a different copy of itself, and
+# if it does, step aside for it.
+#
+# This grants nothing that was not already granted. Installing a .service file means root
+# by way of the update channel, so a channel able to do that can already replace this file
+# through the unit it installs. What self-updating buys is that the mechanism keeps
+# working as it changes, rather than freezing at whatever shipped first.
+# Its own path, rather than the install location written out again. Not a way in for the
+# caller: sudo runs the file the rule names, so this resolves to that file - and anyone
+# able to run this script from somewhere else is already root by other means.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+SELF_SRC="$SCHEDULER_DIR/config/scripts/system_apply.sh"
+if [[ -z "${SCHEDULER_APPLY_REEXEC:-}" && -f "$SELF_SRC" && -f "$SELF" ]]; then
+    # Staged beside the target, not in /tmp: mv is only atomic within one filesystem.
+    staged="$(mktemp "$(dirname "$SELF")/.scheduler-apply-system.XXXXXX")"
+    bake "$SCHEDULER_DIR" "$SELF_SRC" > "$staged"
+    if ! cmp -s "$staged" "$SELF"; then
+        if ! bash -n "$staged" 2> /dev/null; then
+            # A release shipping a helper that does not parse would otherwise replace a
+            # working one with a broken one, on every device, unattended.
+            echo "WARNING: the new scheduler-apply-system does not parse - keeping the installed one" >&2
+        else
+            note "updating $SELF"
+            if [[ $CHECK_ONLY -eq 0 ]]; then
+                chmod 0755 "$staged"
+                chown root:root "$staged"
+                # mv rather than cp, because this file is being read as it runs: writing
+                # over it in place leaves bash resuming at a byte offset into a different
+                # script. A rename swaps the directory entry and leaves the open one alone.
+                mv -f "$staged" "$SELF" || exit 1
+                export SCHEDULER_APPLY_REEXEC=1
+                exec "$SELF" "$@"
+            fi
+        fi
+    fi
+    rm -f "$staged"
+fi
 
 # ---------------------------------------------------------------------------
 # Packages the release asks for

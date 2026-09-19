@@ -161,6 +161,13 @@ Run:
 ```
 bash ~/Desktop/scheduler/config/scripts/init.sh
 ```
+
+Run this from a terminal the first time. It asks for your password, and part of what it
+does with it is install a small root helper plus a `sudoers.d` rule naming that one file
+— which is what lets later releases install packages and services on their own, with
+nobody present. After this, the **تثبيت مكونات النظام** icon on the Desktop re-runs setup
+without asking for anything, and reports in a dialog rather than a terminal window.
+
 ---
 
 ### Step 8: Verify Cron Jobs (Check Step)
@@ -389,6 +396,12 @@ After installing, the updater rebuilds the prayer map from **your** CSV, restart
 apps, and runs `config/scripts/health_check.sh`. If that fails it puts the previous
 version back automatically and restarts again, so a bad release cannot leave a
 wall-mounted screen dead.
+
+If the release needs something installed as root — a new background service, or a system
+package the new code uses — the updater does that too, through the helper installed in
+Step 7. A handful of things still need a person at the device: fonts, `/boot/cmdline.txt`
+and the sudoers rules themselves. Those are listed in `logs/setup.log` under *Skipped*,
+and the release notes will say so.
 
 ### Controlling updates on a device
 
