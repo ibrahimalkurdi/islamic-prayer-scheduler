@@ -953,6 +953,38 @@ done
 RSYNC_FLAGS=(-a --checksum)
 [[ "$EFFECTIVE_MODE" == "full" ]] && RSYNC_FLAGS+=(--delete)
 
+
+# ---------------------------------------------------------------------------
+# Steps a release brings of its own
+# ---------------------------------------------------------------------------
+# Neither script is shipped. A release that needs a step the updater has no concept of -
+# making a directory, renaming something, moving a file out of the way before the new
+# one lands - adds the one it needs, and it runs. A release that needs nothing adds
+# nothing and nothing happens.
+#
+# Both are taken from the incoming release, not the live tree, so a release carries its
+# own steps rather than depending on what the previous one happened to leave behind.
+# They run as the device user; anything needing root goes through the helper, the same
+# as every other part of an update.
+run_release_hook() { # $1 pre|post
+    local hook="$STAGING_DIR/config/scripts/$1_update.sh"
+    [[ -f "$hook" ]] || return 0
+    log "Running this release's $1_update.sh..."
+    if SCHEDULER_UPDATE_FROM="$INSTALLED" SCHEDULER_UPDATE_TO="$TARGET" \
+       SCHEDULER_DIR="$MAIN_DIR" bash "$hook" < /dev/null >> "$LOG_FILE" 2>&1; then
+        log "  done"
+        return 0
+    fi
+    log "ERROR: $1_update.sh failed"
+    return 1
+}
+
+# Before anything on the device is touched, so a failure here costs nothing to undo.
+if ! run_release_hook pre; then
+    write_state "error" "pre_update.sh failed, $INSTALLED left in place" ""
+    exit 1
+fi
+
 log "Installing $TARGET..."
 FAILED=0
 for inc in "${EFFECTIVE_INCLUDES[@]}"; do
@@ -1046,6 +1078,62 @@ case $? in
         done
         ;;
 esac
+
+# After the files are in and before the health check, so a release's own steps are part
+# of what gets judged - and part of what the rollback undoes if the judgement goes badly.
+if ! run_release_hook post; then
+    log "ERROR: putting $INSTALLED back"
+    restore_backup "$INSTALLED"
+    restart_apps
+    write_state "error" "post_update.sh failed, restored $INSTALLED" ""
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# The setup work a release brings with it
+# ---------------------------------------------------------------------------
+# Not everything a release changes is a file, a package or a unit. A new desktop
+# shortcut, a cron entry, a font, an autostart line - those live in init.sh, which is the
+# device user's half of setup and needs no password now that its root half goes through
+# the helper. So a release that changes any of them can ask for setup to be run, and it
+# happens here with nobody present.
+#
+# A release asks by shipping config/needs_init with a line naming itself. The stamp in
+# var/ records what was last run, so a device runs setup once per release that asks for
+# it rather than on every nightly check - and a device that has been away for three
+# releases runs it once on the way back, not three times.
+#
+# Read from the incoming release, not the live tree, for the same reason the hooks are.
+# A device tested against this read from its own config/ and never fired, because the
+# manifest's include list names the config/ entries a release may replace and a file
+# added later is deliberately not among them - that list is what stops an old updater
+# clobbering a state file it has never heard of. So the release's own copy is the only
+# one that can be trusted to be this release's.
+NEEDS_INIT_FILE="$STAGING_DIR/config/needs_init"
+INIT_STAMP_FILE="$VAR_DIR/init_ran_for"
+if [[ -f "$NEEDS_INIT_FILE" ]]; then
+    # Comments skipped, because this file is edited by hand when a release is cut and a
+    # line saying what it is for is worth more than the byte it costs.
+    needs_init="$(grep -v '^[[:space:]]*#' "$NEEDS_INIT_FILE" | head -n 1 | tr -d '[:space:]')"
+    init_ran_for="$(head -n 1 "$INIT_STAMP_FILE" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -n "$needs_init" && "$needs_init" != "$init_ran_for" ]]; then
+        log "This release asks for setup to be run ($needs_init)..."
+        # SCHEDULER_INIT_NO_UPDATE_CHECK stops the two scripts calling each other: the
+        # last thing init.sh does is check for updates, and being started *by* the
+        # updater is the one time that must not happen.
+        if SCHEDULER_INIT_NO_UPDATE_CHECK=1 bash "$SCRIPTS_DIR/init.sh" \
+                < /dev/null >> "$LOG_FILE" 2>&1; then
+            echo "$needs_init" > "$INIT_STAMP_FILE"
+            log "  done"
+        else
+            # Not fatal, and deliberately not stamped: the files landed and the services
+            # below still get their chance, and an unstamped device tries again on the
+            # next run rather than carrying the gap forward silently.
+            ATTENTION="setup did not finish - open «تثبيت مكونات النظام» on the desktop"
+            log "ERROR: $ATTENTION"
+        fi
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Rebuild, restart, verify

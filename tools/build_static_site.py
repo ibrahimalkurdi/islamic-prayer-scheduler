@@ -49,6 +49,13 @@ import api  # noqa: E402
 DEVICE_ONLY = ("settings",)
 
 FONT_MEMBER = "Amiri-Regular.ttf"
+# Mirrors ICONS in the web server, so the two deployments name the same files the same
+# way and a page's <link> works unchanged in both.
+ICONS = {
+    "icon-32.png": "athan-app-icon-32.png",
+    "icon-128.png": "athan-app-icon-128.png",
+    "icon-256.png": "athan-app-icon-256.png",
+}
 
 
 def build(scheduler_dir, out_dir, year):
@@ -72,8 +79,19 @@ def build(scheduler_dir, out_dir, year):
     # already look for them.
     static = os.path.join(out_dir, "static")
     os.makedirs(static, exist_ok=True)
-    for name in ("app.css", "app.js", "config.js"):
+    for name in ("app.css", "app.js", "config.js", "manifest.webmanifest"):
         shutil.move(os.path.join(out_dir, name), os.path.join(static, name))
+
+    # The icons live in config/icons/ on a device and are served from there, so copytree
+    # above did not bring them. Without this the pages still render, but a phone adding
+    # the static copy to its home screen gets a blank glyph - the thing the icons are
+    # for. Named as the pages ask for them, not as they are stored.
+    for url_name, source in ICONS.items():
+        path = os.path.join(scheduler_dir, "config", "icons", source)
+        try:
+            shutil.copyfile(path, os.path.join(static, url_name))
+        except OSError:
+            print(f"WARNING: {source} not found - the home-screen icon will be blank")
 
     font = read_font(scheduler_dir)
     if font:

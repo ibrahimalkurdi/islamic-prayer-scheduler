@@ -1,8 +1,14 @@
 @reboot /usr/local/bin/bt-autoconnect.sh
-00 00 * * * echo  > $HOME/Desktop/scheduler/logs/audio_event_scheduler.log
-00 00 * * * echo  > $HOME/Desktop/scheduler/logs/play_audio.log
+# The logs are not emptied here any more. Three cron lines used to blank three named
+# files at midnight, which left the two that grew fastest - check_updates.log and
+# web_ui.log - growing without limit because nobody had thought to name them. They are
+# rotated instead, by /etc/logrotate.d/scheduler, which config/scripts/system_apply.sh
+# installs and which matches logs/*.log, so a log a later release starts writing is
+# covered the day it appears.
+#
+# This one stays. executed-events.json is not a log: it is the record of what has already
+# been played today, and emptying it at midnight is what starts the new day clean.
 00 00 * * * echo '[]' > $HOME/Desktop/scheduler/config/executed-events.json
-00 00 * * * echo  > $HOME/Desktop/scheduler/logs/wifi_connectivity_resolver.log
 # Rebuild the schedule each new year so daylight-saving dates stay correct
 05 00 1 1 * bash $HOME/Desktop/scheduler/config/scripts/apply_settings.sh >> $HOME/Desktop/scheduler/logs/apply_settings.log 2>&1
 # Check for a published update. 02:00 sits between the latest Isha and the earliest

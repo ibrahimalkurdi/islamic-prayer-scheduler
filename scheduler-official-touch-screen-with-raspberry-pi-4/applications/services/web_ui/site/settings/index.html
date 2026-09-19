@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>الاعدادات</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icon-256.png" sizes="256x256">
+<link rel="apple-touch-icon" href="/static/icon-256.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0F172A">
 </head>
 <body>
 
@@ -15,7 +20,11 @@
 
 <div class="note bad hidden" id="error"></div>
 <div class="note good hidden" id="ok"></div>
-<div class="note busy hidden" id="busy"></div>
+
+<div class="overlay hidden" id="working" role="status" aria-live="polite">
+    <div class="spinner"></div>
+    <p>جارٍ حفظ الإعدادات وتطبيقها...</p>
+</div>
 
 <form id="form"></form>
 
@@ -197,21 +206,41 @@ function collect() {
 }
 
 function show(id, message) {
-    for (const box of ["error", "ok", "busy"]) {
+    for (const box of ["error", "ok"]) {
         document.querySelector("#" + box).classList.add("hidden");
     }
     if (!id) return;
     const box = document.querySelector("#" + id);
     box.textContent = message;
     box.classList.remove("hidden");
+    /* These sit above the form and the save button sits below it, so on a phone the
+       answer to a tap lands off the top of the screen and reads as nothing having
+       happened at all. Bring it to the user rather than making them scroll for it.
+       Only results reach here - while the apply is running the overlay is up, and
+       scrolling the page about underneath it would be motion with nothing to read.
+       Honours prefers-reduced-motion, since this moves the page under a finger. */
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    box.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+}
+
+function working(on) {
+    document.querySelector("#working").classList.toggle("hidden", !on);
 }
 
 async function pollApply() {
     const status = await Site.json("/api/apply");
     if (status.state === "running") {
-        setTimeout(() => pollApply().catch((e) => show("error", e.message)), 1500);
+        /* The overlay covers the page, so anything that throws here has to take it down
+           as well as report - otherwise a poll that fails mid-apply leaves a spinner
+           over a page nobody can touch. */
+        setTimeout(() => pollApply().catch((e) => {
+            working(false);
+            document.querySelector("#save").disabled = false;
+            show("error", e.message);
+        }), 1500);
         return;
     }
+    working(false);
     document.querySelector("#save").disabled = false;
     if (status.state === "ok") {
         show("ok", "تم حفظ الإعدادات وتطبيقها.");
@@ -223,7 +252,8 @@ async function pollApply() {
 document.querySelector("#save").addEventListener("click", async () => {
     const button = document.querySelector("#save");
     button.disabled = true;
-    show("busy", "جارٍ حفظ الإعدادات وتطبيقها...");
+    show(null);
+    working(true);
     try {
         await Site.json("/api/settings", {
             method: "POST",
@@ -232,6 +262,7 @@ document.querySelector("#save").addEventListener("click", async () => {
         });
         await pollApply();
     } catch (e) {
+        working(false);
         button.disabled = false;
         show("error", e.message);
     }

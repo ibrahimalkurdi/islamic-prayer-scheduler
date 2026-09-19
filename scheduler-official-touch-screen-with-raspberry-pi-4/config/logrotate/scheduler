@@ -1,0 +1,27 @@
+# Installed to /etc/logrotate.d/scheduler by config/scripts/system_apply.sh, which fills
+# in the two placeholders from the tree it is bound to. Do not edit the installed copy -
+# the helper rewrites it whenever the release's version differs.
+#
+# This replaced four cron lines that emptied four named logs at midnight. A glob instead
+# of names, because the two largest logs on the device were the two nobody had thought
+# to name: check_updates.log and web_ui.log, both growing without limit since the day
+# they were added. Anything a later release starts writing is covered the moment it
+# appears, rather than the day somebody notices the card is full.
+__SCHEDULER_DIR__/logs/*.log {
+    # Rotate as the device user, not as root. The logs directory is writable by that
+    # user, and a root logrotate pointed at a directory its owner can write is a way to
+    # truncate any file on the system by leaving a symlink in it.
+    su __DEVICE_USER__ __DEVICE_USER__
+    daily
+    rotate 7
+    maxsize 5M
+    missingok
+    notifempty
+    # copytruncate, not the default rename: scheduler_web_ui.service writes its log
+    # through StandardOutput=append:, so systemd holds an open descriptor to it. A rename
+    # leaves that descriptor pointing at the rotated file and the live log stays empty.
+    # Truncating in place keeps the inode, so the service carries on writing to it.
+    copytruncate
+    compress
+    delaycompress
+}

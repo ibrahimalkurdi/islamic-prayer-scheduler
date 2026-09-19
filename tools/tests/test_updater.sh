@@ -522,5 +522,146 @@ else
 fi
 rm -rf "$STUB" "$APPLIED"
 
+echo "25. a release can ask for setup to be run, and it happens with nobody present"
+# Not everything a release changes is a file or a unit. A new desktop shortcut, a cron
+# entry, a font - those live in init.sh. A release asks for it by shipping
+# config/needs_init, and the stamp in var/ is what keeps it to once per release rather
+# than every night.
+STUB="$HERE/stub-bin"
+mkdir -p "$STUB"
+cat > "$STUB/sudo" <<'STUBEOF'
+#!/bin/bash
+while [[ "$1" == -* ]]; do shift; done
+# The helper answers, and nothing else does. That is the real shape of an update at
+# 02:00: cron has no terminal, so sudo -n true fails, init.sh sets CAN_PROMPT=0, and
+# every root command outside the helper is skipped and reported. Passing other commands
+# through instead would have this test running mkdir and install against /usr/local on
+# whatever machine it is on.
+[[ "$1" == "/usr/local/sbin/scheduler-apply-system" ]] && exit 0
+exit 1
+STUBEOF
+# This machine is not a Raspberry Pi. The real init.sh runs here, which is the point -
+# what is under test is the updater starting it for real - but everything it shells out
+# to that would touch this machine is stubbed away.
+for tool in crontab hostnamectl systemctl fc-cache gtk-update-icon-cache unzip \
+            xdotool dpkg apt-get gsettings; do
+    printf '#!/bin/bash\nexit 0\n' > "$STUB/$tool"
+done
+chmod +x "$STUB"/*
+# Rebuilding the prayer map would need pandas, which is nothing to do with this.
+mkdir -p "$SCH/var/setup_done"
+touch "$SCH/var/setup_done/settings_applied"
+
+# Not written into the live tree: the updater rsyncs config/ and anything not in the
+# release payload is deleted, which is right - a release asks for setup by *shipping*
+# this file, so it has to arrive with the release. The fixture builds its releases from
+# the repo, so the file under test is the real one.
+rm -f "$SCH/var/init_ran_for"
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+LOG="$SCH/logs/check_updates.log"
+
+expect "it says the release asked for setup" "$out" "This release asks for setup to be run"
+expect "and setup really ran" "$(cat "$LOG")" "Scheduler setup started"
+# The one that would bite: the last thing init.sh does is check for updates, so being
+# started by the updater is exactly when it must not.
+expect "without the two calling each other for ever" \
+    "$(cat "$LOG")" "Started by the updater"
+# Taken from the log rather than from config/, because the release's copy is what the
+# updater reads and a device is not guaranteed to have one - the manifest's include list
+# names the config/ entries a release may replace, and this is not among them.
+want="$(sed -n 's/.*asks for setup to be run (\([^)]*\)).*/\1/p' <<< "$out" | head -n 1)"
+if [[ -n "$want" && "$(head -n 1 "$SCH/var/init_ran_for" 2>/dev/null)" == "$want" ]]; then
+    echo "  ✓ and the device records what it ran setup for"
+else
+    echo "  ✗ no stamp written, so it would run setup again every night"; fail=1
+fi
+
+# Same release, same ask, a device that has already done it.
+echo "1.0.0" > "$SCH/var/installed_version"
+point 1.1.0
+out="$(run_stubbed --now)"
+if grep -q "This release asks for setup to be run" <<< "$out"; then
+    echo "  ✗ it ran setup again for a release it had already run it for"; fail=1
+else
+    echo "  ✓ a release that already had its setup run does not get it twice"
+fi
+
+rm -f "$SCH/var/init_ran_for"
+rm -rf "$STUB"
+
+echo "26. a release can bring steps of its own, and is rolled back if they fail"
+# Neither hook is shipped. A release that needs a step the updater has no concept of -
+# a directory made, something renamed, a file moved before the new one lands - adds the
+# one it needs and it runs; a release that adds nothing gets nothing.
+rm -f "$SCH/var/pre_update_ran" "$SCH/var/post_update_ran" \
+      "$SCH/var/fail_pre_update" "$SCH/var/fail_post_update"
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "the release's pre_update.sh runs" "$out" "Running this release's pre_update.sh"
+expect "and its post_update.sh too" "$out" "Running this release's post_update.sh"
+if [[ -f "$SCH/var/pre_update_ran" && -f "$SCH/var/post_update_ran" ]]; then
+    echo "  ✓ both really ran, not just logged"
+else
+    echo "  ✗ a hook was announced but left no trace"; fail=1
+fi
+# The order is the whole point of there being two: pre runs while the old version is
+# still in place, post once the new files are down.
+pre_line="$(grep -n "pre_update.sh" <<< "$out" | head -n 1 | cut -d: -f1)"
+inst_line="$(grep -n "Installing 1.1.0" <<< "$out" | head -n 1 | cut -d: -f1)"
+post_line="$(grep -n "post_update.sh" <<< "$out" | head -n 1 | cut -d: -f1)"
+if [[ -n "$pre_line" && -n "$inst_line" && -n "$post_line" \
+      && $pre_line -lt $inst_line && $post_line -gt $inst_line ]]; then
+    echo "  ✓ pre runs before the install, post after it"
+else
+    echo "  ✗ hooks ran in the wrong order ($pre_line/$inst_line/$post_line)"; fail=1
+fi
+
+# A release whose own steps fail is a release that did not work, and the device must end
+# up where it started rather than half way.
+touch "$SCH/var/fail_post_update"
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "a failing post_update.sh is reported" "$out" "post_update.sh failed"
+expect "and the old version is put back" "$out" "putting 1.0.0 back"
+if [[ "$(cat "$SCH/var/installed_version")" == "1.0.0" ]]; then
+    echo "  ✓ the device is left on the version it started from"
+else
+    echo "  ✗ it recorded the update anyway"; fail=1
+fi
+rm -f "$SCH/var/fail_post_update"
+
+# pre fails before anything has been touched, so there is nothing to restore.
+touch "$SCH/var/fail_pre_update"
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+expect "a failing pre_update.sh stops the update" "$out" "pre_update.sh failed"
+if grep -q "Installing 1.1.0" <<< "$out"; then
+    echo "  ✗ it installed anyway after the pre step failed"; fail=1
+else
+    echo "  ✓ and nothing was installed"
+fi
+rm -f "$SCH/var/fail_pre_update" "$SCH/var/pre_update_ran" "$SCH/var/post_update_ran"
+
+# 1.0.0 carries neither, which is the normal case and must be silent.
+point 1.0.0
+echo "1.1.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --now)"
+if grep -q "_update.sh" <<< "$out"; then
+    echo "  ✗ it announced a hook a release does not ship"; fail=1
+else
+    echo "  ✓ a release that brings no steps of its own says nothing"
+fi
+
+# Put the device back where this section found it. The check above has to leave it on
+# 1.0.0 to prove the quiet case, and this suite - and the ones run after it - start from
+# a device on the newest release.
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+run_stubbed --now > /dev/null 2>&1
+rm -f "$SCH/var/pre_update_ran" "$SCH/var/post_update_ran"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

@@ -1,0 +1,15 @@
+{
+  "name": "مواقيت الصلاة",
+  "short_name": "مواقيت الصلاة",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "icons": [
+    { "src": "icon-128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "icon-256.png", "sizes": "256x256", "type": "image/png" }
+  ]
+}

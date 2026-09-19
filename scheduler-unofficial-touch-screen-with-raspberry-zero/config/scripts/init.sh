@@ -316,7 +316,11 @@ fi
 # is not a button, so ENABLED is honoured here: a device deliberately held back must stay
 # held back when someone re-runs setup on it.
 UPDATE_ENABLED="$(grep -E "^ENABLED=" "$CONFIG_DIR/update.conf" 2>/dev/null | cut -d= -f2 | tr -d '"')"
-if [[ "${UPDATE_ENABLED,,}" == "false" ]]; then
+if [[ -n "${SCHEDULER_INIT_NO_UPDATE_CHECK:-}" ]]; then
+    # Set by check_updates.sh when a release asks for setup to be run. Without this the
+    # two scripts call each other: the updater runs setup, setup checks for updates.
+    echo "Started by the updater - not checking for updates again"
+elif [[ "${UPDATE_ENABLED,,}" == "false" ]]; then
     echo "Updates are disabled on this device - skipping the update check"
 elif [[ ! -f "$SCRIPTS_DIR/check_updates.sh" ]]; then
     echo "No updater on this device - skipping the update check"

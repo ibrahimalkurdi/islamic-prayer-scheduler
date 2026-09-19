@@ -148,7 +148,7 @@ git archive --format=tar "HEAD:$SUBTREE" | tar -x -C "$WORK"
 # directory left behind by a rename must not end up in the list either - so this asks
 # the exported tree what is really there, not the checkout.
 for optional in "config/fonts/" "config/icons/" "config/arabic-fonts/" "config/prayers-config/" \
-                "default-audio/"; do
+                "config/logrotate/" "default-audio/"; do
     if [[ -d "$WORK/${optional%/}" ]] && [[ -n "$(ls -A "$WORK/${optional%/}")" ]]; then
         INCLUDE+=("$optional")
     fi

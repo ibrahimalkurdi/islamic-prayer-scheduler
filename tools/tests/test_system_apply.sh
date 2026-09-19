@@ -356,8 +356,12 @@ PATH="$BIN:$PATH" bash "$ROOT/apply-self.sh" > "$ROOT/out.log" 2>&1
 chk "a full run succeeds" "$?" "0"
 chk "and the script has replaced itself" \
     "$(grep -c 'release marker' "$ROOT/apply-self.sh")" "1"
+# Anchored on the line that carries the path, not on the placeholder anywhere in the
+# file: the helper also carries __SCHEDULER_DIR__ as a literal, inside the sed that fills
+# in the logrotate template. bake() is line-anchored so that it substitutes the one and
+# leaves the other, and a test that grepped the whole file could not tell them apart.
 chk "the caller's tree was baked into the new copy, not the placeholder" \
-    "$(grep -c '__SCHEDULER_DIR__' "$ROOT/apply-self.sh")" "0"
+    "$(grep -c '^SCHEDULER_DIR="__SCHEDULER_DIR__"' "$ROOT/apply-self.sh")" "0"
 chk "nothing is left staged beside it" \
     "$(find "$ROOT" -maxdepth 1 -name '.scheduler-apply-system.*' | wc -l)" "0"
 chk "and it did not loop replacing itself for ever" \
@@ -378,6 +382,90 @@ chk "the working script is still in place" \
 chk "and the refusal is said out loud" \
     "$(grep -c 'does not parse' "$ROOT/out.log")" "1"
 rm -rf "$EMPTY/config/scripts"
+
+echo "14. an old helper can be replaced without anyone typing a password"
+# The gap this closes: a helper from before self-updating cannot replace itself, and
+# neither unattended path can do it for it. The desktop icon opens no terminal, so it
+# cannot ask. The updater only acts when the installed helper reports work pending, and
+# an old helper never reports that about itself. Both go quiet on exactly the devices
+# that are furthest behind, which is the whole fleet at the moment this ships.
+#
+# The one power an old helper does have is installing and starting the units a release
+# brings, so the release brings a unit that installs the new helper.
+HELPER_SRC="$REPO/scheduler-official-touch-screen-with-raspberry-pi-4/config/scripts/install_helper.sh"
+BOOT_UNIT="$REPO/scheduler-official-touch-screen-with-raspberry-pi-4/config/systemd/scheduler_helper_bootstrap.service"
+
+# No User= is what keeps it root, and root is the entire point - set_device_user.sh
+# rewrites an anchored User= but cannot add one that is not there.
+chk "the bootstrap unit runs as root" \
+    "$(grep -c '^User=' "$BOOT_UNIT")" "0"
+chk "and it is a oneshot, not something left running" \
+    "$(grep -c '^Type=oneshot$' "$BOOT_UNIT")" "1"
+# It lives in config/systemd/, so the helper's existing unit loop - proven in section 2
+# to report an uninstalled unit as work pending - is what carries it onto the device.
+chk "it ships where the helper already looks for units" \
+    "$(ls "$REPO/scheduler-official-touch-screen-with-raspberry-pi-4/config/systemd/" | grep -c '^scheduler_helper_bootstrap.service$')" "1"
+
+TREE="$ROOT/tree"
+mkdir -p "$TREE/config/scripts" "$ROOT/sbin"
+cp "$SRC" "$TREE/config/scripts/system_apply.sh"
+# INSTALLED rewritten the same way build() rewrites SCHEDULER_DIR, rather than adding an
+# override to the script itself: an environment variable choosing where a root script
+# writes would be a hole opened for the convenience of a test.
+sed "s|^INSTALLED=.*|INSTALLED=\"$ROOT/sbin/scheduler-apply-system\"|" \
+    "$HELPER_SRC" > "$TREE/config/scripts/install_helper.sh"
+
+# A real copy, so the second run can find the first run's work and compare against it.
+# Ownership is dropped because this test is not root; the mode is kept, because 0755 is
+# an assertion below.
+IBIN="$ROOT/ibin"
+mkdir -p "$IBIN"
+cat > "$IBIN/install" <<'STUB'
+#!/bin/bash
+echo "install $*" >> "$CALLS"
+args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|-g) shift 2 ;;
+        *)     args+=("$1"); shift ;;
+    esac
+done
+/usr/bin/install "${args[@]}"
+STUB
+chmod +x "$IBIN/install"
+
+boot_run() {
+    : > "$CALLS"
+    PATH="$IBIN:$PATH" bash "$TREE/config/scripts/install_helper.sh" \
+        > "$ROOT/boot.log" 2>&1
+    echo $?
+}
+
+chk "it installs the helper" "$(boot_run)" "0"
+chk "the helper is now there" \
+    "$([[ -f "$ROOT/sbin/scheduler-apply-system" ]] && echo yes || echo no)" "yes"
+chk "with the tree baked in, not the placeholder" \
+    "$(grep -c '^SCHEDULER_DIR="__SCHEDULER_DIR__"' "$ROOT/sbin/scheduler-apply-system")" "0"
+chk "pointing at the tree it was run from" \
+    "$(grep -c "^SCHEDULER_DIR=\"$TREE\"$" "$ROOT/sbin/scheduler-apply-system")" "1"
+chk "and it is executable by root alone" \
+    "$(grep -c 'install .*-m 0755' "$CALLS")" "1"
+
+# It is started on every helper run and at every boot, so the quiet case is the common
+# one. A second run that installed again would rewrite the file under whatever is
+# reading it, every night, for ever.
+chk "a second run finds nothing to do" "$(boot_run)" "0"
+chk "and does not install again" "$(grep -c 'install ' "$CALLS")" "0"
+chk "and says nothing while doing it" "$(wc -c < "$ROOT/boot.log" | tr -d ' ')" "0"
+
+# The failure that has no way back: a helper that does not parse, shipped to every device
+# at once, unattended. The installed one must survive it.
+printf 'if then fi syntax error\n' >> "$TREE/config/scripts/system_apply.sh"
+chk "a source that does not parse is refused" "$(boot_run)" "1"
+chk "the working helper is still in place" \
+    "$(grep -c "^SCHEDULER_DIR=\"$TREE\"$" "$ROOT/sbin/scheduler-apply-system")" "1"
+chk "and the refusal is said out loud" \
+    "$(grep -c 'does not parse' "$ROOT/boot.log")" "1"
 
 echo
 if [[ ${#fails[@]} -eq 0 ]]; then

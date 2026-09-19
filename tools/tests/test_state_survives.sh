@@ -74,6 +74,14 @@ chk "the website unit can still bind port 80" \
 # bring the bug back.
 chk "the website unit does not hard-code a runtime directory" \
     "$(grep -hc '^Environment=XDG_RUNTIME_DIR' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "0"
+# And it must not clamp the capability bounding set. It did, to CAP_NET_BIND_SERVICE
+# alone, which reads as free hardening and is not: sudo is setuid-root and calls
+# setgid(0) before anything else, which needs CAP_SETGID. Inside a clamped bounding set
+# becoming root grants nothing, so the save button on the website ran apply_settings.sh
+# straight into "sudo: unable to change to root gid" and could never restart the athan
+# service. User= is what keeps this process unprivileged; the bounding set never was.
+chk "the website unit does not clamp the capability bounding set" \
+    "$(grep -hc '^CapabilityBoundingSet=' "$SCH/config/systemd/scheduler_web_ui.service" 2>/dev/null)" "0"
 
 # ---------------------------------------------------------------------------
 # A desktop tap must never meet a password prompt
@@ -98,6 +106,90 @@ chk "the setup shortcut opens no terminal" \
     "$(grep -hc '^Terminal=false$' "$SCH/config/scheduler_setup.desktop" 2>/dev/null)" "1"
 chk "the helper is only ever called non-interactively" \
     "$(grep -c 'sudo "\$SYSTEM_APPLY_INSTALLED"' "$INIT")" "0"
+
+echo
+echo "The Wi-Fi watchdog can see the failure it exists for:"
+WCR="$SCH/config/scripts/wifi_connectivity_resolver.sh"
+# It runs as root already. Every sudo in it opened a PAM session, several times a minute,
+# for ever - all of it written to the journal and so to the SD card. Measured on a device:
+# 76 PAM lines in two minutes before, 0 after.
+chk "the watchdog never calls sudo" \
+    "$(grep -c '^[^#]*[^-[:alnum:]_]sudo ' "$WCR" 2>/dev/null)" "0"
+chk "and refuses to run as anyone but root" \
+    "$(grep -c 'must run as root' "$WCR")" "1"
+# The fault this device actually has: its own traffic keeps flowing while nothing on the
+# LAN can open a connection to it. Pinging the router answers the wrong question and
+# answered it "fine" through every hang so far.
+chk "it asks whether anyone can reach the device, not just whether it can reach out" \
+    "$(grep -c 'inbound_sessions' "$WCR")" "2"
+chk "and re-associates only after a long silence" \
+    "$(grep -c '^REASSOCIATE_AFTER=3600' "$WCR")" "1"
+
+# The counter itself, against a table rather than against this machine's real sockets.
+TCPFIX="$HERE/tcp-fixture"
+mkdir -p "$TCPFIX"
+cat > "$TCPFIX/tcp" <<'TCP'
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 9F02A8C0:0016 9C02A8C0:D610 01 00000000:00000000 00:00000000 00000000     0        0 0
+   1: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000     0        0 0
+   2: 9F02A8C0:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 0
+TCP
+cat > "$TCPFIX/tcp6" <<'TCP6'
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:0016 00000000000000000000000001000000:D611 01 00000000:00000000 00:00000000 00000000     0        0 0
+TCP6
+# Extracted rather than sourced: the file is a daemon and sourcing it would start the
+# loop. One established session from a real peer, one from loopback, one listening
+# socket, and one IPv6 loopback - only the first counts as somebody reaching this device.
+counted="$(TCP_TABLES="$TCPFIX/tcp $TCPFIX/tcp6" bash -c "
+    $(sed -n '/^inbound_sessions() {/,/^}/p' "$WCR")
+    inbound_sessions")"
+chk "one real peer is counted, loopback and listeners are not" "$counted" "1"
+rm -rf "$TCPFIX"
+
+echo
+echo "The logs cannot fill the card:"
+CRON="$SCH/config/crontab.txt"
+LR="$SCH/config/logrotate/scheduler"
+# Three cron lines used to blank three named logs at midnight, and missed the two that
+# grew fastest - check_updates.log and web_ui.log - because nobody had named them.
+chk "cron no longer blanks logs by name" \
+    "$(grep -c 'echo  > .*logs/' "$CRON")" "0"
+# This one is not a log. It is the record of what has played today, and emptying it at
+# midnight is what starts the new day clean - rotating it would be wrong.
+chk "but the daily event reset is still there" \
+    "$(grep -c "echo '\[\]' > .*executed-events.json" "$CRON")" "1"
+chk "a logrotate policy ships with the release" \
+    "$([[ -f "$LR" ]] && echo yes || echo no)" "yes"
+chk "and it matches every log, not a list of names" \
+    "$(grep -c '__SCHEDULER_DIR__/logs/\*\.log {' "$LR")" "1"
+
+if ! command -v logrotate > /dev/null 2>&1 && [[ ! -x /usr/sbin/logrotate ]]; then
+    echo "  - skipped the rotation itself, no logrotate on this machine"
+else
+    LOGROTATE=$(command -v logrotate || echo /usr/sbin/logrotate)
+    LRT="$HERE/logrotate-test"
+    rm -rf "$LRT"; mkdir -p "$LRT/logs"
+    sed -e "s|__SCHEDULER_DIR__|$LRT|g" -e "s|__DEVICE_USER__|$(id -un)|g" \
+        "$LR" > "$LRT/conf"
+    # scheduler_web_ui.service writes its log through StandardOutput=append:, so systemd
+    # holds an open descriptor to it. Under the default rename-and-create that descriptor
+    # would follow the rotated file and the live log would stay empty for ever - the
+    # website would appear to stop logging the day rotation was switched on. This holds a
+    # descriptor open across a rotation exactly as systemd does.
+    exec 9>> "$LRT/logs/web_ui.log"
+    echo "before-rotation" >&9
+    "$LOGROTATE" -f -s "$LRT/state" "$LRT/conf" > /dev/null 2>&1
+    echo "after-rotation" >&9
+    exec 9>&-
+    chk "a rotated log keeps taking writes from an already-open descriptor" \
+        "$(grep -c 'after-rotation' "$LRT/logs/web_ui.log" 2>/dev/null)" "1"
+    chk "and what was there before is kept, not dropped" \
+        "$(cat "$LRT"/logs/web_ui.log.1 2>/dev/null | grep -c 'before-rotation')" "1"
+    chk "the live log did not keep the old lines as well" \
+        "$(grep -c 'before-rotation' "$LRT/logs/web_ui.log" 2>/dev/null)" "0"
+    rm -rf "$LRT"
+fi
 
 echo
 [[ $fail -eq 0 ]] && echo "ALL PASS" || echo "FAILURES ABOVE"

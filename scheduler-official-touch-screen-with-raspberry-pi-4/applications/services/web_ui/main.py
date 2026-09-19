@@ -46,6 +46,7 @@ CONTENT_TYPES = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".ico": "image/x-icon",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
 }
 
 # The pages, by the URL each is reached at. A fixed table rather than a path joined onto
@@ -57,7 +58,18 @@ PAGES = {
     "/settings/": "settings/index.html",
 }
 # The assets those pages ask for, likewise fixed.
-ASSETS = ("app.css", "app.js", "config.js")
+ASSETS = ("app.css", "app.js", "config.js", "manifest.webmanifest")
+
+# Added to the home screen from a phone, the site should carry the same icon the touch
+# screen does rather than a blank page glyph. Served from config/icons/ for the reason
+# the font is served from the zip: they are already in every release payload, and a copy
+# under site/ would be the same picture shipped twice and able to drift.
+ICON_DIR = "config/icons"
+ICONS = {
+    "icon-32.png": "athan-app-icon-32.png",
+    "icon-128.png": "athan-app-icon-128.png",
+    "icon-256.png": "athan-app-icon-256.png",
+}
 
 # Amiri is what the touch screen draws in, and a phone on this LAN may have no route to
 # the internet to fetch a webfont - so it is served from here. Read out of the zip the
@@ -87,6 +99,7 @@ class Device:
         self.lock = threading.Lock()
         self.apply_state = {"state": "idle", "log": ""}
         self._font = None
+        self._icons = {}
 
     def font(self):
         """Amiri-Regular, out of the zip, read once and kept."""
@@ -99,6 +112,18 @@ class Device:
         except (OSError, KeyError, zipfile.BadZipFile):
             self._font = b""
         return self._font or None
+
+    def icon(self, name):
+        """One of ICONS, read once and kept. Same shape as font() above."""
+        if name in self._icons:
+            return self._icons[name] or None
+        path = os.path.join(self.scheduler_dir, ICON_DIR, ICONS[name])
+        try:
+            with open(path, "rb") as handle:
+                self._icons[name] = handle.read()
+        except OSError:
+            self._icons[name] = b""
+        return self._icons[name] or None
 
     def reload_times(self):
         """The prayer map is rewritten under a running server - by apply_settings.sh here,
@@ -272,9 +297,23 @@ class Handler(BaseHTTPRequestHandler):
     def serve_asset(self, name):
         if name == FONT_URL_NAME:
             return self.serve_font()
+        if name in ICONS:
+            return self.serve_icon(name)
         if name not in ASSETS:
             return self.fail(404, "not found")
         self.serve_file(name)
+
+    def serve_icon(self, name):
+        body = self.device.icon(name)
+        if body is None:
+            # A missing icon is a page without one, not a page that fails to load.
+            return self.fail(404, "icon not installed")
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPES[".png"])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
 
     def serve_font(self):
         body = self.device.font()

@@ -1226,6 +1226,31 @@ sed -i 's/^PIN=.*/PIN=/' ~/Desktop/scheduler/config/update.conf
 tail -60 ~/Desktop/scheduler/logs/check_updates.log
 ```
 
+**The logs rotate themselves.** `config/scripts/system_apply.sh` installs
+`/etc/logrotate.d/scheduler`, which matches `logs/*.log` — daily, seven kept, compressed,
+and sooner than daily if one passes 5 MB. Nothing needs naming: a log a later release
+starts writing is covered the day it appears.
+
+This replaced three cron lines that blanked three named logs at midnight. They missed the
+two that grew fastest, `check_updates.log` and `web_ui.log`, simply because nobody had
+thought to name them — on one device those were 153 KB and 283 KB with no bound at all.
+
+Two details worth knowing before changing it:
+
+- It rotates **as the device user**, not as root. The logs directory is writable by that
+  user, and a root logrotate pointed at a directory its owner can write is a way to
+  truncate any file on the system by leaving a symlink in it.
+- It uses **`copytruncate`**. `scheduler_web_ui.service` writes through
+  `StandardOutput=append:`, so systemd holds an open descriptor to that file. Under the
+  default rename-and-create, that descriptor would follow the rotated file and the live
+  log would stay empty for ever. Because systemd opens it as root, the helper also hands
+  `web_ui.log` back to the device user on every run, or the rotation above could not
+  truncate it.
+
+`config/executed-events.json` is **not** a log and is still emptied by cron at midnight.
+It is the record of what has already played today, and clearing it is what starts the new
+day clean.
+
 A successful update looks like this:
 
 ```
@@ -1432,7 +1457,9 @@ put them into effect — mention `init.sh` in the release notes when you cut one
 | `the version pointer asks to replace '<path>', which is device data` | `include` in `VERSIONS.json` names a protected path | remove it. Nothing on the device was touched |
 | A file keeps being replaced despite an exclude | the exclude does not match the include entry exactly — a directory entry needs its trailing slash | read the `Protecting:` line in the log, which lists all four layers |
 | A path in the pointer's `include` never arrives | `skipping <path> - not in this release` — the archive does not contain it | the pointer can only claim paths the release actually ships |
-| `systemd unit changed: <name> - run init.sh to install it` | a release added or changed a unit **and** `scheduler-apply-system` could not be reached — normally a device that has never had `init.sh` run on it (§19.6) | `bash ~/Desktop/scheduler/config/scripts/init.sh` on that device, once, with a password. Afterwards this applies itself |
+| `systemd unit changed: <name> - run init.sh to install it` | a release added or changed a unit **and** `scheduler-apply-system` could not be reached at all — a device that has never had `init.sh` run on it, not merely one with an old helper (§19.6 carries those across by itself) | `bash ~/Desktop/scheduler/config/scripts/init.sh` on that device, once, with a password. Afterwards this applies itself |
+| `sudo: unable to change to root gid` / `error initializing audit plugin` in `logs/apply_settings.log` | a unit running the caller clamps `CapabilityBoundingSet=`. `sudo` is setuid-root and calls `setgid(0)` first, which needs `CAP_SETGID` — inside a clamped bounding set, becoming root grants nothing | remove the `CapabilityBoundingSet=` line from that unit and reinstall it. `AmbientCapabilities=` is what grants port 80; `User=` is what keeps the process unprivileged |
+| `setup did not finish - open «تثبيت مكونات النظام» on the desktop` | a release asked for setup to be run (§19.7) and `init.sh` exited non-zero | read `logs/check_updates.log` from `Scheduler setup started`. Deliberately not stamped, so the next update tries again |
 | `system setup failed - open «تثبيت مكونات النظام» on the desktop` | the helper was reachable and ran, but something in it failed — most often apt could not reach the network | `sudo -n /usr/local/sbin/scheduler-apply-system` on the device and read the output; `logs/update.log` has the run that failed |
 | `http://<hostname>.local` does not open, but the device is up | either the service is not installed yet, or the phone cannot resolve `.local` | `systemctl status scheduler_web_ui.service`; if it is missing, run `init.sh` (§18). If it is running, try the device's IP — some older Android phones have no mDNS |
 | The website's mute button silences the athan but cannot unmute it | `wpctl` could not reach PipeWire, so the player was killed instead of the speaker muted | `systemctl cat scheduler_web_ui.service \| grep XDG_RUNTIME_DIR` — it must **not** be there. The unit once set it to `/run/user/%U`, and on real hardware systemd resolved `%U` to `0` despite `User=`, so the service looked for PipeWire under root's runtime directory and every mute fell back to killing the player. `mute.py` derives it from the running process's own uid instead. Re-run `init.sh` to reinstall the unit (§18) |
@@ -1600,9 +1627,25 @@ checked or a setting changed from a phone instead of at the touch screen.
 
 ```
 http://<hostname>.local/            the three links
-http://<hostname>.local/countdown/  باقي للصلاة, and the mute button
-http://<hostname>.local/daily/      قائمة اليومية للصلوات, any date
+http://<hostname>.local/countdown/  الوقت المتبقي للصلاة, and the mute button
+http://<hostname>.local/daily/      اوقات الصلاة, any date
 http://<hostname>.local/settings/   الاعدادات
+```
+
+**Added to a phone's home screen** it carries the same icon the touch screen uses. The
+pages link an `apple-touch-icon` and a `manifest.webmanifest`, and the PNGs are served
+from `config/icons/` rather than copied into `site/` — they already ship in every release
+payload, and a second copy could drift from the one on the screen. `build_static_site.py`
+copies them into the static output, which `copytree` does not do on its own.
+
+**`.local` is the weak link, not the device.** mDNS resolution fails outright on some
+phones — observed as `ping: unknown host louay.local` seconds after the same phone had
+pinged it at 0% loss. Where a device matters, give it a DHCP reservation on the router and
+use the address. Every page reports it, so it is never a mystery:
+
+```bash
+curl -s http://<hostname>.local/api/device
+{"hostname": "louay", "ip": "192.168.2.159", "now": "…"}
 ```
 
 The hostname is the device's user name, set by `init.sh` along with `avahi-daemon`
@@ -1755,6 +1798,42 @@ Two limits worth stating before anyone asks for it:
 
 ---
 
+## 18b. The Wi-Fi watchdog — `wifi_connectivity_resolver.service`
+
+Runs as root from boot, checks every 5 seconds, and recovers a device that has genuinely
+lost its link — interface down, receive path stuck, DHCP address changed — through a
+ladder of reconnect, then NetworkManager restart, then driver reload.
+
+**What it could not see, and now can.** Its only health test was "can I ping the router",
+and that passed through every hang this fleet has had. The device's own traffic keeps
+flowing while nothing on the LAN can open a connection to it, so the ladder never ran and
+the only thing that ever fixed it was somebody restarting the Wi-Fi by hand. Both of the
+`WiFi interface state: DOWN` lines in one device's log are that manual restart — it
+recorded the cure, not the disease.
+
+So it also asks the opposite question. `inbound_sessions()` counts established
+non-loopback TCP connections from `/proc/net/tcp{,6}` — SSH, the website, a phone. After
+**60 minutes with nobody connected** it captures the link, station, neighbour and counter
+state to the log, then re-associates. It fires only while nothing is connected, so it can
+never interrupt anyone, and it bounds how long a device can sit unreachable without ever
+restarting the radio on a schedule.
+
+**It calls no `sudo`.** The unit is `User=root` and it used to `sudo` every ping and every
+arping, opening a PAM session several times a minute, all of it written to the journal and
+so to the SD card — 76 PAM lines in two minutes, measured. It now refuses to start as
+anyone but root instead.
+
+**What has been ruled out** for the hangs themselves, by measurement rather than
+assumption: power save (`iw get power_save` off, two `set_power_mgmt` events in dmesg,
+both at boot), roaming (one BSS serves the SSID), signal and interference (−38 dBm,
+`tx failed: 1` in ~12000), dual-homing (eth0 down, one default route), supplicant drops
+(NetworkManager logs nothing, `connected time` keeps counting), and stale layer-2
+forwarding (a gratuitous ARP already goes out every 5 seconds). The leading candidate is
+the access point losing track of the station while the station still believes it is
+associated — unproven, which is why `capture_state()` exists.
+
+---
+
 ## 19. Unattended system setup — `scheduler-apply-system`
 
 Some releases need something done as root: a new systemd unit, or an apt package the new
@@ -1850,11 +1929,11 @@ unattended, is the failure that has no way back.
 This grants nothing new: a channel that can install a `.service` file can already replace
 this file *through* the unit it installs.
 
-**The one-time cost.** A device running a helper from before self-updating existed cannot
-update it by itself. Those devices need one run of `init.sh` with a password — once, ever.
-See §19.6.
+**The devices that predate it.** A helper installed before self-updating cannot replace
+itself. Those devices are carried across by a oneshot unit the release ships, on the next
+nightly update, with no password and nobody present — see §19.6.
 
-Such a device says so rather than leaving it to be noticed. After the helper has had its
+Until that lands, such a device says so rather than leaving it to be noticed. After the helper has had its
 chance to replace itself, `init.sh` compares the two once more, and if they still differ on
 a run with no way to prompt, the install goes on the skipped list:
 
@@ -1878,40 +1957,133 @@ Skipped, because setup was run without a way to ask for a password:
 Run this script from a terminal if any of the above is actually needed.
 ```
 
-That list is the honest boundary of what a desktop tap can do. Anything on it needs a
-terminal run. Fonts are the one to watch: a release that adds an Arabic font installs the
-file but cannot rebuild the font cache, so it will not appear until someone runs `init.sh`
-properly.
+That list is the honest boundary of what a desktop tap can do, and it is the same boundary
+an update runs into: §19.7 lets a release start `init.sh` unattended, but starting it does
+not grant it anything — the blocks on this list are skipped there too. What is on it needs
+a terminal, whoever started the run.
+
+Fonts are the one to watch. `init.sh` installs them with `root mkdir` and `root cp`, so a
+release that adds an Arabic font cannot land it unattended even with `needs_init` bumped:
+the file arrives with the release, but the install and the font-cache rebuild are skipped,
+and the glyphs do not appear until someone runs `init.sh` from a terminal. Moving fonts
+into the helper the way icons already are would close this; until then, say so in the
+release notes.
 
 An empty list is the normal state, and on a converged device nothing is printed at all.
 
 ### 19.6 Rolling this out to existing devices
 
-Every device in the field predates the helper, so each needs **one** password run:
+**No password, and nobody at the device.** A device already carrying an older helper
+migrates itself on the next nightly update.
 
-```bash
-ssh louay.local 'cd ~/Desktop/scheduler/config/scripts && bash init.sh'
-```
+It has to, because neither unattended path could do it otherwise. The desktop icon opens
+no terminal by design, so it cannot ask for a password. The updater only acts when the
+installed helper reports work pending, and an old helper never reports that about itself —
+it does not know it is out of date. Both go quiet on exactly the devices furthest behind.
 
-Or, at the device, tap **تثبيت مكونات النظام** — with no helper installed it opens a
-terminal for that one run, and the password can be typed there.
+What an old helper *can* still do is install and start the units a release ships. So the
+release ships one:
+
+| | |
+|---|---|
+| `config/systemd/scheduler_helper_bootstrap.service` | `Type=oneshot`, no `User=`, so root |
+| `config/scripts/install_helper.sh` | bakes the tree path in and installs the helper |
+
+The unit is new, so the old helper sees an uninstalled unit, answers `--check` with `10`,
+and the updater runs it. It installs the unit, starts it, and the oneshot puts the current
+helper at `/usr/local/sbin/scheduler-apply-system`. From the next run on, the helper
+updates itself (§19.4) and the unit is a cheap no-op — it compares and exits.
+
+This is not a new grant. `wifi_connectivity_resolver.service` has always been `User=root`
+running a script out of this same tree; the bootstrap is that existing shape, pointed at
+the helper until the fleet has caught up. The unit can be dropped from a later release
+once every device is known to be current.
 
 Check it took:
 
 ```bash
 ssh louay.local 'sudo -n /usr/local/sbin/scheduler-apply-system --check; echo "exit: $?"'
+ssh louay.local 'grep -c SCHEDULER_APPLY_REEXEC /usr/local/sbin/scheduler-apply-system'
 ```
 
-`0` or `10` means the grant is in place. Anything else means it is not, and that device
-will keep raising the amber banner instead of applying releases itself.
+`0` or `10` from the first means the grant is in place; `1` from the second means the
+helper is current and self-updating. A device that answers neither has never had `init.sh`
+run on it at all, and needs the one password run in §10 — that is a device off the bench,
+not a device in the field.
 
-### 19.7 Files
+### 19.7 A release that needs setup re-run
+
+Not everything a release changes is a file, a package or a unit. A new desktop shortcut, a
+cron entry, an autostart line, a font — those live in `init.sh`, which is the device
+user's half of setup and needs no password now that its root half goes through the helper.
+
+So a release can ask for setup, and it runs with nobody present. It asks by shipping
+`config/needs_init` naming itself:
+
+```
+# comments are ignored; the first bare line is the version
+1.3.0
+```
+
+It is read from the **incoming release**, not from the device. A device tested against
+this read its own `config/` and never fired: the release manifest names the `config/`
+entries a release may replace, and a file added later is deliberately not among them —
+that list is what stops an old updater clobbering a state file it has never heard of. So
+`config/needs_init` never lands on a device at all, and does not need to.
+
+The updater compares it against `var/init_ran_for` and runs `init.sh` once when they
+differ, then writes the stamp. A device away for three releases runs setup once on the way
+back, not three times. A run that fails is **not** stamped, so it is tried again on the
+next update rather than carrying the gap forward in silence.
+
+`SCHEDULER_INIT_NO_UPDATE_CHECK=1` is set for that run. The last thing `init.sh` does is
+check for updates, and being started *by* the updater is the one time that must not
+happen; `init.sh` prints `Started by the updater` instead.
+
+**The release that introduces this cannot use it.** The updater that runs is the *old*
+release's, so `needs_init` and the hooks in §19.8 take effect from the release after the
+one that adds them. That is why the helper bootstrap in §19.6 rides on a systemd unit
+instead — the old helper's unit loop is the one thing that does work on first contact.
+
+**Bump it only when a release changes something setup owns.** Bumping it for a release
+that does not costs every device a pointless run.
+
+### 19.8 Steps a release brings of its own
+
+Neither of these is shipped. A release that needs something the updater has no concept of
+— a directory made, something renamed, a file moved before the new one lands — adds the
+one it needs, and it runs:
+
+| file | when |
+|---|---|
+| `config/scripts/pre_update.sh` | before anything on the device is touched |
+| `config/scripts/post_update.sh` | after the new files are down, before the health check |
+
+Both are taken from the **incoming release**, not the live tree, so a release carries its
+own steps rather than depending on what the previous one left behind. Both run as the
+device user; anything needing root goes through the helper like everything else. Each is
+given `SCHEDULER_UPDATE_FROM`, `SCHEDULER_UPDATE_TO` and `SCHEDULER_DIR`.
+
+Failure is not ignored. `pre_update.sh` failing stops the update before the device has
+been touched, so there is nothing to undo. `post_update.sh` failing rolls the device back
+to the version it started from — a release whose own steps fail is a release that did not
+work.
+
+### 19.9 Files
 
 | path | |
 |---|---|
 | `config/packages.txt` | the apt manifest |
+| `config/needs_init` | shipped in a release, read from staging; never lands on a device |
+| `config/logrotate/scheduler` | the log policy; installed to `/etc/logrotate.d/scheduler` |
 | `config/scripts/system_apply.sh` | the helper, as shipped |
+| `config/scripts/install_helper.sh` | puts the helper in place, run by the bootstrap unit |
+| `config/systemd/scheduler_helper_bootstrap.service` | the oneshot that carries §19.6 |
 | `config/scripts/init_from_desktop.sh` | the launcher behind the desktop icon |
 | `config/scheduler_setup.desktop` | the icon itself, `Terminal=false` |
+| `var/init_ran_for` | what this device last ran setup for |
 | `logs/setup.log` | every run from the icon, with its exit code |
 | `tools/tests/test_system_apply.sh` | the tests, including an unattended `init.sh` run |
+| `config/scripts/pre_update.sh` | not shipped; §19.8, runs before the install |
+| `config/scripts/post_update.sh` | not shipped; §19.8, runs after it |
+| `tools/tests/test_updater.sh` | §25 covers a release asking for setup, §26 the hooks |

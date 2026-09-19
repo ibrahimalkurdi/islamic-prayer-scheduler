@@ -23,8 +23,8 @@ JOURNALCTL="/usr/bin/journalctl"
 DMESG="/bin/dmesg"
 
 # Comman variable
-INTERFACE=$(sudo $NMCLI -t -f DEVICE,TYPE device status | awk -F: '$2=="wifi"{print $1}' | head -n1)
-ROUTER=$(sudo $IP route show default dev "$INTERFACE" | awk '{print $3}' | head -n1)
+INTERFACE=$($NMCLI -t -f DEVICE,TYPE device status | awk -F: '$2=="wifi"{print $1}' | head -n1)
+ROUTER=$($IP route show default dev "$INTERFACE" | awk '{print $3}' | head -n1)
 INTERNET="8.8.8.8"
 HEALTHY_TICKS=0
 FIRST_RUN=1
@@ -35,6 +35,55 @@ MY_IP=$(hostname -I | awk '{print $1}')
 ###########################
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# The unit is User=root and nothing here elevates any more - it used to call sudo for
+# every ping and every arping, which opened a PAM session several times a minute, all
+# day, and wrote every one of them to the journal and so to the SD card. Without sudo
+# this has to actually be root, and should say so rather than fail one command at a time.
+if [ "$(id -u)" -ne 0 ]; then
+    log "ERROR: must run as root"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Is anybody able to reach us?
+# ---------------------------------------------------------------------------
+# The health check below asks whether this device can reach the router, and the answer
+# was yes through both of the hangs this was written for. That is the whole problem: the
+# device's own traffic kept flowing while nothing on the LAN could open a connection to
+# it, so the recovery ladder never ran and the only thing that ever fixed it was somebody
+# restarting the Wi-Fi by hand.
+#
+# There is no way from here to ask "can other hosts reach me". What can be counted is
+# whether any of them currently *is*: an established TCP connection from something that
+# is not loopback means SSH, the website or a phone got through. Read from /proc rather
+# than ss, which is not installed everywhere.
+# The tables are a variable only so a test can point this at fixtures; systemd passes no
+# environment, so on a device it is always the two files below.
+TCP_TABLES="${TCP_TABLES:-/proc/net/tcp /proc/net/tcp6}"
+inbound_sessions() {
+    # shellcheck disable=SC2086
+    awk 'FNR>1 && $4=="01" \
+         && $3 !~ /^0100007F:/ \
+         && $3 !~ /^00000000000000000000000001000000:/ {n++} END{print n+0}' \
+        $TCP_TABLES 2> /dev/null
+}
+
+# Silence is not proof of a fault - at 04:00 nobody is asking for prayer times either.
+# It is proof that acting costs nothing, which is the part that matters: both steps below
+# only ever run while no one is connected, so neither can interrupt anybody.
+capture_state() {
+    {
+        echo "---- state at $(date '+%Y-%m-%d %H:%M:%S') ----"
+        $IW dev "$INTERFACE" link 2>&1
+        $IW dev "$INTERFACE" station dump 2>&1 | grep -E "Station|signal|tx retries|tx failed|inactive"
+        echo "operstate=$(cat /sys/class/net/$INTERFACE/operstate 2>/dev/null)"
+        echo "rx_packets=$(cat /sys/class/net/$INTERFACE/statistics/rx_packets 2>/dev/null)"
+        echo "tx_packets=$(cat /sys/class/net/$INTERFACE/statistics/tx_packets 2>/dev/null)"
+        echo "power_save=$($IW dev "$INTERFACE" get power_save 2>&1)"
+        $IP -4 neigh show dev "$INTERFACE" 2>&1
+    } >> "$LOG_FILE" 2>&1
 }
 
 if [ -z "$INTERFACE" ]; then
@@ -57,12 +106,12 @@ fi
 
 # --- Driver & Hardware Optimization ---
 # These commands run once when the service starts
-sudo $IW dev "$INTERFACE" set power_save off
+$IW dev "$INTERFACE" set power_save off
 
 if command -v ethtool > /dev/null; then
     # Turning off offloading prevents the WiFi chip from "batching" packets, 
     # making SSH much more responsive and preventing the "stale" hang.
-    sudo ethtool -K "$INTERFACE" gso off gro off tso off > /dev/null 2>&1
+    ethtool -K "$INTERFACE" gso off gro off tso off > /dev/null 2>&1
 fi
 
 status_text() {
@@ -83,7 +132,7 @@ status() {
 check_connectivity() {    
     if [ -z "$ROUTER" ]; then
         # Try to re-detect router if it was missing
-        ROUTER=$(sudo $IP route show default dev "$INTERFACE" | awk '{print $3}' | head -n1)
+        ROUTER=$($IP route show default dev "$INTERFACE" | awk '{print $3}' | head -n1)
         [ -z "$ROUTER" ] && return 1
     fi
    
@@ -92,7 +141,7 @@ check_connectivity() {
     BROADCAST=$(ip -4 addr show "$INTERFACE" | grep -oP '(?<=brd\s)\d+(\.\d+){3}' | head -n1)
 
     # 2. Perform health check to Router
-    sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
+    $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     PING_RESULT=$?
 
     # 3. If healthy, "Wake Up" the entire subnet
@@ -105,12 +154,12 @@ check_connectivity() {
         FIRST_RUN=0
 
         if [ $((HEALTHY_TICKS % 6)) -eq 0 ]; then
-            sudo arping -q -c 2 -I "$INTERFACE" -U -s "$MY_IP" "$MY_IP" > /dev/null 2>&1
-            sudo arping -q -c 1 -I "$INTERFACE" "$ROUTER" > /dev/null 2>&1
+            arping -q -c 2 -I "$INTERFACE" -U -s "$MY_IP" "$MY_IP" > /dev/null 2>&1
+            arping -q -c 1 -I "$INTERFACE" "$ROUTER" > /dev/null 2>&1
         fi
         
         # Keep your existing arping logic here as well
-        sudo arping -c 1 -I "$INTERFACE" -U -s "$MY_IP" "$MY_IP" > /dev/null 2>&1
+        arping -c 1 -I "$INTERFACE" -U -s "$MY_IP" "$MY_IP" > /dev/null 2>&1
         
         return 0
     fi
@@ -126,7 +175,7 @@ recover_network() {
     if [ "$STATE" != "up" ]; then
         log "WiFi interface state: DOWN"
         log "Attempting to reconnect interface"
-        sudo $NMCLI device connect $INTERFACE
+        $NMCLI device connect $INTERFACE
         log "=================================================="
         return 0
     fi
@@ -139,13 +188,13 @@ recover_network() {
         log "RX packets not increasing — WiFi receive path likely stuck"
         log "RX1=$RX1 RX2=$RX2"
         log "WiFi link info:"
-        sudo $IW dev $INTERFACE link >> "$LOG_FILE"
+        $IW dev $INTERFACE link >> "$LOG_FILE"
         log "Neighbor table:"
-        sudo $IP neigh >> "$LOG_FILE"
+        $IP neigh >> "$LOG_FILE"
         log "Recovering by reconnecting WiFi"
-        sudo $NMCLI device disconnect $INTERFACE
+        $NMCLI device disconnect $INTERFACE
         sleep 3
-        sudo $NMCLI device connect $INTERFACE
+        $NMCLI device connect $INTERFACE
         log "=================================================="
         return 0
     fi
@@ -163,11 +212,11 @@ recover_network() {
     echo "$IPADDR" > "$LAST_IP_FILE"
 
     # -------- Connectivity tests --------
-    sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
+    $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     ROUTER_STATUS=$?
-    sudo $PING -W2 -c2 "$INTERNET" > /dev/null 2>&1
+    $PING -W2 -c2 "$INTERNET" > /dev/null 2>&1
     INTERNET_STATUS=$?
-    sudo $SYSTEMCTL is-active ssh > /dev/null 2>&1
+    $SYSTEMCTL is-active ssh > /dev/null 2>&1
     SSH_STATUS=$?
 
     ROUTER_TEXT=$(status $ROUTER_STATUS)
@@ -192,25 +241,25 @@ recover_network() {
     log "Interface state: $STATE"
 
     log "IP address:"
-    sudo $IP addr show $INTERFACE >> "$LOG_FILE"
+    $IP addr show $INTERFACE >> "$LOG_FILE"
 
     log "WiFi link info:"
-    sudo $IW dev $INTERFACE link >> "$LOG_FILE"
+    $IW dev $INTERFACE link >> "$LOG_FILE"
 
     log "Neighbor table:"
-    sudo $IP neigh >> "$LOG_FILE"
+    $IP neigh >> "$LOG_FILE"
 
     log "Routing table:"
-    sudo $IP route >> "$LOG_FILE"
+    $IP route >> "$LOG_FILE"
 
     log "NetworkManager status:"
-    sudo $NMCLI device status >> "$LOG_FILE"
+    $NMCLI device status >> "$LOG_FILE"
 
     log "Recent NetworkManager logs:"
-    sudo $JOURNALCTL -u NetworkManager --since "5 minutes ago" >> "$LOG_FILE"
+    $JOURNALCTL -u NetworkManager --since "5 minutes ago" >> "$LOG_FILE"
 
     log "Recent WiFi driver logs:"
-    sudo $DMESG | grep brcmfmac | tail -20 >> "$LOG_FILE"
+    $DMESG | grep brcmfmac | tail -20 >> "$LOG_FILE"
 
     # -------- ARP neighbor check --------
     ARP_STATE=$($IP neigh show "$ROUTER" | awk '{print $3}')
@@ -226,11 +275,11 @@ recover_network() {
 
     # -------- Recovery step 1 --------
     log "Recovery step 1: reconnecting WiFi"
-    sudo $NMCLI device disconnect "$INTERFACE"
+    $NMCLI device disconnect "$INTERFACE"
     sleep 3
-    sudo $NMCLI device connect "$INTERFACE"
+    $NMCLI device connect "$INTERFACE"
     sleep 10
-    sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
+    $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         log "Recovery successful after WiFi reconnect"
         log "=================================================="
@@ -239,9 +288,9 @@ recover_network() {
 
     # -------- Recovery step 2 --------
     log "Recovery step 2: restarting NetworkManager"
-    sudo $SYSTEMCTL restart NetworkManager
+    $SYSTEMCTL restart NetworkManager
     sleep 10
-    sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
+    $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         log "Recovery successful after NetworkManager restart"
         log "=================================================="
@@ -250,11 +299,11 @@ recover_network() {
 
     # -------- Recovery step 3 --------
     log "Recovery step 3: reloading WiFi driver"
-    sudo $MODPROBE -r brcmfmac
+    $MODPROBE -r brcmfmac
     sleep 3
-    sudo $MODPROBE brcmfmac
+    $MODPROBE brcmfmac
     sleep 10
-    sudo $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
+    $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         log "Recovery successful after driver reload"
     else
@@ -263,16 +312,73 @@ recover_network() {
     log "=================================================="
 }
 
+# How long the device may sit with nobody able to reach it before it re-associates.
+# Deliberately long: the cure is only free while nothing is connected, and a device that
+# re-associates every few minutes is the unstable connection this is meant to avoid.
+#
+# There is deliberately no gratuitous-ARP step in front of it. check_connectivity above
+# already sends one every five seconds, so the LAN's idea of where this MAC lives was
+# being refreshed the whole time both hangs were happening - which is good evidence that
+# stale layer-2 forwarding is not the fault, and that another re-announcement here would
+# be one more frame that changes nothing.
+REASSOCIATE_AFTER=3600     # 60 minutes
+
+LAST_INBOUND=$(date +%s)
+LAST_REASSOCIATE=0
+
+# Bounded so that a device nobody touches for a week cannot turn its own log into the
+# thing that fills the card.
+watch_inbound() {
+    local now silence
+    now=$(date +%s)
+
+    if [ "$(inbound_sessions)" -gt 0 ]; then
+        LAST_INBOUND=$now
+        return 0
+    fi
+
+    silence=$((now - LAST_INBOUND))
+
+    # Re-associate. This is exactly what a person does by hand when the device has gone
+    # quiet, and it has worked every time - so it is worth doing unattended, bounded to
+    # once an hour and only while nobody is connected, so it can never interrupt anyone.
+    # The state is captured first: every hang so far has been diagnosed from outside the
+    # device, because nothing was ever looking from inside it at the time.
+    if [ "$silence" -ge "$REASSOCIATE_AFTER" ] \
+       && [ $((now - LAST_REASSOCIATE)) -ge "$REASSOCIATE_AFTER" ]; then
+        LAST_REASSOCIATE=$now
+        log "No inbound connection for $((silence / 60))m - state before re-associating:"
+        capture_state
+        $NMCLI device disconnect "$INTERFACE" > /dev/null 2>&1
+        sleep 3
+        $NMCLI device connect "$INTERFACE" > /dev/null 2>&1
+        sleep 5
+        MY_IP=$(hostname -I | awk '{print $1}')
+        if $PING -W2 -c2 "$ROUTER" > /dev/null 2>&1; then
+            log "Re-associated, router reachable, address $MY_IP"
+        else
+            log "Re-associated but the router is not reachable - leaving it to the ladder"
+        fi
+        # Not a claim that anyone reached us - it starts the clock again so the ladder
+        # above is not re-entered on the next tick.
+        LAST_INBOUND=$(date +%s)
+    fi
+}
+
 # --- Main Daemon Loop ---
 log "WiFi Monitoring Service Started (Native systemd management)."
 
 while true; do
     if check_connectivity; then
+        # Reaching the router says the radio works. It does not say anyone can reach us,
+        # which is the failure this device actually has, so that is asked separately.
+        watch_inbound
         # Check every 5 second when healthy
         sleep 5
     else
         # Run recovery if connectivity check fails
         recover_network
+        LAST_INBOUND=$(date +%s)
         # Cooldown period before returning to 1 minute checks
         sleep 60
     fi

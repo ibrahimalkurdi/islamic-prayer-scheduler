@@ -383,6 +383,47 @@ button.ghost {
     flex-wrap: wrap;
 }
 
+/* Applying settings takes several seconds - the prayer map is rebuilt from the CSV and
+   the athan service restarted - and a form that just sits there looks like a tap that
+   missed. A cover rather than an inline line of text, because it also stops a second tap
+   landing halfway through an apply that is already running. */
+.overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    padding: 1rem;
+    text-align: center;
+    background: rgba(15, 23, 42, .88);
+}
+
+.overlay p {
+    margin: 0;
+    color: var(--text);
+    font-size: 1.1rem;
+}
+
+.spinner {
+    width: 3.25rem;
+    height: 3.25rem;
+    border: 4px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* A spinning ring is the one thing on this page that moves on its own. For a reader who
+   asked for less of that, the ring still says "working" by being there. */
+@media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+}
+
 .hidden { display: none !important; }
 
 /* ---- short viewports ----

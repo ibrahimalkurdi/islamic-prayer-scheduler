@@ -24,6 +24,8 @@ UNIT_DIR="/etc/systemd/system"
 PACKAGE_FILE="$SCHEDULER_DIR/config/packages.txt"
 ICON_DIR="/usr/share/icons/hicolor/48x48/apps"
 PIPEWIRE_DIR="/etc/pipewire"
+LOGROTATE_SRC_NAME="config/logrotate/scheduler"
+LOGROTATE_INSTALLED="/etc/logrotate.d/scheduler"
 
 # id -u rather than $EUID, because $EUID is readonly in bash and a test cannot stand in
 # for it - and a root-only script with no way to exercise it is how the last one shipped
@@ -181,6 +183,46 @@ if [[ -f "$PIPEWIRE_SRC" ]] && differs "$PIPEWIRE_SRC" "$PIPEWIRE_DIR/$(basename
     if [[ $CHECK_ONLY -eq 0 ]]; then
         mkdir -p "$PIPEWIRE_DIR"
         install -m 0644 -o root -g root "$PIPEWIRE_SRC" "$PIPEWIRE_DIR/" || exit 1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Keep the logs from filling the card
+# ---------------------------------------------------------------------------
+# This replaced four cron lines that emptied four named logs at midnight, and missed the
+# two biggest ones on the device. It lives here rather than in init.sh because writing to
+# /etc/logrotate.d needs root, and a release that changes the policy should reach every
+# device on the nightly update rather than waiting for somebody to re-run setup.
+#
+# The device user is read from the tree's owner rather than passed in: this script takes
+# no argument that decides what it acts on, and that is not weakened for a log file.
+LOGROTATE_SRC="$SCHEDULER_DIR/$LOGROTATE_SRC_NAME"
+if [[ -f "$LOGROTATE_SRC" ]]; then
+    device_user="$(stat -c %U "$SCHEDULER_DIR" 2> /dev/null)"
+    if [[ -n "$device_user" && "$device_user" != "UNKNOWN" ]]; then
+        staged_lr="$(mktemp)"
+        sed -e "s|__SCHEDULER_DIR__|$SCHEDULER_DIR|g" \
+            -e "s|__DEVICE_USER__|$device_user|g" "$LOGROTATE_SRC" > "$staged_lr"
+        if differs "$staged_lr" "$LOGROTATE_INSTALLED"; then
+            note "installing $LOGROTATE_INSTALLED"
+            if [[ $CHECK_ONLY -eq 0 ]]; then
+                install -m 0644 -o root -g root "$staged_lr" "$LOGROTATE_INSTALLED" \
+                    || echo "WARNING: could not install $LOGROTATE_INSTALLED" >&2
+            fi
+        fi
+        rm -f "$staged_lr"
+
+        # systemd opens StandardOutput=append: as root, so the website's log ends up
+        # root-owned in a directory everything else in there belongs to the device user.
+        # logrotate above drops to that user and could not truncate it. Cheap to assert
+        # every run, and it is how a device that has already been running gets fixed.
+        for log in "$SCHEDULER_DIR"/logs/*.log; do
+            [[ -f "$log" ]] || continue
+            if [[ "$(stat -c %U "$log" 2> /dev/null)" == "root" ]]; then
+                note "giving $(basename "$log") back to $device_user"
+                [[ $CHECK_ONLY -eq 0 ]] && chown "$device_user":"$device_user" "$log"
+            fi
+        done
     fi
 fi
 

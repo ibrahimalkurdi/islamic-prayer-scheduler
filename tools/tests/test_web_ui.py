@@ -46,11 +46,18 @@ ROOT = tempfile.mkdtemp(prefix="web-ui-test-")
 DESKTOP = os.path.join(ROOT, "Desktop")
 SCHEDULER = os.path.join(DESKTOP, "scheduler")
 for sub in ("config/scripts", "config/prayers-config", "config/fonts/arabic-fonts",
+            "config/icons",
             "logs", "var", "audio/quran", "audio/fajr", "audio/duha",
             "audio/tahajjud", "audio/athkar_elsabah", "audio/athkar_elmasa",
             "audio/friday_quran", "audio/shorooq", "audio/dhuhr", "audio/asr",
             "audio/maghrib", "audio/isha"):
     os.makedirs(os.path.join(SCHEDULER, sub), exist_ok=True)
+
+# The real icons, not stand-ins: the server reads them out of config/icons/ rather than
+# from site/, so a fixture that invented its own would prove the route and not the file.
+for icon in ("athan-app-icon-32.png", "athan-app-icon-128.png", "athan-app-icon-256.png"):
+    shutil.copyfile(os.path.join(REPO, VARIANT, "config", "icons", icon),
+                    os.path.join(SCHEDULER, "config", "icons", icon))
 
 ROWS = []
 day = date_cls(datetime.now().year, 1, 1)
@@ -180,9 +187,9 @@ def post(path, payload, origin=None, want_status=200):
 
 
 print("1. the pages are served, and they are files not rendered HTML")
-for path, needle in (("/", "باقي للصلاة"),
+for path, needle in (("/", "الوقت المتبقي للصلاة"),
                      ("/countdown/", "id=\"digits\""),
-                     ("/daily/", "قائمة اليومية للصلوات"),
+                     ("/daily/", "اوقات الصلاة"),
                      ("/settings/", "الاعدادات")):
     status, body, headers = get(path)
     check(f"GET {path}", status, 200)
@@ -203,10 +210,63 @@ check("to /countdown/", headers["Location"], "/countdown/")
 print("4. the assets, and nothing else, are reachable")
 for name, ctype in (("app.css", "text/css; charset=utf-8"),
                     ("app.js", "application/javascript; charset=utf-8"),
-                    ("config.js", "application/javascript; charset=utf-8")):
+                    ("config.js", "application/javascript; charset=utf-8"),
+                    ("manifest.webmanifest",
+                     "application/manifest+json; charset=utf-8")):
     status, _, headers = get(f"/static/{name}")
     check(f"GET /static/{name}", status, 200)
     check(f"{name} content type", headers["Content-Type"], ctype)
+
+# Added to a phone's home screen the site should carry the app's own icon rather than a
+# blank glyph, which means the icon has to be reachable and has to be a real PNG - a 404
+# body served as image/png would satisfy a status check and still show nothing.
+for name in ("icon-32.png", "icon-128.png", "icon-256.png"):
+    status, body, headers = get(f"/static/{name}")
+    check(f"GET /static/{name}", status, 200)
+    check(f"{name} content type", headers["Content-Type"], "image/png")
+    check(f"{name} is really a PNG", body[:8], b"\x89PNG\r\n\x1a\n")
+
+# Every page, not just the home page: whichever one is open is the one that gets added.
+for page in ("/", "/countdown/", "/daily/", "/settings/"):
+    html = get(page)[1].decode("utf-8")
+    check(f"{page} names an apple-touch-icon", 'rel="apple-touch-icon"' in html, True)
+    check(f"{page} names a manifest", 'rel="manifest"' in html, True)
+
+# The save button is at the foot of a long form and the result appears above it, so
+# without this a tap on a phone answers somewhere off the top of the screen and reads as
+# nothing having happened.
+settings_html = get("/settings/")[1].decode("utf-8")
+check_true("the settings page scrolls its result into view",
+           "scrollIntoView" in settings_html)
+check_true("and does not animate it for a reader who asked not to",
+           "prefers-reduced-motion" in settings_html)
+
+# Applying takes several seconds - the prayer map is rebuilt and the athan service
+# restarted - so the page has to say it is working, and then has to stop saying it.
+check_true("it covers the page while applying", 'id="working"' in settings_html)
+check_true("with something that reads as working",
+           'class="spinner"' in settings_html)
+# Every path that leaves the applying state must take the cover down. One that does not
+# leaves a spinner over a page nobody can touch, which is worse than no cover at all.
+check("every exit from applying lowers the cover",
+      settings_html.count("working(false)"), 3)
+check_true("and the cover is raised on the tap", "working(true)" in settings_html)
+# The overlay replaced an inline note; leaving the id behind in show()'s list would make
+# it throw on a page that no longer has that element.
+check("the busy note it replaced is gone", 'id="busy"' in settings_html, False)
+
+spinner_css = get("/static/app.css")[1].decode("utf-8")
+check_true("the spinner is defined", ".spinner" in spinner_css)
+check_true("and stops spinning for reduced motion",
+           "prefers-reduced-motion" in spinner_css)
+
+manifest = json.loads(get("/static/manifest.webmanifest")[1])
+# Resolved against the manifest's own URL, so a bare name here means /static/<name> on
+# the device and static/<name> on a static host - one spelling that works in both.
+for icon in manifest["icons"]:
+    check(f"manifest icon {icon['src']} is relative", icon["src"].startswith("/"), False)
+    check(f"manifest icon {icon['src']} is served",
+          get(f"/static/{icon['src']}")[0], 200)
 
 print("5. a path cannot be turned into a file name")
 for attack in ("/static/../api.py", "/static/../../shared/mute.py",
@@ -609,6 +669,18 @@ static_home = open(os.path.join(OUT, "index.html"), encoding="utf-8").read()
 check("the home page has no settings link", "/settings/" in static_home, False)
 check_true("but still has the other two",
            "/countdown/" in static_home and "/daily/" in static_home)
+# The icons live in config/icons/ on a device and are served from there, so copytree
+# does not bring them - a static copy without this step renders fine and still gets a
+# blank glyph on a phone's home screen, which is the whole point of having them.
+for name in ("icon-32.png", "icon-128.png", "icon-256.png", "manifest.webmanifest"):
+    check_true(f"the static copy carries {name}",
+               os.path.isfile(os.path.join(OUT, "static", name)))
+static_manifest = json.load(open(os.path.join(OUT, "static", "manifest.webmanifest"),
+                                 encoding="utf-8"))
+for icon in static_manifest["icons"]:
+    check_true(f"static manifest icon {icon['src']} resolves",
+               os.path.isfile(os.path.join(OUT, "static", icon["src"])))
+
 baked = json.load(open(os.path.join(OUT, "data", "year.json"), encoding="utf-8"))
 check_true("the year has days in it", len(baked["days"]) > 360)
 check_true("and they carry spans",

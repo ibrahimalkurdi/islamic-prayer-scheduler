@@ -399,9 +399,13 @@ wall-mounted screen dead.
 
 If the release needs something installed as root — a new background service, or a system
 package the new code uses — the updater does that too, through the helper installed in
-Step 7. A handful of things still need a person at the device: fonts, `/boot/cmdline.txt`
-and the sudoers rules themselves. Those are listed in `logs/setup.log` under *Skipped*,
-and the release notes will say so.
+Step 7. A release that changes something setup owns, such as a desktop shortcut or a cron
+entry, can also ask for setup itself to be re-run; that happens on the same nightly pass,
+without a password and with nobody at the device.
+
+A handful of things still need a person at the device: fonts, `/boot/cmdline.txt` and the
+sudoers rules themselves. Those are listed in `logs/setup.log` under *Skipped*, and the
+release notes will say so.
 
 ### Controlling updates on a device
 
@@ -495,9 +499,13 @@ The hostname is the device's user name — `louay.local`, `ahmad.local`. Step 7'
 | page | |
 |---|---|
 | `http://louay.local/` | the three links |
-| `http://louay.local/countdown/` | باقي للصلاة — the countdown, and the mute button |
-| `http://louay.local/daily/` | قائمة اليومية للصلوات — any date |
+| `http://louay.local/countdown/` | الوقت المتبقي للصلاة — the countdown, and the mute button |
+| `http://louay.local/daily/` | اوقات الصلاة — any date |
 | `http://louay.local/settings/` | الاعدادات — the same settings, applied the same way |
+
+Added to a phone's home screen it carries the device's own icon. If `louay.local` ever
+fails to resolve — mDNS is unreliable on some phones — use the address instead; the home
+page always prints it, and a DHCP reservation on the router makes it permanent.
 
 Saving from the browser runs the same `apply_settings.sh` the Settings app runs, and
 refuses the same values with the same messages. The touch screen picks the change up on

@@ -1,0 +1,10 @@
+# The release that last needed setup re-run on every device.
+#
+# Most releases are files, packages and units, and the updater handles those on its own.
+# A release that changes something owned by init.sh instead - a desktop shortcut, a cron
+# entry, an autostart line, a font - puts its own version here. The updater compares this
+# against var/init_ran_for and runs setup once when they differ, with nobody present.
+#
+# Leave it alone for a release that does not need it. Bumping it for a release that
+# changes nothing in setup costs every device a pointless run.
+1.3.0

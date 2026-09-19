@@ -94,6 +94,23 @@ echo "# fixture marker: version 1.1.0" \
 # can be told apart from "it was always there".
 mkdir -p "$BUILD/$SUBTREE/default-audio/shorooq"
 echo "FIXTURE-DEFAULT-SHOROOQ" > "$BUILD/$SUBTREE/default-audio/shorooq/sunrise.mp3"
+# 1.1.0 also carries a pre_update.sh and a post_update.sh, which 1.0.0 does not - so a
+# release that brings steps of its own and a release that brings none are both covered.
+# Neither is shipped in the real tree; these exist only in the fixture's releases.
+cat > "$BUILD/$SUBTREE/config/scripts/pre_update.sh" <<'HOOK'
+#!/bin/bash
+echo "pre_update ran: $SCHEDULER_UPDATE_FROM -> $SCHEDULER_UPDATE_TO"
+[[ -f "$SCHEDULER_DIR/var/fail_pre_update" ]] && exit 1
+: > "$SCHEDULER_DIR/var/pre_update_ran"
+exit 0
+HOOK
+cat > "$BUILD/$SUBTREE/config/scripts/post_update.sh" <<'HOOK'
+#!/bin/bash
+echo "post_update ran: $SCHEDULER_UPDATE_FROM -> $SCHEDULER_UPDATE_TO"
+[[ -f "$SCHEDULER_DIR/var/fail_post_update" ]] && exit 1
+: > "$SCHEDULER_DIR/var/post_update_ran"
+exit 0
+HOOK
 git -C "$BUILD" add -A
 git -C "$BUILD" commit -qam "fixture 1.1.0"
 build_release 1.1.0
