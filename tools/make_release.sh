@@ -127,6 +127,11 @@ INCLUDE=(
     "config/pipewire-pulse.conf"
     "config/crontab.txt"
     "config/update.conf.example"
+    # The helper reads this from the live tree to decide what to install, so a release
+    # that adds a package has to be able to put the new list on the device. It shipped
+    # inside the tarball from the first day and was never on this list, which meant the
+    # device kept whatever it already had and the package was never installed.
+    "config/packages.txt"
 )
 # Belt and braces beside the strip above: rsync honours these on the device, so even a
 # state file that somehow survived packaging would not be copied over the live one.

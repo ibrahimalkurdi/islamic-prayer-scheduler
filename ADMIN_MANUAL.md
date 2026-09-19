@@ -195,6 +195,9 @@ forward: pinning to an older version downgrades the device, using exactly the sa
   code that imports a missing module will simply fail on every device.
 - **Does it change `/boot/cmdline.txt`, the fonts or the sudoers rules?** Those still need
   a person at the device. Say so in the release notes (§19.5).
+- **Run the suites** (§4). They take a few minutes and one of them, `test_make_release.sh`,
+  checks the manifest itself — a file that ships in the archive but off the include list
+  reaches no device, and that has gone unnoticed three times.
 
 ### 3.2 Build
 
@@ -457,18 +460,25 @@ the releases. It is the only part that cannot work off-device, since it asks sys
 whether the athan service is up and X whether the countdown has a window. Every other
 script under test is the real one.
 
-Then run the five suites:
+Then run the seven suites that need it. They find the fixture from their own directory,
+so they have to be run **from** it — calling them by their path in the repo fails:
 
 ```bash
 cd /tmp/scheduler-update-test
-bash test_updater.sh              # 13 refusal and recovery paths
+bash test_updater.sh              # 26 refusal and recovery paths (slow, ~10 min)
 bash test_state_survives.sh       # the owner's data survives a real update
-bash test_make_release.sh         # the packaging guards (slow, ~3 min - it builds six releases)
+bash test_make_release.sh         # the packaging guards (slow, ~3 min - it builds seven releases)
 python3 test_settings_updates.py  # the Settings app's buttons, headless (slow, ~2 min)
 python3 test_friday_quran.py      # Surat Al-Kahf on Fridays, headless
+python3 test_time_format.py       # the 12-hour clock
+python3 test_makrooh.py           # the makrooh windows on screen
 ```
 
-Three more need no fixture — they build their own throwaway device — and are run from the
+`test_updater.sh` is the long one, and it must be allowed to finish: killing it part way
+leaves the fixture half-updated, and the suites run after it fail in ways that look like
+real bugs. If that happens, rebuild the fixture rather than reading the failures.
+
+Five more need no fixture — they build their own throwaway device — and are run from the
 repo root:
 
 ```bash
@@ -476,13 +486,15 @@ python3 tools/tests/test_prayer_logic.py   # the prayer period rules
 python3 tools/tests/test_web_ui.py         # the website, every route
 python3 tools/tests/test_site_js.py        # its JavaScript (skipped where there is no node)
 python3 tools/tests/test_layout.py         # it fits a phone (skipped where there is no Chrome)
+bash tools/tests/test_system_apply.sh      # the root helper, against a fake root
 ```
 
 | suite | what it proves |
 |---|---|
 | `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` overrides the deny-list but resolves to nothing because no release ships that file, a pointer naming `var/update/` is still refused, and the plain-string shorthand still resolves; `--rollback` restores; a release's `default-audio/` is seeded into `audio/`, a seeded file the owner deletes does not come back, and one they put there themselves is not overwritten; a forced `include` installs over the deny-list without `--delete` touching the owner's own recitations beside it; a device pointed at its own version file follows it and says so in the log and in `--status` |
-| `test_make_release.sh` | `default-audio/` ships while `audio/` is still stripped; an `.mp3` anywhere else fails the build; a folder name matching no event is reported with the real name suggested and refuses to build with no terminal, while `--yes` proceeds; a payload over the cap is refused and the archive removed, while `--allow-large` builds it |
-| `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does |
+| `test_make_release.sh` | `default-audio/` ships while `audio/` is still stripped; an `.mp3` anywhere else fails the build; a folder name matching no event is reported with the real name suggested and refuses to build with no terminal, while `--yes` proceeds; a payload over the cap is refused and the archive removed, while `--allow-large` builds it; and every path the device reads out of its own tree is on the manifest's include list, so a release can actually replace it |
+| `test_system_apply.sh` | the helper refuses to run as anyone but root, installs packages, units and icons from a release, and reports `10` only when there is work to do; the manifest can carry package names but never arguments; the tree it installs from is fixed rather than chosen by the caller; a failed package install fails the run; the desktop shortcut bootstraps itself where there is no helper and runs setup silently where there is one; `init.sh` survives a run with no way to ask for a password; and a release can replace the helper, including an old one that cannot replace itself, with nobody typing anything |
+| `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does; the website's unit carries no `CapabilityBoundingSet`, which is what let `sudo` work from the save button again; the Wi-Fi watchdog can see a hang that leaves the association up; and the logrotate policy ships and is driven through a real `logrotate` to prove it rotates by copy rather than rename |
 | `test_settings_updates.py` | the version list is fetched newest-first; choosing a version writes `PIN` **and** installs it; the checkbox writes `ENABLED`; choosing nothing raises an error rather than doing nothing; the pin line and **العودة إلى التحديث المركزي** are on screen only while the device is pinned; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest; both lists show five rows at a time |
 | `test_prayer_logic.py` | Duha opens 20 minutes after sunrise and its period ends at Dhuhr; Isha's period crosses midnight for today but not for a browsed date; green holds to exactly 20 minutes past the athan and red begins exactly 20 before the next; الشروق is makrooh throughout, zawal takes the makrooh colour while the close of العصر keeps red and is makrooh too; and `period_boundaries` gives the same answer as `period_state` at **every second** of every period — which is what lets the website carry no rules of its own |
 | `test_web_ui.py` | every page and asset is served and nothing else is, including six traversal attempts; the day payload carries spans that agree with the rules second by second over the wire; a save writes exactly the keys it was given and a no-change save is byte-identical; the Duha and Athkar rules are refused in the Settings app's own words and nothing is written; an unknown key, a missing audio file, a bad clock and a negative number are all refused; a save really runs `apply_settings.sh`, off the request; a foreign `Origin` cannot post; mute round-trips through a real `wpctl` subprocess and falls back to stopping the player when there is none; the prayer map is re-read when it changes underneath; and the static build carries no settings page and no unguarded call to the device |
@@ -1915,6 +1927,13 @@ turn this into *run apt however you like*.
 Already-installed packages are skipped, so the file is a statement of what the device
 needs, not a list of what is new. Add to it; do not rewrite it per release.
 
+The helper reads this from the live tree, so a release that adds a package only works if
+the release is allowed to replace the file. `tools/make_release.sh` keeps
+`config/packages.txt` on the manifest's include list for exactly that reason, and
+`tools/tests/test_make_release.sh` fails the build if it ever falls off again — it shipped
+inside the archive but off the list for a long time, which meant devices kept whatever
+list they already had and the new package was never installed.
+
 ### 19.4 It updates itself
 
 The helper lives outside `~/Desktop/scheduler`, so the updater cannot rsync over it. Left
@@ -1931,7 +1950,9 @@ this file *through* the unit it installs.
 
 **The devices that predate it.** A helper installed before self-updating cannot replace
 itself. Those devices are carried across by a oneshot unit the release ships, on the next
-nightly update, with no password and nobody present — see §19.6.
+nightly update, with no password and nobody present — see §19.6. That path is for a fleet
+that already has *some* helper; a device with none at all is a different case, and §19.6
+covers it separately.
 
 Until that lands, such a device says so rather than leaving it to be noticed. After the helper has had its
 chance to replace itself, `init.sh` compares the two once more, and if they still differ on
@@ -2007,9 +2028,30 @@ ssh louay.local 'grep -c SCHEDULER_APPLY_REEXEC /usr/local/sbin/scheduler-apply-
 ```
 
 `0` or `10` from the first means the grant is in place; `1` from the second means the
-helper is current and self-updating. A device that answers neither has never had `init.sh`
-run on it at all, and needs the one password run in §10 — that is a device off the bench,
-not a device in the field.
+helper is current and self-updating. A device that answers neither has no helper at all.
+
+**For the 1.3.0 rollout, that is every device in the field.** Nothing above applies to it,
+and the distinction is worth being exact about, because it decides whether anyone has to
+travel. The helper is new in 1.3.0 — `pi4-v1.2.1`'s archive contains no `system_apply.sh`,
+no `install_helper.sh` and no bootstrap unit — so the migration has nothing to migrate
+from. Worse, the updater that performs the 1.2.1 → 1.3.0 hop is *1.2.1's*, which never
+installs units; it only logs `run init.sh to install it`. The bootstrap unit lands in the
+tree and sits there unused, and `needs_init` and the pre/post hooks are likewise 1.3.0
+code that 1.3.0's own arrival cannot use.
+
+So every existing device needs exactly one run with a password, and it has to be **after**
+that device has taken 1.3.0 — run before, it is 1.2.1's setup and installs none of this.
+Opening **تثبيت مكونات النظام** on the Desktop is the way to do it: 1.3.0's launcher probes
+`sudo -n <helper> --check`, gets no answer, and hands itself to a terminal where sudo can
+prompt. One password, and that device is never touched by hand again.
+
+One loose end, harmless but better known than discovered: that manual run does not write
+`var/init_ran_for` — only the updater does — so the first later release carrying a
+`needs_init` line will run setup once more, unattended. It is idempotent; it just is not
+free.
+
+The migration path above is what makes the *next* helper change cost nothing. It is
+written for the fleet 1.3.0 leaves behind, not for the one it finds.
 
 ### 19.7 A release that needs setup re-run
 

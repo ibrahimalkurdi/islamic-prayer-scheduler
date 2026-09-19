@@ -48,6 +48,12 @@ The system supports automatic audio playback for prayers, nawafel, athkar, and Q
     - Which events trigger playback
     - Playback timing for nawafel, athkar, and Quran
 
+- **The same screens from a phone on the same wifi**
+  - `http://<hostname>.local` serves the countdown, the day's prayer list and the
+    settings, so a time can be checked or a setting changed without walking to the device
+  - Add it to a phone's home screen and it carries the app's own icon
+  - LAN only, no account, no internet route in or out
+
 ---
 
 ## Prayer Time Configuration
@@ -88,6 +94,15 @@ The system is built on two main pillars:
   - Triggers a playback script by passing:
     - Event name
     - List of MP3 audio files
+
+- Website Service
+  - Serves the three screens over the LAN on port 80
+  - Stdlib Python only, and it computes nothing of its own — the prayer rules and the
+    settings rules come from the same modules the desktop apps import
+
+- Wi-Fi Watchdog
+  - Watches the link and re-associates a connection that has gone quiet, so a
+    wall-mounted device stays reachable
 
 ### 2. Desktop Applications
 

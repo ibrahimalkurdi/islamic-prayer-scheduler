@@ -8,6 +8,23 @@
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$HERE/build-repo"
 TREE="$BUILD/scheduler-official-touch-screen-with-raspberry-pi-4"
+
+# Run from the repo instead of the fixture, this suite used to commit to the real repo.
+# git -C walks up until it finds a .git, so a build-repo that is a plain directory - a
+# leftover from exactly this mistake - resolves to the enclosing checkout, and the
+# "reset before run" commit below then swept the admin's uncommitted work onto main.
+# So: the build repo has to be its own repository, and it has to not be this one.
+if [ ! -d "$BUILD/.git" ]; then
+    echo "Refusing to run: $BUILD is not a git repository of its own."
+    echo "This suite runs from the fixture, not from the repo:"
+    echo "    bash tools/tests/make_fixture.sh"
+    echo "    cd /tmp/scheduler-update-test && bash test_make_release.sh"
+    exit 2
+fi
+if [ "$(git -C "$BUILD" rev-parse --show-toplevel)" = "$(git -C "$HERE" rev-parse --show-toplevel 2> /dev/null)" ]; then
+    echo "Refusing to run: the build repo resolves to the repo this script lives in."
+    exit 2
+fi
 fail=0
 chk() { if [ "$2" = "$3" ]; then echo "  ✓ $1"; else echo "  ✗ $1 — expected $3, got $2"; fail=1; fi; }
 
@@ -150,6 +167,24 @@ out="$(build 2.0.9 < /dev/null)"
 grep -q "already published" <<< "$out" \
     && echo "  ✓ rebuilding a published version is refused" || { echo "  ✗ a republish was allowed"; fail=1; }
 git -C "$BUILD" tag -d pi4-v2.0.9 > /dev/null 2>&1
+
+echo "6. everything the device reads from its own tree is a path a release may replace"
+# Shipping a file inside the tarball is not enough. The manifest's include list is what
+# the updater is allowed to write, and anything left off it stays at whatever the device
+# already had - silently, for ever. config/packages.txt shipped from the first day and
+# was never on the list, so a release could add a package and no device would install it.
+# config/needs_init hit the same wall and is now read from the staged release instead.
+out="$(build 2.1.5 < /dev/null)"
+MANIFEST="$BUILD/dist/version.json"
+for path in "config/packages.txt" "config/logrotate/" "config/systemd/" "config/scripts/"; do
+    if python3 -c "import json,sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1]))['include'] else 1)" \
+            "$MANIFEST" "$path"; then
+        echo "  ✓ $path is a path the updater may replace"
+    else
+        echo "  ✗ $path ships but the updater may never write it"; fail=1
+    fi
+done
+git -C "$BUILD" tag -d pi4-v2.1.5 > /dev/null 2>&1
 
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

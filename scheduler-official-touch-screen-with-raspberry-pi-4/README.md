@@ -477,10 +477,14 @@ settings to every device. It writes `dist/scheduler-pi4-1.1.0.tar.gz`, `SHA256SU
 Set `"apply_mode": "full"` in `version.json` for a release that renames or removes files;
 `changed` (the default) only copies what differs and leaves anything else alone.
 
-If a release changes a systemd unit, the updater applies everything else and reports
-`needs_attention` — the Settings app shows a banner asking for `init.sh` to be run. That
-step needs root, and granting it to the automatic path would be a root grant in all but
-name for something that changes almost never.
+If a release changes a systemd unit, installs a package, or asks for setup itself to be
+re-run, the updater does all of it through the root helper from Step 7, unattended.
+
+On a device that predates that helper — anything still on 1.2.1 or older — there is
+nothing to ask, so the updater applies everything else and reports `needs_attention`, and
+the Settings app shows a banner. Opening **تثبيت مكونات النظام** on the Desktop once, and
+giving it the password once, installs the helper; that device never needs a person for an
+update again.
 
 ---
 
