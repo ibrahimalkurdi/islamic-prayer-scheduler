@@ -6,4 +6,4 @@ dist/
 __pycache__/
 *.pyc
 tools/manual_pdf/.venv/
-USER_MANUAL_AR.pdf
+
