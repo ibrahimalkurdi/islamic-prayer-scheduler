@@ -16,6 +16,7 @@
     --border: #475569;
     --text: #F8FAFC;
     --muted: #94A3B8;
+    --dim: #64748B;
     --accent: #38BDF8;
 }
 
@@ -372,6 +373,18 @@ button.ghost {
     margin-bottom: 1rem;
     color: var(--muted);
     text-decoration: none;
+}
+
+/* The installed version under the prayer list, as the touch screen carries it under its
+   own: dimmer than the muted text, so it reads as a mark rather than as a line to read.
+   --dim is FOOTER_COLOR from prayer_times_gui/main.py, the same grey. */
+.version {
+    margin: 1.2rem 0 0;
+    text-align: center;
+    color: var(--dim);
+    font-family: "DejaVu Sans", system-ui, sans-serif;
+    font-size: .8rem;
+    direction: ltr;
 }
 
 .list-nav {

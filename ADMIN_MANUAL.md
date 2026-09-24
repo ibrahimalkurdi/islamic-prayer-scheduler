@@ -77,6 +77,8 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_site_js.py` | the website's JavaScript, held to the same answers the device gives |
 | `tools/tests/test_layout.py` | measures the pages in a real browser at phone sizes: nothing wider than the screen, and a whole day visible without scrolling |
 | `tools/build_static_site.py` | bakes the prayer pages into a directory a static host can serve (§18) |
+| `tools/build_manual_pdf.sh` | builds `USER_MANUAL_AR.pdf` from the `.md`: cover, index with page numbers, then the manual numbered from 1. Run it after every edit to the manual |
+| `tools/tests/test_manual_pdf.sh` | builds the manual PDF into a temp file and checks the page numbering and that every index number matches the page its link opens |
 
 **On each device, under `~/Desktop/scheduler/`**
 
@@ -1657,12 +1659,17 @@ use the address. Every page reports it, so it is never a mystery:
 
 ```bash
 curl -s http://<hostname>.local/api/device
-{"hostname": "louay", "ip": "192.168.2.159", "now": "…"}
+{"hostname": "louay", "ip": "192.168.2.159", "now": "…", "version": "1.3.0"}
 ```
 
 The hostname is the device's user name, set by `init.sh` along with `avahi-daemon`
 (`init.sh:243-280`), so `louay.local` has resolved on every device since well before this
 existed.
+
+`version` is `var/installed_version`, read per request through
+`applications/shared/device_info.py` — the same file and the same rule the touch screen's
+daily list prints at its foot, which is where the daily page prints it too. Read per
+request because `check_updates.sh` rewrites that file under a server that keeps running.
 
 ### What it is
 

@@ -27,6 +27,8 @@
 <div class="rows" id="rows"></div>
 <div class="note bad hidden" id="error"></div>
 
+<p class="version hidden" id="version"></p>
+
 <script src="/static/config.js"></script>
 <script src="/static/app.js"></script>
 <script>
@@ -177,10 +179,29 @@ setInterval(() => {
     paintBadge(now);
 }, 1000);
 
+/* The installed version at the foot of the page, the line the touch screen's own daily
+   list carries. Device only: a year baked into a static host is nobody's version.
+
+   Re-read on the minute rather than once, for the reason the app re-reads it on every
+   refresh - check_updates.sh writes var/installed_version only after the new release
+   passes its health check, which is after the page is already open. */
+function refreshVersion() {
+    if (!window.DEVICE) return;
+    Site.json("/api/device").then((info) => {
+        const line = document.querySelector("#version");
+        if (!info.version) return;
+        line.textContent = info.version;
+        line.classList.remove("hidden");
+    }).catch(() => {});
+}
+
+refreshVersion();
+
 /* And a full redraw on the minute regardless, so a day that rolls over at midnight is
    picked up even though nothing about the running period changed. */
 setInterval(() => {
     if (shown === Site.isoDate(new Date())) render().catch(() => {});
+    refreshVersion();
 }, 60000);
 </script>
 </body>

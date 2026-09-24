@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # applications/, so "from shared import ..." works however the service was started.
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
-from shared import mute as mute_lib, prayer_logic  # noqa: E402
+from shared import device_info, mute as mute_lib, prayer_logic  # noqa: E402
 import api  # noqa: E402
 
 DEFAULT_PORT = 80
@@ -348,6 +348,10 @@ class Handler(BaseHTTPRequestHandler):
             "hostname": socket.gethostname(),
             "ip": local_ip(),
             "now": datetime.now().isoformat(timespec="seconds"),
+            # Read per request rather than at startup: an update rewrites the file under
+            # a server that keeps running, and the daily page prints this the same way
+            # the touch screen's daily list does.
+            "version": device_info.installed_version(self.device.scheduler_dir),
         })
 
     def api_settings_get(self):

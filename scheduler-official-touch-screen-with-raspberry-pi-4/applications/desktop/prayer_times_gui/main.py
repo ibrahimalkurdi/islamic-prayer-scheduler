@@ -29,6 +29,7 @@ from shared.prayer_logic import (
     MERIDIEM_AM, MERIDIEM_PM,
     MAKROOH_LABEL, MAKROOH_NAFL_NOTICE, MAKROOH_AT_PERIOD_END, MAKROOH_KEEPS_RED,
 )
+from shared import device_info
 from shared.mute import (
     SCHEDULER_DIR, MUTE_FLAG_FILE, PLAYER_SCRIPT_FILE, MUTE_DURATION_MINUTES,
     AUDIO_SINK, AUDIO_MUTE_CMD, AUDIO_STATE_CMD, AUDIO_CMD_TIMEOUT,
@@ -58,28 +59,13 @@ def app_icon():
     return icon
 
 # The version this device is actually running, which is not a property of this file.
-# check_updates.sh writes var/installed_version after a release passes its health check,
-# so that file - not a constant baked into the payload - is the only honest answer. A
-# constant here would still read "1.0.0" on a device that has taken four updates.
-INSTALLED_VERSION_FILE = os.path.join(
-    os.path.expanduser("~"), "Desktop", "scheduler", "var", "installed_version"
-)
+# Shared with the website so the daily list and the daily page cannot print different
+# numbers - see applications/shared/device_info.py for why it is read every time.
+INSTALLED_VERSION_FILE = device_info.version_file(SCHEDULER_DIR)
 
 
 def installed_version():
-    """Read on every refresh, never cached.
-
-    check_updates.sh relaunches this app *before* it runs the health check, and writes
-    var/installed_version only *after* the check passes. A value read once at startup
-    would therefore show the previous version for the whole life of the process - which
-    is exactly the moment someone looks at this label to see whether an update landed.
-    """
-    try:
-        with open(INSTALLED_VERSION_FILE, encoding="utf-8") as handle:
-            version = handle.read().strip()
-    except OSError:
-        return "—"
-    return version if version and version != "unknown" else "—"
+    return device_info.installed_version(SCHEDULER_DIR)
 
 # =============================================================================
 # APPEARANCE

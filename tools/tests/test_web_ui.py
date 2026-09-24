@@ -630,6 +630,50 @@ info = json.loads(body)
 check_true("a hostname", bool(info["hostname"]))
 check_true("and an address or an honest null", "ip" in info)
 
+print("20b. and it reports the version the daily page prints at its foot")
+VERSION_FILE = os.path.join(SCHEDULER, "var", "installed_version")
+
+
+def device_version():
+    _, raw, _ = get("/api/device")
+    return json.loads(raw)["version"]
+
+
+# No file at all is the state of a device that has never taken an update.
+check("no version file reads as a dash", device_version(), "—")
+
+with open(VERSION_FILE, "w", encoding="utf-8") as handle:
+    handle.write("1.3.0\n")
+check("the file is what is reported", device_version(), "1.3.0")
+
+# The point of reading it per request: check_updates.sh rewrites this file under a
+# server that keeps running, and a value cached at startup would be the old one.
+with open(VERSION_FILE, "w", encoding="utf-8") as handle:
+    handle.write("1.4.0\n")
+check("a version written under a running server is picked up", device_version(), "1.4.0")
+
+for written in ("", "   ", "unknown"):
+    with open(VERSION_FILE, "w", encoding="utf-8") as handle:
+        handle.write(written)
+    check(f"{written!r} reads as a dash", device_version(), "—")
+
+os.remove(VERSION_FILE)
+
+# The touch screen and the website must not be able to print different numbers.
+with open(VERSION_FILE, "w", encoding="utf-8") as handle:
+    handle.write("1.3.0\n")
+from shared import device_info  # noqa: E402
+check("and the shared reader agrees with the endpoint",
+      device_info.installed_version(SCHEDULER), device_version())
+
+DAILY_HTML = open(os.path.join(WEB_UI, "site", "daily", "index.html"),
+                  encoding="utf-8").read()
+check_true("the daily page has a place to put it", 'id="version"' in DAILY_HTML)
+check_true("hidden until it is filled", 'class="version hidden"' in DAILY_HTML)
+# A baked static site is nobody's version, and it has no /api/device to ask.
+check_true("and it is asked for only on a device",
+           "if (!window.DEVICE) return;" in DAILY_HTML)
+
 print("21. a request for nothing in particular is a 404, not a crash")
 for path in ("/nope", "/api/nope", "/api/day/extra"):
     status, _, _ = get(path)
