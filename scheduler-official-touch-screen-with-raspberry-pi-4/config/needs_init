@@ -7,4 +7,4 @@
 #
 # Leave it alone for a release that does not need it. Bumping it for a release that
 # changes nothing in setup costs every device a pointless run.
-1.3.0
+1.3.2

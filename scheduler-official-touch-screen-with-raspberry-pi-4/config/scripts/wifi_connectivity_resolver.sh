@@ -86,6 +86,27 @@ capture_state() {
     } >> "$LOG_FILE" 2>&1
 }
 
+# Promiscuous mode, found by accident: a packet capture left running on one device
+# switched it on as a side effect, and the one-way hang - the Pi reaching the router
+# while nothing on the LAN could reach the Pi - stopped from that moment. Power save was
+# already off, so that is not what changed. The likely reason is that the Wi-Fi chip then
+# hands every frame to Linux instead of choosing which to pass up itself, which goes
+# around whatever inside the chip stops passing them. Checked on every tick, not set once:
+# a driver reload recreates the interface without it.
+IFF_PROMISC=0x100
+NET_SYSFS="${NET_SYSFS:-/sys/class/net}"
+ensure_promisc() {
+    local flags
+    flags=$(cat "$NET_SYSFS/$INTERFACE/flags" 2> /dev/null) || return 1
+    [ $((flags & IFF_PROMISC)) -ne 0 ] && return 0
+    if $IP link set "$INTERFACE" promisc on; then
+        log "Promiscuous mode switched on for $INTERFACE"
+    else
+        log "WARNING: could not switch on promiscuous mode for $INTERFACE"
+        return 1
+    fi
+}
+
 if [ -z "$INTERFACE" ]; then
     log "ERROR: No WiFi interface detected"
     exit 1
@@ -107,6 +128,7 @@ fi
 # --- Driver & Hardware Optimization ---
 # These commands run once when the service starts
 $IW dev "$INTERFACE" set power_save off
+ensure_promisc
 
 if command -v ethtool > /dev/null; then
     # Turning off offloading prevents the WiFi chip from "batching" packets, 
@@ -369,6 +391,7 @@ watch_inbound() {
 log "WiFi Monitoring Service Started (Native systemd management)."
 
 while true; do
+    ensure_promisc
     if check_connectivity; then
         # Reaching the router says the radio works. It does not say anyone can reach us,
         # which is the failure this device actually has, so that is asked separately.

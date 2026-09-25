@@ -1851,6 +1851,15 @@ forwarding (a gratuitous ARP already goes out every 5 seconds). The leading cand
 the access point losing track of the station while the station still believes it is
 associated — unproven, which is why `capture_state()` exists.
 
+**Promiscuous mode — the fix that held.** In September 2026 a packet capture was left
+running on one device, and as a side effect it put `wlan0` into promiscuous mode. The
+one-way hang stopped from that moment. The watchdog now turns promiscuous mode on at start
+and checks it on every 5-second tick, because a driver reload recreates the interface
+without it. It logs `Promiscuous mode switched on for wlan0` only when it had to act, so
+a line after startup means something turned it off. Check it with `ip -br link show wlan0`,
+which should show `PROMISC`. The likely reason it works is that the chip then passes every
+frame to Linux instead of filtering them itself; that is not proven.
+
 ---
 
 ## 19. Unattended system setup — `scheduler-apply-system`
