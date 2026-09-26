@@ -1,0 +1,72 @@
+name: Sakina static website
+
+# Rebuilds static-website/sakina/<city>/public/ and commits it to main. Cloudflare Pages
+# serves each city's public/ as it stands, so this is the only place a site is built.
+#
+# Runs when anything the build reads changes, every 1 December so next year is baked
+# before it starts, and from the Actions tab by hand.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/applications/services/web_ui/site/**"
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/applications/services/web_ui/api.py"
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/applications/shared/prayer_logic.py"
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/config/scripts/prayer_dst.py"
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/config/prayers-config/*.csv"
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/config/icons/**"
+      - "scheduler-official-touch-screen-with-raspberry-pi-4/config/fonts/**"
+      - "tools/build_static_site.py"
+      - "tools/tests/test_static_website.py"
+      - "tools/tests/test_site_js.*"
+      - "tools/tests/test_prayer_logic.py"
+      - "static-website/sakina/**"
+      - "!static-website/sakina/*/public/**"
+      - ".github/workflows/sakina-static-website.yml"
+  schedule:
+    - cron: "0 3 1 12 *"   # 03:00 UTC on 1 December, every year
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sakina-static-website
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Test
+        run: |
+          python3 tools/tests/test_prayer_logic.py
+          python3 tools/tests/test_site_js.py
+          python3 tools/tests/test_static_website.py
+
+      - name: Build
+        run: python3 static-website/sakina/build.py
+
+      - name: Commit
+        run: |
+          git add static-website/sakina/*/public
+          if git diff --cached --quiet; then
+            echo "The sites are already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "static website: rebuild sakina ($(date -u +%Y-%m-%d))"
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -109,7 +109,7 @@ with open(EXPECTED, "w", encoding="utf-8") as handle:
                "smallHours": small_hours}, handle, ensure_ascii=False)
 
 result = subprocess.run(["node", os.path.join(REPO, "tools", "tests", "test_site_js.js"),
-                         OUT, os.path.join(OUT, "data", "year.json"), EXPECTED],
+                         OUT, os.path.join(OUT, "data", f"{YEAR}.json"), EXPECTED],
                         capture_output=True, text=True)
 print(result.stdout.strip())
 if result.stderr.strip():

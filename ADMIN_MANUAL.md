@@ -77,6 +77,9 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_site_js.py` | the website's JavaScript, held to the same answers the device gives |
 | `tools/tests/test_layout.py` | measures the pages in a real browser at phone sizes: nothing wider than the screen, and a whole day visible without scrolling |
 | `tools/build_static_site.py` | bakes the prayer pages into a directory a static host can serve (§18) |
+| `tools/tests/test_static_website.py` | the public city sites: each year's clock changes, the daily page alone, New Year in the browser, the city folders (§18) |
+| `static-website/sakina/` | the public city sites and their builder (§18) |
+| `.github/workflows/sakina-static-website.yml` | rebuilds and commits the city sites (§18) |
 | `tools/build_manual_pdf.sh` | builds `USER_MANUAL_AR.pdf` from the `.md`: cover, index with page numbers, then the manual numbered from 1. Run it after every edit to the manual |
 | `tools/tests/test_manual_pdf.sh` | builds the manual PDF into a temp file and checks the page numbering and that every index number matches the page its link opens |
 
@@ -488,6 +491,7 @@ repo root:
 python3 tools/tests/test_prayer_logic.py   # the prayer period rules
 python3 tools/tests/test_web_ui.py         # the website, every route
 python3 tools/tests/test_site_js.py        # its JavaScript (skipped where there is no node)
+python3 tools/tests/test_static_website.py # the public city sites
 python3 tools/tests/test_layout.py         # it fits a phone (skipped where there is no Chrome)
 bash tools/tests/test_system_apply.sh      # the root helper, against a fake root
 ```
@@ -505,6 +509,7 @@ bash tools/tests/test_system_apply.sh      # the root helper, against a fake roo
 | `test_web_ui.py` (palette) | the counter's green, red, makrooh and neutral grey are read out of `prayer_times_gui/main.py` and compared; the counter is confirmed to have no beige; and every card shade is re-derived with a real `QColor.darker()`/`lighter()` so a colour changed in the app but not on the website fails with both values side by side |
 | `test_layout.py` | at 360x640, 412x732 and 1440x820, no page scrolls sideways - measured by framing it at that exact size and comparing `scrollWidth` against `clientWidth`, not judged from a screenshot - and the daily list shows all seven prayers with the last one ending inside the screen. Both of these have gone wrong once: a `<fieldset>` will not shrink below its content's min-content width unless told to, which took the settings form off a 360px screen; and the rows inherited the body's prose line-height, which pushed two prayers off a 640px-tall one |
 | `test_site_js.py` | `site/app.js` loaded for real and driven against a baked year: timestamps are read as local time rather than UTC, the clock reads as `clock_12h` writes it, and the span the page would paint matches `period_state` at every sampled second |
+| `test_static_website.py` | a standard-time table baked for Europe/Berlin changes clocks on 29 March and 25 October 2026 and on 28 March and 31 October 2027; a table with summer time carried to 1 November comes out right, and is used as it stands when no timezone is given; Asia/Damascus is left as it is; an unknown zone is refused; the output is the daily page alone with nothing that acts on a device; `app.js` fetches 31 December and 1 January from their own year files, each once, and a missing year - a 404, or Cloudflare's 200 with a page instead of JSON - reads «لا توجد مواقيت لهذا اليوم»; every city folder says true or false for `daylight_saving`, has a real timezone when true, and a relative symlink that resolves inside `prayers-config/`; berlin and aachen are true and damascus false |
 | `test_friday_quran.py` | Surat Al-Kahf is scheduled on Fridays and no other day; the default is an hour after Jumu'ah; before/after and the minute count both take effect; the time is clamped into the day's own Sunrise→Asr window; the checkbox switches it off; a nonsense or missing setting falls back to an hour after; its audio selection is separate from the daily one; the player routes `friday_quran` to its own folder and treats an empty folder as a no-op; the Settings section round-trips all three keys |
 
 Poke at the fixture device by hand the same way the tests do — `HOME` and the model file
@@ -1791,15 +1796,74 @@ tools/build_static_site.py --scheduler-dir ~/Desktop/scheduler --out dist/site
 ```
 
 Writes a directory any static host can serve: the same pages, with the year baked into
-`data/year.json` by running the same `prayer_logic` over every date. The settings page and
+`data/<year>.json` by running the same `prayer_logic` over every date. The settings page and
 the mute button are not copied — both exist to manage one Raspberry Pi and mean nothing
 away from it — and the home page is written with two links instead of three.
 
-Two limits worth stating before anyone asks for it:
+A page served over HTTPS cannot talk to `http://<hostname>.local`, so a public copy can
+show prayer times but can never control a device.
 
-- the prayer times baked in are the ones on the device it was built from, one city
-- a page served over HTTPS cannot talk to `http://<hostname>.local`, so a public copy can
-  show prayer times but can never control a device
+### The public city sites — `static-website/sakina/`
+
+One site per city, each the daily list alone, served by Cloudflare Pages:
+
+| city | address |
+|---|---|
+| `damascus` | `https://sakina-damascus.pages.dev` |
+| `berlin` | `https://sakina-berlin.pages.dev` |
+| `aachen` | `https://sakina-aachen.pages.dev` |
+
+```
+static-website/sakina/
+  build.py                  builds every city, this year and next
+  <city>/
+    city.ini                the Arabic name shown on the page, daylight_saving, the IANA timezone
+    prayer-times.csv        symlink into config/prayers-config/ — one table for devices and site
+    public/                 generated; Cloudflare serves it as it stands. Never edit by hand
+```
+
+`daylight_saving` in `city.ini` is the same switch a device has. With `true`, each year is
+baked separately through the same `prayer_dst.py` functions a device runs in January: the
+clock changes baked into the table are stripped and that year's real ones applied from
+tzdata for `timezone`, so a table carrying the wrong dates still produces the right site.
+With `false` the table is used as it stands and `timezone` is ignored. Berlin and Aachen
+are `true`; Damascus is `false`.
+
+**Nothing is built by hand.** `.github/workflows/sakina-static-website.yml` runs the tests,
+runs `build.py` and commits any change to `public/` on main:
+
+- on every push to main that touches what the build reads — the pages, `api.py`,
+  `prayer_logic.py`, `prayer_dst.py`, the prayer tables, the icons and font, the builder
+  and `static-website/sakina/` itself
+- every 1 December, so next year is already baked when it starts
+- by hand, from **Actions → Sakina static website → Run workflow**
+
+After it commits, `git pull` before pushing again.
+
+**Adding a city:** a folder with a `city.ini` and a relative symlink to its table, then push:
+
+```bash
+mkdir static-website/sakina/hamburg
+ln -s "../../../scheduler-official-touch-screen-with-raspberry-pi-4/config/prayers-config/هامبورغ.csv" \
+      static-website/sakina/hamburg/prayer-times.csv
+printf '[city]\nplace = هامبورغ\ndaylight_saving = true\ntimezone = Europe/Berlin\n' > static-website/sakina/hamburg/city.ini
+```
+
+and a Cloudflare Pages project for it, as below.
+
+**Cloudflare Pages, once per city:** Workers & Pages → Create → Pages → connect the GitHub
+repo, then:
+
+| setting | value |
+|---|---|
+| project name | `sakina-<city>` (this is the `.pages.dev` address) |
+| production branch | `main` |
+| framework preset | None |
+| build command | *(empty)* |
+| build output directory | `static-website/sakina/<city>/public` |
+| build watch paths → include | `static-website/sakina/<city>/public/*` |
+
+The watch path keeps a push that changes nothing of a city's site from redeploying it.
 
 ### Files
 
@@ -1814,6 +1878,9 @@ Two limits worth stating before anyone asks for it:
 | `config/systemd/scheduler_web_ui.service` | the unit |
 | `logs/web_ui.log` | its log |
 | `tools/build_static_site.py` | the public build |
+| `static-website/sakina/build.py` | builds every city site |
+| `.github/workflows/sakina-static-website.yml` | rebuilds and commits them |
+| `tools/tests/test_static_website.py` | their tests |
 | `tools/tests/test_web_ui.py` | the tests |
 
 ---

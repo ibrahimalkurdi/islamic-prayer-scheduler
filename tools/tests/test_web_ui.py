@@ -704,11 +704,13 @@ build = subprocess.run([sys.executable,
 check("the build runs", build.returncode, 0)
 check("the settings page is not copied", os.path.isdir(os.path.join(OUT, "settings")),
       False)
-check_true("a year of data is written",
-           os.path.isfile(os.path.join(OUT, "data", "year.json")))
+YEAR_FILE = os.path.join(OUT, "data", f"{datetime.now().year}.json")
+check_true("a year of data is written", os.path.isfile(YEAR_FILE))
+check("and only the year the device's map is for",
+      sorted(os.listdir(os.path.join(OUT, "data"))), [f"{datetime.now().year}.json"])
 config_js = open(os.path.join(OUT, "static", "config.js"), encoding="utf-8").read()
 check_true("DEVICE is false", "window.DEVICE = false" in config_js)
-check_true("and the data is the baked file", "/data/year.json" in config_js)
+check_true("and the data is the baked file", "/data/{year}.json" in config_js)
 static_home = open(os.path.join(OUT, "index.html"), encoding="utf-8").read()
 check("the home page has no settings link", "/settings/" in static_home, False)
 check_true("but still has the other two",
@@ -725,7 +727,7 @@ for icon in static_manifest["icons"]:
     check_true(f"static manifest icon {icon['src']} resolves",
                os.path.isfile(os.path.join(OUT, "static", icon["src"])))
 
-baked = json.load(open(os.path.join(OUT, "data", "year.json"), encoding="utf-8"))
+baked = json.load(open(YEAR_FILE, encoding="utf-8"))
 check_true("the year has days in it", len(baked["days"]) > 360)
 check_true("and they carry spans",
            all(p["spans"] for p in list(baked["days"].values())[0] if p["start"]))
