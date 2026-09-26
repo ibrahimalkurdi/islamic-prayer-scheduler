@@ -18,6 +18,7 @@ on:
       - "scheduler-official-touch-screen-with-raspberry-pi-4/config/icons/**"
       - "scheduler-official-touch-screen-with-raspberry-pi-4/config/fonts/**"
       - "tools/build_static_site.py"
+      - "VERSIONS.json"
       - "tools/tests/test_static_website.py"
       - "tools/tests/test_site_js.*"
       - "tools/tests/test_prayer_logic.py"

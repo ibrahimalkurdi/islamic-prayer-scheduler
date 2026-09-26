@@ -7,6 +7,8 @@ Pages at `https://sakina-<city>.pages.dev`.
 <city>/city.ini           Arabic name, daylight_saving (true/false), IANA timezone
 <city>/prayer-times.csv   symlink into the devices' config/prayers-config/
 <city>/public/            generated — never edit by hand
+icons/                    the Sakina icon, shared by every city; source-thkr-allah.jpeg is
+                          the original, icon-*.png are cut from it full-bleed
 build.py                  builds every city, this year and next
 ```
 

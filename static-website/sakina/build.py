@@ -20,6 +20,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 BUILDER = os.path.join(REPO, "tools", "build_static_site.py")
+ICONS = os.path.join(HERE, "icons")
+BRAND = "سكينة"
 
 
 def cities():
@@ -28,15 +30,25 @@ def cities():
             yield name
 
 
+def place_of(folder, city):
+    """The city's name: city.ini's place, or else the prayer table's own file name."""
+    table = os.path.realpath(os.path.join(folder, "prayer-times.csv"))
+    return city.get("place") or os.path.splitext(os.path.basename(table))[0]
+
+
 def build_city(name, years):
     folder = os.path.join(HERE, name)
     config = configparser.ConfigParser(interpolation=None)
     config.read(os.path.join(folder, "city.ini"), encoding="utf-8")
     city = config["city"]
+    table = os.path.join(folder, "prayer-times.csv")
+    place = place_of(folder, city)
     command = [sys.executable, BUILDER,
-               "--csv", os.path.join(folder, "prayer-times.csv"),
-               "--place", city["place"],
+               "--csv", table,
+               "--place", place,
+               "--app-name", f"{BRAND} - {place}",
                "--daily-only",
+               "--icons-dir", ICONS,
                "--out", os.path.join(folder, "public")]
     if config.getboolean("city", "daylight_saving"):
         command += ["--timezone", city["timezone"]]

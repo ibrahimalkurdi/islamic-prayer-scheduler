@@ -5,3 +5,4 @@ window.DATA = "/data/{year}.json";
 window.DEVICE = false;
 window.HOME = false;
 window.PLACE = "دمشق";
+window.VERSION = "1.3.4";

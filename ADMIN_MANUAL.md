@@ -1805,7 +1805,9 @@ show prayer times but can never control a device.
 
 ### The public city sites — `static-website/sakina/`
 
-One site per city, each the daily list alone, served by Cloudflare Pages:
+One site per city, each the daily list alone, served by Cloudflare Pages. Added to a phone's
+home screen it carries the Sakina icon (`static-website/sakina/icons/`) and the name
+«سكينة - <place>», e.g. «سكينة - برلين»:
 
 | city | address |
 |---|---|
@@ -1817,7 +1819,8 @@ One site per city, each the daily list alone, served by Cloudflare Pages:
 static-website/sakina/
   build.py                  builds every city, this year and next
   <city>/
-    city.ini                the Arabic name shown on the page, daylight_saving, the IANA timezone
+    city.ini                the Arabic name (place; defaults to the table's file name),
+                            daylight_saving, the IANA timezone
     prayer-times.csv        symlink into config/prayers-config/ — one table for devices and site
     public/                 generated; Cloudflare serves it as it stands. Never edit by hand
 ```

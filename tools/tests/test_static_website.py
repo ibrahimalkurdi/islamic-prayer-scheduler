@@ -15,6 +15,7 @@ import csv
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,9 @@ from zoneinfo import ZoneInfo
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILDER = os.path.join(REPO, "tools", "build_static_site.py")
 SAKINA = os.path.join(REPO, "static-website", "sakina")
+SAKINA_ICONS = os.path.join(SAKINA, "icons")
+DEVICE_ICON = os.path.join(REPO, "scheduler-official-touch-screen-with-raspberry-pi-4",
+                           "config", "icons", "athan-app-icon-256.png")
 PRAYERS_CONFIG = os.path.join(REPO, "scheduler-official-touch-screen-with-raspberry-pi-4",
                               "config", "prayers-config")
 
@@ -67,9 +71,18 @@ def dhuhr(out, year, key):
     return next(p["clock"].strip() for p in days[key] if p["name"] == "الظهر")
 
 
+def png_size(path):
+    with open(path, "rb") as handle:
+        head = handle.read(24)
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return struct.unpack(">II", head[16:24])
+
+
 print("1. every year gets its own clock changes")
 OUT = os.path.join(ROOT, "berlin")
 result = build(OUT, "--timezone", "Europe/Berlin", "--place", "برلين", "--daily-only",
+               "--icons-dir", SAKINA_ICONS, "--app-name", "سكينة - برلين",
                "--year", "2026", "--year", "2027")
 check("the build runs", result.returncode, 0)
 if result.returncode:
@@ -130,12 +143,42 @@ check_true("data is looked up by year", 'window.DATA = "/data/{year}.json";' in 
 check_true("nothing acts on a device", "window.DEVICE = false;" in config_js)
 check_true("there is no home page to go back to", "window.HOME = false;" in config_js)
 check_true("the city is named", 'window.PLACE = "برلين";' in config_js)
+pi4 = json.load(open(os.path.join(REPO, "VERSIONS.json"), encoding="utf-8"))["pi4"]
+check_true("the released version is shown",
+           f'window.VERSION = "{pi4["version"] if isinstance(pi4, dict) else pi4}";'
+           in config_js)
 page = open(os.path.join(OUT, "index.html"), encoding="utf-8").read()
+check_true("the page shows VERSION when it is not on a device",
+           "line.textContent = window.VERSION;" in page)
 check_true("the back link goes when there is no home",
            'if (window.HOME === false) document.querySelector("#back").remove();' in page)
-for name in ("app.css", "app.js", "Amiri.ttf", "icon-32.png", "icon-128.png",
+for name in ("app.css", "app.js", "Amiri.ttf", "Amiri-Bold.ttf", "icon-32.png", "icon-128.png",
              "icon-256.png", "manifest.webmanifest"):
     check_true(f"static/{name} is there", os.path.isfile(os.path.join(OUT, "static", name)))
+for size in (32, 128, 256):
+    name = f"icon-{size}.png"
+    check(f"the Sakina {name} is a square PNG of that size",
+          png_size(os.path.join(SAKINA_ICONS, name)), (size, size))
+    check(f"and the site carries it",
+          open(os.path.join(OUT, "static", name), "rb").read(),
+          open(os.path.join(SAKINA_ICONS, name), "rb").read())
+check("which is not the device's icon",
+      open(os.path.join(OUT, "static", "icon-256.png"), "rb").read()
+      != open(DEVICE_ICON, "rb").read(), True)
+check("without --icons-dir the device's icon is used",
+      open(os.path.join(DAMASCUS, "static", "icon-256.png"), "rb").read(),
+      open(DEVICE_ICON, "rb").read())
+manifest = json.load(open(os.path.join(OUT, "static", "manifest.webmanifest"),
+                          encoding="utf-8"))
+check("Android's home-screen name", (manifest["name"], manifest["short_name"]),
+      ("سكينة - برلين", "سكينة - برلين"))
+check_true("iOS's home-screen name",
+           '<meta name="apple-mobile-web-app-title" content="سكينة - برلين">' in page)
+check("the manifest keeps its icons", [i["src"] for i in manifest["icons"]],
+      ["icon-128.png", "icon-256.png"])
+plain = json.load(open(os.path.join(DAMASCUS, "static", "manifest.webmanifest"),
+                       encoding="utf-8"))
+check("without --app-name the device's name stays", plain["name"], "مواقيت الصلاة")
 check("a device's map cannot be baked for two years",
       subprocess.run([sys.executable, BUILDER, "--scheduler-dir", ROOT, "--out",
                       os.path.join(ROOT, "x"), "--year", "2026", "--year", "2027"],
@@ -189,6 +232,16 @@ const Site = vm.runInContext(fs.readFileSync(path.join(out, "static", "app.js"),
           "لا توجد مواقيت لهذا اليوم")
 
 print("6. the city folders")
+sys.path.insert(0, SAKINA)
+import build as sakina_build  # noqa: E402
+
+LONELY = os.path.join(ROOT, "lonely")
+os.makedirs(LONELY)
+os.symlink(os.path.join(PRAYERS_CONFIG, "برلين.csv"), os.path.join(LONELY, "prayer-times.csv"))
+check("with no place in city.ini the name is the prayer file's",
+      sakina_build.place_of(LONELY, {}), "برلين")
+check("city.ini's place wins when it is there",
+      sakina_build.place_of(LONELY, {"place": "برلين الغربية"}), "برلين الغربية")
 cities = sorted(name for name in os.listdir(SAKINA)
                 if os.path.isfile(os.path.join(SAKINA, name, "city.ini")))
 check("damascus, berlin and aachen are there",

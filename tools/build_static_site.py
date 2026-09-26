@@ -39,6 +39,7 @@ be the thing that controls a device. Those stay two deployments of the same fron
 
 import argparse
 import gzip
+import html
 import json
 import os
 import shutil
@@ -52,6 +53,7 @@ VARIANT = "scheduler-official-touch-screen-with-raspberry-pi-4"
 VARIANT_DIR = os.path.join(REPO, VARIANT)
 APPLICATIONS = os.path.join(VARIANT_DIR, "applications")
 WEB_UI = os.path.join(APPLICATIONS, "services", "web_ui")
+VERSIONS_FILE = os.path.join(REPO, "VERSIONS.json")
 
 sys.path.insert(0, APPLICATIONS)
 sys.path.insert(0, WEB_UI)
@@ -65,7 +67,11 @@ import prayer_dst  # noqa: E402
 DEVICE_ONLY = ("settings",)
 PAGES = ("countdown", "daily", "settings")
 
-FONT_MEMBER = "Amiri-Regular.ttf"
+# Mirrors FONTS in the web server: URL name -> member of Amiri.zip.
+FONTS = {
+    "Amiri.ttf": "Amiri-Regular.ttf",
+    "Amiri-Bold.ttf": "Amiri-Bold.ttf",
+}
 # Mirrors ICONS in the web server, so the two deployments name the same files the same
 # way and a page's <link> works unchanged in both.
 ICONS = {
@@ -106,7 +112,18 @@ def map_from_csv(csv_path, timezone_name, year, work_dir):
     return map_file
 
 
-def build(out_dir, maps, assets_dir, place="", daily_only=False):
+def released_version():
+    """The pi4 release the devices are pointed at - what a static copy says it is."""
+    try:
+        with open(VERSIONS_FILE, encoding="utf-8") as handle:
+            entry = json.load(handle).get("pi4", "")
+    except (OSError, ValueError):
+        return ""
+    return entry.get("version", "") if isinstance(entry, dict) else entry
+
+
+def build(out_dir, maps, assets_dir, place="", daily_only=False, icons_dir=None,
+          app_name=""):
     """`maps` is {year: prayer map file}; one data/<year>.json is written per entry."""
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
@@ -132,20 +149,25 @@ def build(out_dir, maps, assets_dir, place="", daily_only=False):
     # The icons live in config/icons/ on a device and are served from there, so copytree
     # above did not bring them. Without this the pages still render, but a phone adding
     # the static copy to its home screen gets a blank glyph - the thing the icons are
-    # for. Named as the pages ask for them, not as they are stored.
+    # for. Named as the pages ask for them, not as they are stored. --icons-dir gives a
+    # site its own icon, already named as the pages ask for it.
     for url_name, source in ICONS.items():
-        path = os.path.join(assets_dir, "config", "icons", source)
+        if icons_dir:
+            path = os.path.join(icons_dir, url_name)
+        else:
+            path = os.path.join(assets_dir, "config", "icons", source)
         try:
             shutil.copyfile(path, os.path.join(static, url_name))
         except OSError:
             print(f"WARNING: {source} not found - the home-screen icon will be blank")
 
-    font = read_font(assets_dir)
-    if font:
-        with open(os.path.join(static, FONT_MEMBER.replace("-Regular", "")), "wb") as out:
-            out.write(font)
-    else:
-        print("WARNING: Amiri.zip not found - pages will use the fallback font stack")
+    for url_name, member in FONTS.items():
+        font = read_font(assets_dir, member)
+        if font:
+            with open(os.path.join(static, url_name), "wb") as out:
+                out.write(font)
+        else:
+            print(f"WARNING: {member} not found - pages will use the fallback font stack")
 
     data_dir = os.path.join(out_dir, "data")
     os.makedirs(data_dir, exist_ok=True)
@@ -171,10 +193,13 @@ def build(out_dir, maps, assets_dir, place="", daily_only=False):
             'window.DATA = "/data/{year}.json";\n'
             "window.DEVICE = false;\n"
             f"window.HOME = {'false' if daily_only else 'true'};\n"
-            f"window.PLACE = {json.dumps(place, ensure_ascii=False)};\n")
+            f"window.PLACE = {json.dumps(place, ensure_ascii=False)};\n"
+            f"window.VERSION = {json.dumps(released_version())};\n")
 
     if not daily_only:
         strip_settings_link(os.path.join(out_dir, "index.html"))
+    if app_name:
+        name_app(out_dir, app_name)
 
     size = sum(os.path.getsize(os.path.join(root, f))
                for root, _, files in os.walk(out_dir) for f in files)
@@ -190,13 +215,36 @@ def build(out_dir, maps, assets_dir, place="", daily_only=False):
     return out_dir
 
 
-def read_font(assets_dir):
+def read_font(assets_dir, member):
     path = os.path.join(assets_dir, "config", "fonts", "arabic-fonts", "Amiri.zip")
     try:
         with zipfile.ZipFile(path) as bundle:
-            return bundle.read(FONT_MEMBER)
+            return bundle.read(member)
     except (OSError, KeyError, zipfile.BadZipFile):
         return None
+
+
+def name_app(out_dir, app_name):
+    """The name under the icon once the site is added to a phone's home screen: Android
+    takes it from the manifest, iOS from apple-mobile-web-app-title."""
+    manifest_path = os.path.join(out_dir, "static", "manifest.webmanifest")
+    with open(manifest_path, encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    manifest["name"] = manifest["short_name"] = app_name
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+    meta = f'<meta name="apple-mobile-web-app-title" content="{html.escape(app_name)}">\n'
+    for folder, _, files in os.walk(out_dir):
+        for name in files:
+            if name != "index.html":
+                continue
+            path = os.path.join(folder, name)
+            with open(path, encoding="utf-8") as handle:
+                page = handle.read()
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(page.replace("</head>", meta + "</head>", 1))
 
 
 def strip_settings_link(index_path):
@@ -224,6 +272,11 @@ def main():
                                            "--csv table gets, e.g. Europe/Berlin; leave "
                                            "out to use the table as it stands")
     parser.add_argument("--place", default="", help="the city's name, shown on the page")
+    parser.add_argument("--icons-dir", help="a folder holding icon-32.png, icon-128.png "
+                                            "and icon-256.png to use instead of the "
+                                            "device's icon")
+    parser.add_argument("--app-name", default="",
+                        help="the name under the icon on a phone's home screen")
     parser.add_argument("--daily-only", action="store_true",
                         help="publish the daily list alone, as the site's only page")
     parser.add_argument("--out", default=os.path.join(REPO, "dist", "site"))
@@ -238,7 +291,8 @@ def main():
         with tempfile.TemporaryDirectory() as work_dir:
             maps = {year: map_from_csv(args.csv, args.timezone, year, work_dir)
                     for year in years}
-            build(args.out, maps, VARIANT_DIR, args.place, args.daily_only)
+            build(args.out, maps, VARIANT_DIR, args.place, args.daily_only,
+                  args.icons_dir, args.app_name)
         return
 
     years = args.year or [this_year]
@@ -246,7 +300,8 @@ def main():
         parser.error("a device's map holds one year's daylight saving; bake one year "
                      "from it, or use --csv")
     maps = {years[0]: map_from_device(args.scheduler_dir)}
-    build(args.out, maps, args.scheduler_dir, args.place, args.daily_only)
+    build(args.out, maps, args.scheduler_dir, args.place, args.daily_only, args.icons_dir,
+          args.app_name)
 
 
 if __name__ == "__main__":

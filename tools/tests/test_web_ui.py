@@ -8,6 +8,7 @@ on PATH, so the fallback paths are exercised without a sound card.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,8 @@ for sub in ("config/scripts", "config/prayers-config", "config/fonts/arabic-font
 for icon in ("athan-app-icon-32.png", "athan-app-icon-128.png", "athan-app-icon-256.png"):
     shutil.copyfile(os.path.join(REPO, VARIANT, "config", "icons", icon),
                     os.path.join(SCHEDULER, "config", "icons", icon))
+shutil.copyfile(os.path.join(REPO, VARIANT, "config", "fonts", "arabic-fonts", "Amiri.zip"),
+                os.path.join(SCHEDULER, "config", "fonts", "arabic-fonts", "Amiri.zip"))
 
 ROWS = []
 day = date_cls(datetime.now().year, 1, 1)
@@ -225,6 +228,19 @@ for name in ("icon-32.png", "icon-128.png", "icon-256.png"):
     check(f"GET /static/{name}", status, 200)
     check(f"{name} content type", headers["Content-Type"], "image/png")
     check(f"{name} is really a PNG", body[:8], b"\x89PNG\r\n\x1a\n")
+
+# Every face app.css names, served out of Amiri.zip as a real TrueType file. The bold one
+# is what the counter and the running row's time are drawn in; without it the browser
+# fakes a bold from the regular face.
+css_fonts = re.findall(r'url\("/static/([^"]+\.ttf)"\)', get("/static/app.css")[1].decode())
+check("app.css names the regular and the bold face", sorted(css_fonts),
+      ["Amiri-Bold.ttf", "Amiri.ttf"])
+for name in css_fonts:
+    status, body, headers = get(f"/static/{name}")
+    check(f"GET /static/{name}", status, 200)
+    check(f"{name} is really TrueType", body[:4], b"\x00\x01\x00\x00")
+check("the two faces are different files",
+      get("/static/Amiri.ttf")[1] != get("/static/Amiri-Bold.ttf")[1], True)
 
 # Every page, not just the home page: whichever one is open is the one that gets added.
 for page in ("/", "/countdown/", "/daily/", "/settings/"):
@@ -670,9 +686,11 @@ DAILY_HTML = open(os.path.join(WEB_UI, "site", "daily", "index.html"),
                   encoding="utf-8").read()
 check_true("the daily page has a place to put it", 'id="version"' in DAILY_HTML)
 check_true("hidden until it is filled", 'class="version hidden"' in DAILY_HTML)
-# A baked static site is nobody's version, and it has no /api/device to ask.
+# A static site has no /api/device to ask; it shows the release baked into config.js.
+version_js = DAILY_HTML[DAILY_HTML.index("function refreshVersion"):]
 check_true("and it is asked for only on a device",
-           "if (!window.DEVICE) return;" in DAILY_HTML)
+           version_js.index("if (!window.DEVICE)") < version_js.index('"/api/device"')
+           and "return;\n    }\n    Site.json(\"/api/device\")" in version_js)
 
 print("21. a request for nothing in particular is a 404, not a crash")
 for path in ("/nope", "/api/nope", "/api/day/extra"):

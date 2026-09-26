@@ -10,6 +10,7 @@
 <link rel="apple-touch-icon" href="/static/icon-256.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-title" content="سكينة - دمشق">
 </head>
 <body>
 
@@ -94,6 +95,7 @@ async function render() {
         }
 
         const name = document.createElement("span");
+        name.className = "name";
         name.textContent = period.display;
         row.appendChild(name);
 
@@ -190,13 +192,19 @@ setInterval(() => {
 }, 1000);
 
 /* The installed version at the foot of the page, the line the touch screen's own daily
-   list carries. Device only: a year baked into a static host is nobody's version.
+   list carries. A static host shows the release the devices run, baked in as VERSION.
 
    Re-read on the minute rather than once, for the reason the app re-reads it on every
    refresh - check_updates.sh writes var/installed_version only after the new release
    passes its health check, which is after the page is already open. */
 function refreshVersion() {
-    if (!window.DEVICE) return;
+    if (!window.DEVICE) {
+        if (!window.VERSION) return;
+        const line = document.querySelector("#version");
+        line.textContent = window.VERSION;
+        line.classList.remove("hidden");
+        return;
+    }
     Site.json("/api/device").then((info) => {
         const line = document.querySelector("#version");
         if (!info.version) return;

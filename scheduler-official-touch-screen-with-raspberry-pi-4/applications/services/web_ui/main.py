@@ -76,8 +76,12 @@ ICONS = {
 # device already ships rather than committed a second time: 421 KB in every release
 # payload, for a file that is already in it.
 FONT_ZIP = "config/fonts/arabic-fonts/Amiri.zip"
-FONT_MEMBER = "Amiri-Regular.ttf"
-FONT_URL_NAME = "Amiri.ttf"
+# URL name -> member of the zip. The bold face is real rather than synthesised by the
+# browser, for the counter and the running row's time.
+FONTS = {
+    "Amiri.ttf": "Amiri-Regular.ttf",
+    "Amiri-Bold.ttf": "Amiri-Bold.ttf",
+}
 
 APPLY_TIMEOUT_SECONDS = 300
 
@@ -98,20 +102,20 @@ class Device:
         # rebuild the prayer map from a half-written file.
         self.lock = threading.Lock()
         self.apply_state = {"state": "idle", "log": ""}
-        self._font = None
+        self._fonts = {}
         self._icons = {}
 
-    def font(self):
-        """Amiri-Regular, out of the zip, read once and kept."""
-        if self._font is not None:
-            return self._font or None
+    def font(self, name):
+        """One of FONTS, out of the zip, read once and kept."""
+        if name in self._fonts:
+            return self._fonts[name] or None
         path = os.path.join(self.scheduler_dir, FONT_ZIP)
         try:
             with zipfile.ZipFile(path) as bundle:
-                self._font = bundle.read(FONT_MEMBER)
+                self._fonts[name] = bundle.read(FONTS[name])
         except (OSError, KeyError, zipfile.BadZipFile):
-            self._font = b""
-        return self._font or None
+            self._fonts[name] = b""
+        return self._fonts[name] or None
 
     def icon(self, name):
         """One of ICONS, read once and kept. Same shape as font() above."""
@@ -295,8 +299,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(body, CONTENT_TYPES.get(suffix, "application/octet-stream"))
 
     def serve_asset(self, name):
-        if name == FONT_URL_NAME:
-            return self.serve_font()
+        if name in FONTS:
+            return self.serve_font(name)
         if name in ICONS:
             return self.serve_icon(name)
         if name not in ASSETS:
@@ -315,8 +319,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def serve_font(self):
-        body = self.device.font()
+    def serve_font(self, name):
+        body = self.device.font(name)
         if body is None:
             # The page names a fallback stack, so a missing font is a plainer screen
             # rather than a broken one.
