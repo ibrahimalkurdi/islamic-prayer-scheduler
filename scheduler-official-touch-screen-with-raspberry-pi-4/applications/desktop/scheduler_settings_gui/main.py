@@ -1382,15 +1382,13 @@ class ControlApp(QMainWindow):
         self.update_auto_chk.stateChanged.connect(self.save_update_enabled)
         layout.addWidget(self.update_auto_chk)
 
-        # Shown only while PIN is set, which is a state a device is not normally in - it
-        # gets there by someone choosing a version below, or by being prepared that way.
-        # A pin is invisible otherwise: the daily check quietly stops following the fleet,
-        # and there is no SSH into a device once it is in someone's home. So the pin says
-        # so in words, and the way out is a button that exists only when there is
-        # something to undo - rather than a permanently ticked checkbox that does nothing.
+        # The checkbox is the only thing that stops the device following the fleet, so
+        # while it is off the device says so in red, naming the version it is held on.
+        # Choosing a version below never does this by itself: a hold nobody noticed
+        # setting is what left devices behind with the box still ticked.
         self.update_pin_label = QLabel("")
         self.update_pin_label.setStyleSheet(
-            "font-size: 17px; padding: 2px 18px; color: #6c757d;")
+            "font-size: 17px; padding: 2px 18px; color: #dc3545; font-weight: bold;")
         self.update_pin_label.setWordWrap(True)
         self.update_pin_label.hide()
         layout.addWidget(self.update_pin_label)
@@ -1405,13 +1403,6 @@ class ControlApp(QMainWindow):
         self.update_pointer_label.setWordWrap(True)
         self.update_pointer_label.hide()
         layout.addWidget(self.update_pointer_label)
-
-        self.update_unpin_btn = QPushButton("العودة إلى التحديث المركزي")
-        self.update_unpin_btn.setStyleSheet(self.update_button_style("#6c757d"))
-        self.update_unpin_btn.setMinimumHeight(44)
-        self.update_unpin_btn.clicked.connect(self.clear_update_pin)
-        self.update_unpin_btn.hide()
-        self.add_update_row(layout, (self.update_unpin_btn, 1))
 
         # Above both groups rather than inside either: one fetch fills the version list
         # and the rollback list alike, so it does not belong to one of them.
@@ -1528,6 +1519,7 @@ class ControlApp(QMainWindow):
         status = self.read_update_status()
         installed = status.get("installed") or "غير معروف"
         pinned = status.get("pinned") or ""
+        self.update_installed_version = installed
 
         lines = [f"الإصدار المثبَّت: {installed}"]
         outcome = {
@@ -1556,14 +1548,12 @@ class ControlApp(QMainWindow):
             self.update_attention_label.hide()
 
         self.populate_rollback_versions()
+        # A PIN left by an older release, or set over SSH, holds the device just as
+        # ENABLED=false does, so it shows as off too - and ticking the box clears it.
         self.update_auto_chk.blockSignals(True)
-        self.update_auto_chk.setChecked(bool(status.get("enabled", True)))
+        self.update_auto_chk.setChecked(bool(status.get("enabled", True)) and not pinned)
         self.update_auto_chk.blockSignals(False)
-
-        self.update_pin_label.setText(
-            f"مثبَّت على الإصدار {pinned} — لا يتبع التحديث المركزي" if pinned else "")
-        self.update_pin_label.setVisible(bool(pinned))
-        self.update_unpin_btn.setVisible(bool(pinned))
+        self.show_update_hold(pinned or installed)
 
         custom_pointer = "" if status.get("pointer_is_default", True) else status.get("pointer", "")
         self.update_pointer_label.setText(
@@ -1590,18 +1580,67 @@ class ControlApp(QMainWindow):
             arabic_error(self, "تعذر حفظ إعدادات التحديث", str(error))
             return False
 
-    def clear_update_pin(self):
-        """Back to whatever VERSIONS.json names. Only reachable while pinned.
+    def show_update_hold(self, version):
+        held = not self.update_auto_chk.isChecked()
+        self.update_pin_label.setText(
+            f"التحديث التلقائي متوقف — الجهاز ثابت على الإصدار {version}، ولن يُحدَّث"
+            " تلقائيًا حتى تفعيل «تحديث تلقائي يومي»" if held else "")
+        self.update_pin_label.setVisible(held)
 
-        Clearing the pin does not itself move the device - the next daily check does, or
-        التحديث إلى أحدث إصدار right now. Pinning is the other direction, and lives with the version
-        list below, which is the only place a version is actually chosen.
-        """
-        if self.write_update_conf("PIN", ""):
-            self.refresh_update_status()
+    def read_latest_version(self):
+        """The version the daily check would install - VERSIONS.json's, not the newest
+        published. Empty when the pointer cannot be reached."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = subprocess.run(
+                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, "--latest"],
+                capture_output=True, text=True, timeout=UPDATE_LIST_TIMEOUT_SECONDS
+            )
+            return result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def confirm_update_hold(self, version):
+        """Anything but the latest release would be undone by that night's check, so
+        taking one turns the daily check off - but only once the user has said yes."""
+        if not self.update_auto_chk.isChecked() or version == self.read_latest_version():
+            return True
+        if not arabic_confirm(
+            self, "ليس أحدث إصدار",
+            f"الإصدار {version} ليس أحدث إصدار معتمد.\n"
+            "إن ثبّته فسيتوقف التحديث التلقائي اليومي، ويبقى الجهاز ثابتًا على الإصدار"
+            f" {version}.\n\nهل تريد المتابعة؟"
+        ):
+            return False
+        self.update_auto_chk.setChecked(False)
+        return True
 
     def save_update_enabled(self):
-        self.write_update_conf("ENABLED", "true" if self.update_auto_chk.isChecked() else "false")
+        enabled = self.update_auto_chk.isChecked()
+        move_to = ""
+        if enabled:
+            installed = getattr(self, "update_installed_version", "")
+            latest = self.read_latest_version()
+            if latest and latest != installed:
+                if not arabic_confirm(
+                    self, "تفعيل التحديث التلقائي",
+                    f"الإصدار المثبَّت {installed} ليس أحدث إصدار معتمد.\n"
+                    "إن فعّلت التحديث التلقائي اليومي فسيُنقل الجهاز الآن إلى أحدث إصدار:"
+                    f" {latest}.\n\nهل تريد المتابعة؟"
+                ):
+                    self.update_auto_chk.blockSignals(True)
+                    self.update_auto_chk.setChecked(False)
+                    self.update_auto_chk.blockSignals(False)
+                    return
+                move_to = latest
+        self.write_update_conf("ENABLED", "true" if enabled else "false")
+        if enabled:
+            self.write_update_conf("PIN", "")
+        self.show_update_hold(getattr(self, "update_installed_version", ""))
+        if move_to:
+            self.start_update(["--now"], f"جارٍ الانتقال إلى {move_to}…")
 
     def load_available_versions(self):
         self.update_refresh_btn.setEnabled(False)
@@ -1683,10 +1722,8 @@ class ControlApp(QMainWindow):
             arabic_error(self, "لم يتم اختيار إصدار",
                          "اضغط «جلب الإصدارات» ثم اختر إصدارًا من القائمة.")
             return
-        # Pinned as well as installed: without the pin the daily check would pull the
-        # device straight back to the newest release, which is the opposite of what
-        # choosing a particular version means.
-        self.write_update_conf("PIN", version)
+        if not self.confirm_update_hold(version):
+            return
         self.start_update(["--target", version], f"جارٍ التثبيت {version}…")
 
     def run_update_rollback(self):
@@ -1695,10 +1732,8 @@ class ControlApp(QMainWindow):
             arabic_error(self, "لم يتم اختيار إصدار",
                          "اختر إصدارًا من القائمة أعلاه. إن كانت فارغة فاضغط «جلب الإصدارات».")
             return
-        # Going back on purpose has to stick. Without the pin, that night's check would put
-        # the device straight back on the version it was just taken off - the same reason
-        # installing a chosen version pins. الرجوع إلى التحديث المركزي undoes it.
-        self.write_update_conf("PIN", version)
+        if not self.confirm_update_hold(version):
+            return
         if version == self.update_rollback_backup:
             # On disk already: no download, and the exact bytes that were verified healthy.
             self.start_update(["--rollback"], f"جارٍ الرجوع إلى {version}…")

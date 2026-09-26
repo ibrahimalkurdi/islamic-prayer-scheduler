@@ -185,7 +185,7 @@ runs. It syncs the tree only — it creates no release.
 Every `pi4` device reads this file on its nightly 02:00 check and installs what it names.
 Putting an older version back here rolls the whole fleet back the same way — devices move
 down as readily as up. The `zero` line is separate, so each hardware type is rolled out on
-its own. A device pinned from its own Settings app ignores this file until it is unpinned.
+its own. A device with **تحديث تلقائي يومي** unticked in its Settings app ignores this file until it is ticked again.
 
 **Testing a release on one device first.** A device can follow a version file of its own,
 so you can try a release on your own Raspberry Pi before the fleet sees it. Commit the

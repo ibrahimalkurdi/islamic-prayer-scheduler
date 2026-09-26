@@ -386,8 +386,9 @@ Four rules, all of them about not overruling the owner:
 from **تثبيت الإصدار المحدد** in the Settings app. No other device is told the version
 exists. Two things to know before doing it:
 
-- That button **pins**, so their device stops following the fleet until it is unpinned.
-  §5.5 is about a pin you set; this is one the customer sets, and it is just as silent.
+- Unless it is the version `VERSIONS.json` names, that button asks first and, on a yes,
+  unticks **تحديث تلقائي يومي** — so their device stops following the fleet until the box
+  is ticked again.
 - **Build it from a branch.** `make_release.sh` packages `HEAD` of the current branch, so
   a file committed on `customer/<name>` never reaches `main`. Commit it to `main` instead
   and the next fleet release carries it to everybody. Version numbers are the only thing
@@ -497,7 +498,7 @@ bash tools/tests/test_system_apply.sh      # the root helper, against a fake roo
 | `test_make_release.sh` | `default-audio/` ships while `audio/` is still stripped; an `.mp3` anywhere else fails the build; a folder name matching no event is reported with the real name suggested and refuses to build with no terminal, while `--yes` proceeds; a payload over the cap is refused and the archive removed, while `--allow-large` builds it; and every path the device reads out of its own tree is on the manifest's include list, so a release can actually replace it |
 | `test_system_apply.sh` | the helper refuses to run as anyone but root, installs packages, units and icons from a release, and reports `10` only when there is work to do; the manifest can carry package names but never arguments; the tree it installs from is fixed rather than chosen by the caller; a failed package install fails the run; the desktop shortcut bootstraps itself where there is no helper and runs setup silently where there is one; `init.sh` survives a run with no way to ask for a password; and a release can replace the helper, including an old one that cannot replace itself, with nobody typing anything |
 | `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does; the website's unit carries no `CapabilityBoundingSet`, which is what let `sudo` work from the save button again; the Wi-Fi watchdog can see a hang that leaves the association up; and the logrotate policy ships and is driven through a real `logrotate` to prove it rotates by copy rather than rename |
-| `test_settings_updates.py` | the version list is fetched newest-first; choosing a version writes `PIN` **and** installs it; the checkbox writes `ENABLED`; choosing nothing raises an error rather than doing nothing; the pin line and **العودة إلى التحديث المركزي** are on screen only while the device is pinned; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest; both lists show five rows at a time |
+| `test_settings_updates.py` | the version list is fetched newest-first; `--latest` names the pointer's version; ticking the daily check on a device behind it asks, a no leaves it unticked, a yes enables and runs `--now`, and a device already on it or offline is not asked; choosing an older version asks first, installs nothing on a no, and on a yes unticks the daily check and installs without writing `PIN`, while the newest version installs without asking; the checkbox writes `ENABLED`, and ticking it also clears `PIN`; choosing nothing raises an error rather than doing nothing; the red hold line naming the version is on screen only while the box is unticked, and a leftover `PIN` shows as unticked; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest, asking first and writing no `PIN` either way; both lists show five rows at a time |
 | `test_prayer_logic.py` | Duha opens 20 minutes after sunrise and its period ends at Dhuhr; Isha's period crosses midnight for today but not for a browsed date; green holds to exactly 20 minutes past the athan and red begins exactly 20 before the next; الشروق is makrooh throughout, zawal takes the makrooh colour while the close of العصر keeps red and is makrooh too; and `period_boundaries` gives the same answer as `period_state` at **every second** of every period — which is what lets the website carry no rules of its own |
 | `test_web_ui.py` | every page and asset is served and nothing else is, including six traversal attempts; the day payload carries spans that agree with the rules second by second over the wire; a save writes exactly the keys it was given and a no-change save is byte-identical; the Duha and Athkar rules are refused in the Settings app's own words and nothing is written; an unknown key, a missing audio file, a bad clock and a negative number are all refused; a save really runs `apply_settings.sh`, off the request; a foreign `Origin` cannot post; mute round-trips through a real `wpctl` subprocess and falls back to stopping the player when there is none; the prayer map is re-read when it changes underneath; and the static build carries no settings page and no unguarded call to the device |
 | `test_web_ui.py` (small hours) | the period in force at 00:30, 02:30 and 04:30 is the evening before's Isha, beginning the previous day and running to this morning's Fajr while the card still shows tonight's; exactly one period covers every hour asked about; and a browsed date keeps its own Isha rather than borrowing the evening before it |
@@ -655,7 +656,7 @@ ssh <device>.local 'crontab -l | grep check_updates'
 
 | must be | why |
 |---|---|
-| `PIN=` empty | a unit shipped pinned never updates again, silently. The Settings app's **تثبيت الإصدار المحدد** button sets a pin — if you used it while preparing the device, press **العودة إلى التحديث المركزي** before handover. That control is only on screen while the device is pinned, so its absence is the all-clear |
+| `PIN=` empty | a unit shipped pinned never updates again. The Settings app shows a set `PIN` as **تحديث تلقائي يومي** unticked with a red line under it, and ticking the box clears it — so a ticked box with nothing red under it is the all-clear |
 | `ENABLED=true` | otherwise the nightly check does nothing |
 | `VARIANT` matching the board | it is cross-checked against the hardware every run |
 | `installed_version` matching what is actually installed | the updater compares against this string, so a wrong value means either a needless reinstall or, worse, a device that thinks it is current and never moves |
@@ -666,8 +667,8 @@ Install the release you want it to ship with using `--target`, **not** by pointi
 `VERSIONS.json` at it — the pointer is a fleet-wide control and every device in the field
 acts on it overnight.
 
-**But `--target` on its own does not hold.** The command line never writes `PIN` — only
-the Settings app's buttons do, and deliberately (§6). So a device handed over on a
+**But `--target` on its own does not hold.** Nothing writes `PIN` any more — not the
+command line, and not the Settings app (§6). So a device handed over on a
 `--target` install with no pin moves to whatever `VERSIONS.json` names on its first night
 at the customer's site. Either let the pointer already name that version, or pin the
 device to it and accept that it then stops following the fleet:
@@ -698,29 +699,27 @@ actually happened rather than assuming success.
 | **التحديث إلى أحدث إصدار** | `check_updates.sh --now`. "Latest" is the version `VERSIONS.json` names for this variant — the latest one **approved** for these devices — not whatever is newest on GitHub. It moves down as readily as up: point the pointer back and this button downgrades. On a pinned device it resolves to the pin and so does nothing |
 | progress dialog | a modal window with an indeterminate bar, shown for the whole run. It has no close button — there is nothing safe to do half way through an update — and it is the only thing on the screen, because `--now` leaves the countdown closed |
 | **جلب الإصدارات** | `--list`, filling **both** version lists newest-first. Sorted numerically, so 1.0.10 sits above 1.0.9 rather than below it. Sits above both groups, because it serves both |
-| **التثبيت على إصدار محدد** list | every published version. It opens on «اختر إصدارًا…» rather than a preselected version, because the button under it installs as well as pins. Five rows at a time, the rest a scroll away |
-| **تثبيت الإصدار المحدد** | writes `PIN=<chosen>` to `update.conf`, then `--target <chosen>` |
-| **الرجوع إلى إصدار سابق** list | opens on «اختر إصدارًا…» for the same reason — the button under it moves the device, not just its pin. Then the retained backup, marked `"نسخة محفوظة"`, then every published version **older than the installed one**. Never offers the installed version or anything newer. Until **جلب الإصدارات** is pressed it holds only the backup — what else exists is not knowable without asking. With no backup and no fetched list it reads «لا يوجد إصدار سابق» |
-| **الرجوع إلى الإصدار X** | names whatever the list has selected. `--rollback` when that is the retained backup — no download, and the exact bytes that were verified healthy. `--target X` otherwise, which is an ordinary install of an older release. Either way it writes `PIN=X` first: going back on purpose has to survive the night. While the list is still on its placeholder the button is greyed out and reads «اختر إصدارًا للرجوع إليه»; with nothing to offer at all, «الرجوع إلى الإصدار السابق (لا يوجد)» |
-| **تحديث تلقائي يومي** | writes `ENABLED=true` or `ENABLED=false`, and nothing else. Unticking stops the 02:00 check; **التحديث إلى أحدث إصدار** still works, because `ENABLED` is read only in cron mode |
-| **مثبَّت على الإصدار X — لا يتبع التحديث المركزي** | a grey line under the checkbox, present only while `PIN` is set |
-| **العودة إلى التحديث المركزي** | writes `PIN=` and nothing else. Hidden entirely unless the device is pinned |
+| **التثبيت على إصدار محدد** list | every published version. It opens on «اختر إصدارًا…» rather than a preselected version, because the button under it installs straight away. Five rows at a time, the rest a scroll away |
+| **تثبيت الإصدار المحدد** | `--target <chosen>`. If the choice is not the version `VERSIONS.json` names (`--latest`) and the daily check is on, it first asks «ليس أحدث إصدار … هل تريد المتابعة؟»; yes unticks **تحديث تلقائي يومي** (`ENABLED=false`) and installs, no does nothing. Never writes `PIN` |
+| **الرجوع إلى إصدار سابق** list | opens on «اختر إصدارًا…» for the same reason — the button under it moves the device. Then the retained backup, marked `"نسخة محفوظة"`, then every published version **older than the installed one**. Never offers the installed version or anything newer. Until **جلب الإصدارات** is pressed it holds only the backup — what else exists is not knowable without asking. With no backup and no fetched list it reads «لا يوجد إصدار سابق» |
+| **الرجوع إلى الإصدار X** | names whatever the list has selected. `--rollback` when that is the retained backup — no download, and the exact bytes that were verified healthy. `--target X` otherwise, which is an ordinary install of an older release. Both ask the same question first, since an older version is never the latest, and a yes unticks **تحديث تلقائي يومي**. Neither writes `PIN`. While the list is still on its placeholder the button is greyed out and reads «اختر إصدارًا للرجوع إليه»; with nothing to offer at all, «الرجوع إلى الإصدار السابق (لا يوجد)» |
+| **تحديث تلقائي يومي** | unticking writes `ENABLED=false`; ticking writes `ENABLED=true` **and** `PIN=`. Before ticking takes effect it runs `--latest`; if that names a version other than the installed one it asks «تفعيل التحديث التلقائي … هل تريد المتابعة؟» — yes enables and runs `--now` straight away, no leaves the box unticked. If the pointer cannot be reached it enables without asking, and the 02:00 check moves the device when it can. Shown unticked while either `ENABLED=false` or a `PIN` is set, since both hold the device. Unticking stops the 02:00 check; **التحديث إلى أحدث إصدار** still works, because `ENABLED` is read only in cron mode |
+| **التحديث التلقائي متوقف — الجهاز ثابت على الإصدار X…** | a red line under the checkbox, present only while it is unticked. X is the pinned version if `PIN` is set, otherwise the installed one |
 | **يتبع ملف إصدارات خاص: X** | a second grey line, present only while this device follows a version file other than `VERSIONS.json` (§8, `POINTER_NAME`). There is no button to clear it — that is an admin's decision, made over SSH — but the device stops hiding it |
 
-Installing a chosen version **pins** as well as installs. Without the pin, that night's
-check would pull the device straight back to whatever `VERSIONS.json` names — the opposite
-of what choosing a particular version means.
+The checkbox is the device's only hold. Choosing or rolling back to a version used to write
+`PIN` as well, which left customers held on an old version with the box still ticked and
+no idea why nothing updated. Now nothing but the checkbox holds a device. Taking a version
+other than the newest asks before unticking it, and while it is unticked the red line says
+so and names the version.
 
-Press **العودة إلى التحديث المركزي** to hand the device back to central control; it
-writes `PIN=` and nothing else. This matters most on a device you are preparing for
-someone: pinning it while you test and forgetting to clear the pin ships a unit that
-silently never updates again, and once it is in a home you may have no SSH to fix it with.
+"Latest" in both questions means what `VERSIONS.json` names for this variant, read with
+`check_updates.sh --latest` — the version the 02:00 check would install — not the newest
+published release. So choosing a test release published ahead of the pointer asks, and
+choosing the approved version does not.
 
-The pin line and that button are rendered only while `PIN` is set, so the section states
-the device's update policy without being read: **one checkbox** and nothing under it means
-following the fleet, and anything under it means pinned, naming the version. `ENABLED` and
-`PIN` stay separate settings — "not on a schedule" and "held on one version" are different
-questions, and the earlier two-checkbox version of this section conflated them.
+A `PIN` set over SSH, or left by an earlier release, still works in the updater. The
+app shows it as an unticked box with the red line, and ticking the box clears it.
 
 The app writes `update.conf` in place, rewriting one line at a time, so anything you set
 by hand — `EXTRA_EXCLUDE`, a custom URL — survives.
@@ -757,6 +756,7 @@ cd ~/Desktop/scheduler/config/scripts
 | `bash check_updates.sh --target 1.0.3` | Install exactly this version, up or down. Does not write `PIN` (the Settings app writes it separately). |
 | `bash check_updates.sh --rollback` | Restore the retained previous version. Ignores `ENABLED` and the audio guard. |
 | `bash check_updates.sh --list` | Print every published version for this variant, oldest first. Read-only; writes no log. |
+| `bash check_updates.sh --latest` | Print the version `VERSIONS.json` names for this variant — what the 02:00 check would install. Empty when the pointer cannot be reached. Read-only; writes no log. |
 | `bash check_updates.sh --status` | Print the JSON the Settings app reads. Read-only; writes no log. |
 
 Anything else exits 2 with `unknown option`.

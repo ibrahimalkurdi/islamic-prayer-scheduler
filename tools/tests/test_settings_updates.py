@@ -15,6 +15,11 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 seen = []
 m.arabic_info  = lambda parent, title, text: seen.append(("info", title, text))
 m.arabic_error = lambda parent, title, text: seen.append(("error", title, text))
+answer = [True]
+def fake_confirm(parent, title, text):
+    seen.append(("confirm", title, text))
+    return answer[0]
+m.arabic_confirm = fake_confirm
 w = m.ControlApp()
 fails = []
 def chk(name, got, want):
@@ -34,46 +39,100 @@ chk("five at a time, the rest a scroll away", w.update_version_combo.maxVisibleI
 chk("and the popup is the kind that honours that",
     "combobox-popup: 0" in w.update_version_combo.styleSheet(), True)
 
-print("2. installing a chosen version pins the device to it")
-w.update_version_combo.setCurrentIndex(items.index("1.0.0") if "1.0.0" in items else 1)
+print("2. an older version asks first, and a yes turns the daily check off")
+w.update_version_combo.setCurrentIndex(items.index("1.0.0"))
 chosen = w.update_version_combo.currentData()
+started = []
+real_start = w.start_update
+w.start_update = lambda args, text: started.append(args)
+seen.clear(); answer[0] = False
+w.install_selected_version()
+chk("the user is asked", seen and seen[-1][0], "confirm")
+chk("naming the version", chosen in seen[-1][2], True)
+chk("a no installs nothing", started, [])
+chk("and leaves the daily check on", w.update_auto_chk.isChecked(), True)
+w.update_version_combo.setCurrentIndex(items.index("1.1.0"))
+seen.clear()
+w.install_selected_version()
+chk("the latest version is not questioned", [k for k, *_ in seen], [])
+chk("and installs", started, [["--target", "1.1.0"]])
+started.clear()
+w.update_version_combo.setCurrentIndex(items.index("1.0.0"))
+w.start_update = real_start
+answer[0] = True
 w.install_selected_version()
 w.update_worker.wait(120000); app.processEvents()
 conf = open(CONF, encoding="utf-8").read()
-chk("PIN written", f"PIN={chosen}" in conf, True)
+chk("a yes unticks the daily check", w.update_auto_chk.isChecked(), False)
+chk("ENABLED=false written", "ENABLED=false" in conf, True)
+chk("no PIN written", f"PIN={chosen}" in conf, False)
 status = json.loads(subprocess.run(["/bin/bash", os.path.join(os.environ["HOME"],
     "Desktop/scheduler/config/scripts/check_updates.sh"), "--status"],
     capture_output=True, text=True).stdout)
 chk("device moved to the chosen version", status["installed"], chosen)
-chk("status shows the pin", status["pinned"], chosen)
+chk("status shows no pin", status["pinned"], "")
 
-print("3. the auto-update checkbox writes ENABLED")
-w.update_auto_chk.setChecked(False)
-chk("ENABLED=false written", "ENABLED=false" in open(CONF, encoding="utf-8").read(), True)
+print("3. ticking the box on an older version asks before moving the device")
+# The device is on 1.0.0 and the pointer names 1.1.0. Moves are recorded, not run, until
+# section 5 - which needs the device still behind the pointer.
+chk("--latest names the pointer's version", w.read_latest_version(), "1.1.0")
+started = []
+w.start_update = lambda args, text: started.append(args)
+w.refresh_update_status()
+seen.clear(); answer[0] = False
 w.update_auto_chk.setChecked(True)
-chk("ENABLED=true written", "ENABLED=true" in open(CONF, encoding="utf-8").read(), True)
+chk("the user is asked", seen and seen[-1][0], "confirm")
+chk("naming both versions", chosen in seen[-1][2] and "1.1.0" in seen[-1][2], True)
+chk("a no leaves the box unticked", w.update_auto_chk.isChecked(), False)
+chk("and ENABLED false", "ENABLED=false" in open(CONF, encoding="utf-8").read(), True)
+chk("and moves nothing", started, [])
+answer[0] = True
+w.update_auto_chk.setChecked(True)
+chk("a yes ticks it", w.update_auto_chk.isChecked(), True)
+chk("writes ENABLED=true", "ENABLED=true" in open(CONF, encoding="utf-8").read(), True)
+chk("and moves the device to the latest now", started, [["--now"]])
+w.update_auto_chk.setChecked(False)
+chk("unticking writes ENABLED=false", "ENABLED=false" in open(CONF, encoding="utf-8").read(), True)
+real_latest = w.read_latest_version
+w.read_latest_version = lambda: chosen
+seen.clear(); started.clear()
+w.update_auto_chk.setChecked(True)
+chk("already on the latest: no question", [k for k, *_ in seen], [])
+chk("and nothing to move", started, [])
+w.read_latest_version = lambda: ""
+w.update_auto_chk.setChecked(False)
+w.update_auto_chk.setChecked(True)
+chk("pointer unreachable: enabled without asking", [k for k, *_ in seen], [])
+w.read_latest_version = real_latest
 
-print("4. a pin announces itself, and the button beside it is the way back")
-# Test 2 left the device pinned, which is exactly the state a device being prepared for
-# someone ends up in - and the state it must not ship in. A pin is otherwise invisible:
-# the daily check quietly stops following the fleet, and there is no SSH into a device
-# once it is in someone's home.
+print("4. only the checkbox holds the device, and it says so in red")
 # isHidden() rather than isVisible(): the window is never shown in a headless run, so
 # every child reports invisible regardless of what the code asked for.
+w.update_auto_chk.setChecked(True)
 w.refresh_update_status()
-chk("a pinned device says so", w.update_pin_label.isHidden(), False)
-chk("naming the version it is held on", chosen in w.update_pin_label.text(), True)
-chk("and offers the way out", w.update_unpin_btn.isHidden(), False)
-w.update_unpin_btn.click()
-chk("which clears PIN", "PIN=\n" in open(CONF, encoding="utf-8").read(), True)
-chk("and then there is nothing left to undo", w.update_pin_label.isHidden(), True)
-chk("so the button goes too", w.update_unpin_btn.isHidden(), True)
-# Turning the daily check off must not touch the pin - "not on a schedule" and "held on
-# one version" are different questions, and التحديث إلى أحدث إصدار still works with it off.
+chk("auto on: no hold notice", w.update_pin_label.isHidden(), True)
+chk("the old way-out button is gone", hasattr(w, "update_unpin_btn"), False)
 w.update_auto_chk.setChecked(False)
-chk("switching auto off leaves PIN alone",
+chk("auto off: the hold notice shows", w.update_pin_label.isHidden(), False)
+chk("naming the installed version", chosen in w.update_pin_label.text(), True)
+chk("in red", "#dc3545" in w.update_pin_label.styleSheet(), True)
+chk("switching auto off writes no PIN",
     "PIN=\n" in open(CONF, encoding="utf-8").read(), True)
 w.update_auto_chk.setChecked(True)
+chk("auto on again: the notice goes", w.update_pin_label.isHidden(), True)
+
+# A PIN left by an older release holds the device too, so it must not hide behind a
+# ticked box - it shows as off, and ticking the box is what clears it.
+w.write_update_conf("PIN", chosen)
+w.refresh_update_status()
+chk("a leftover PIN shows as auto off", w.update_auto_chk.isChecked(), False)
+chk("with the hold notice", w.update_pin_label.isHidden(), False)
+w.update_auto_chk.setChecked(True)
+conf = open(CONF, encoding="utf-8").read()
+chk("ticking clears the PIN", "PIN=\n" in conf, True)
+chk("and enables updates", "ENABLED=true" in conf, True)
+chk("and the notice goes", w.update_pin_label.isHidden(), True)
+w.start_update = real_start
 
 print("5. the result dialog says what actually happened")
 # check_updates.sh exits 0 for several outcomes that are not an install, and the app used
@@ -164,27 +223,30 @@ chk("the backup leads the real entries", offered[0], "1.0.0")
 chk("older releases follow, newest first", offered[1:], ["1.0.10", "1.0.9", "1.0.5"])
 chk("five at a time here too", w.update_rollback_combo.maxVisibleItems(), 5)
 
-print("10. going back on purpose sticks")
-# Without a pin the nightly check would put the device straight back on the version it was
-# just taken off. The run itself is exercised by test_updater.sh; what matters here is
-# which command the button chooses and what it writes first.
+print("10. going back picks the right command and pins nothing")
+# The run itself is exercised by test_updater.sh; what matters here is which command the
+# button chooses, and that holding the device stays the checkbox's job alone.
 started = []
 real_start = w.start_update
 w.start_update = lambda args, text: started.append(args)
 
+w.update_auto_chk.setChecked(True)
+seen.clear()
 w.update_rollback_combo.setCurrentIndex(1)          # the retained backup
 w.run_update_rollback()
+chk("going back asks first", seen and seen[-1][0], "confirm")
+chk("and a yes unticks the daily check", w.update_auto_chk.isChecked(), False)
 chk("the local copy is restored, not downloaded", started[-1], ["--rollback"])
-chk("and the device is pinned to it",
-    "PIN=1.0.0" in open(CONF, encoding="utf-8").read(), True)
+chk("and the device is not pinned to it",
+    "PIN=1.0.0" in open(CONF, encoding="utf-8").read(), False)
 
 w.update_rollback_combo.setCurrentIndex(2)          # an older published release
 chosen_old = w.update_rollback_combo.currentData()
 w.run_update_rollback()
 chk("anything else is fetched like any other version",
     started[-1], ["--target", chosen_old])
-chk("and pinned just the same",
-    f"PIN={chosen_old}" in open(CONF, encoding="utf-8").read(), True)
+chk("and not pinned either",
+    f"PIN={chosen_old}" in open(CONF, encoding="utf-8").read(), False)
 
 # Choosing nothing is refused rather than quietly doing the default thing.
 seen.clear()
@@ -194,6 +256,5 @@ chk("the placeholder is refused", seen and seen[-1][0], "error")
 chk("and no run was started", len(started), 2)
 
 w.start_update = real_start
-w.write_update_conf("PIN", "")   # leave the fixture following central again
 
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))

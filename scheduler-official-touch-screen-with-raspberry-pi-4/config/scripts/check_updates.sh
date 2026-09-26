@@ -6,6 +6,7 @@
 #   check_updates.sh --target 1.0.3  install one specific version, up or down
 #   check_updates.sh --rollback      restore the retained previous version
 #   check_updates.sh --list          print every published version for this variant
+#   check_updates.sh --latest        print the version VERSIONS.json names for this variant
 #
 # Which version a device installs comes from VERSIONS.json in the repo, not from the
 # release list - publishing a release does not roll it out. A PIN in config/update.conf
@@ -127,6 +128,7 @@ while [[ $# -gt 0 ]]; do
         --rollback) MODE="rollback" ;;
         --status)   MODE="status" ;;
         --list)     MODE="list" ;;
+        --latest)   MODE="latest" ;;
         --target)   MODE="now"; TARGET_ARG="${2:-}"; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -371,6 +373,19 @@ P
 if [[ "$MODE" == "list" ]]; then
     [[ -n "$VARIANT" ]] || VARIANT="$(detect_variant)"
     published_versions
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# --latest
+# ---------------------------------------------------------------------------
+# What the daily check would install, for the Settings app to name before it asks. Read
+# into a file of its own so a run already in progress keeps the pointer it fetched.
+if [[ "$MODE" == "latest" ]]; then
+    [[ -n "$VARIANT" ]] || VARIANT="$(detect_variant)"
+    POINTER_FILE="$(mktemp)" || exit 0
+    fetch_pointer > /dev/null 2>&1 && pointer_version
+    rm -f "$POINTER_FILE"
     exit 0
 fi
 
