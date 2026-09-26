@@ -93,6 +93,35 @@ UPDATE_CONF_FILE = os.path.join(MAIN_DIR, "config", "update.conf")
 # leave the button disabled forever with no popup and no way to retry.
 UPDATE_TIMEOUT_SECONDS = 600
 UPDATE_LIST_TIMEOUT_SECONDS = 30
+UPDATE_LIST_FRESH_FOR = timedelta(minutes=1)
+CRONTAB_TEMPLATE_FILE = os.path.join(MAIN_DIR, "config", "crontab.txt")
+
+
+def update_check_time():
+    """(hour, minute) of the daily update check, or None.
+
+    Read from the live crontab, because that is what actually runs; config/crontab.txt,
+    which init.sh installs it from, only when the live one cannot be read. Moving the
+    check means editing that line, and the label follows without a code change.
+    """
+    try:
+        text = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                              timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        text = ""
+    if "check_updates.sh" not in text:
+        try:
+            with open(CRONTAB_TEMPLATE_FILE, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            return None
+    for line in text.splitlines():
+        fields = line.split()
+        if (len(fields) > 5 and not line.lstrip().startswith("#")
+                and "check_updates.sh" in line
+                and fields[0].isdigit() and fields[1].isdigit()):
+            return int(fields[1]), int(fields[0])
+    return None
 # The update controls sit in a centred column rather than spanning the panel. Full-width
 # buttons on an 800px screen are a wall of colour with nothing for the eye to anchor on,
 # and a version list that wide is harder to read across, not easier. The rows still shrink
@@ -342,12 +371,28 @@ def arabic_error(parent, title, text):
 
 def arabic_confirm(parent, title, text):
     msg = QMessageBox(parent)
+    # A question the app waits on must never open behind the window that waits for it:
+    # on the Pi's compositor it could, leaving the Settings window dead to every tap.
+    msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
     msg.setIcon(QMessageBox.Question)
     msg.setWindowTitle(title)
     msg.setText(text)
     msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
     arabic_messagebox_buttons(msg)
     return msg.exec_() == QMessageBox.Yes
+
+class FetchingComboBox(QComboBox):
+    """A list that asks before it opens, so its contents are fetched on the tap that
+    wants them. before_popup returning False keeps it shut."""
+
+    def __init__(self, before_popup):
+        super().__init__()
+        self.before_popup = before_popup
+
+    def showPopup(self):
+        if self.before_popup(self):
+            super().showPopup()
+
 
 class StartupAborted(Exception):
     """Raised when the user quits from the mandatory prayer-source dialog, so startup
@@ -671,9 +716,10 @@ class ControlApp(QMainWindow):
         main_layout.addWidget(self.build_daylight_saving_section())
 
         # ---------------- Updates Section ----------------
-        # Empty until جلب الإصدارات is pressed: what has been published is not knowable
-        # without asking, and both version lists are filled from the one answer.
+        # Empty until a version list is first opened: what has been published is not
+        # knowable without asking, and both lists are filled from the one answer.
         self.update_published_versions = []
+        self.update_versions_fetched_at = None
         self.update_rollback_backup = ""
         main_layout.addWidget(self.build_updates_section())
 
@@ -1379,8 +1425,23 @@ class ControlApp(QMainWindow):
         self.update_auto_chk = QCheckBox("تحديث تلقائي يومي")
         self.update_auto_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
         self.update_auto_chk.setLayoutDirection(Qt.RightToLeft)
-        self.update_auto_chk.stateChanged.connect(self.save_update_enabled)
+        # clicked, not stateChanged: stateChanged fires in the middle of Qt's own click
+        # handling, where unticking the box again (a "no" below) leaves the checkbox
+        # believing it already announced the tick - so the next tap shows a tick and
+        # runs nothing, with ENABLED still false. clicked fires once the click is done.
+        self.update_auto_chk.clicked.connect(self.save_update_enabled)
         layout.addWidget(self.update_auto_chk)
+
+        check_time = update_check_time()
+        self.update_schedule_label = QLabel(
+            f"يُفحص عن تحديث ويُثبَّت يوميًا الساعة"
+            f" {self.minutes_to_clock(check_time[0] * 60 + check_time[1])}"
+            if check_time else "")
+        self.update_schedule_label.setStyleSheet(
+            "font-size: 17px; padding: 2px 18px; color: #6c757d;")
+        self.update_schedule_label.setWordWrap(True)
+        self.update_schedule_label.hide()
+        layout.addWidget(self.update_schedule_label)
 
         # The checkbox is the only thing that stops the device following the fleet, so
         # while it is off the device says so in red, naming the version it is held on.
@@ -1403,14 +1464,6 @@ class ControlApp(QMainWindow):
         self.update_pointer_label.setWordWrap(True)
         self.update_pointer_label.hide()
         layout.addWidget(self.update_pointer_label)
-
-        # Above both groups rather than inside either: one fetch fills the version list
-        # and the rollback list alike, so it does not belong to one of them.
-        self.update_refresh_btn = QPushButton("جلب الإصدارات")
-        self.update_refresh_btn.setStyleSheet(self.update_button_style("#6c757d"))
-        self.update_refresh_btn.setMinimumHeight(48)
-        self.update_refresh_btn.clicked.connect(self.load_available_versions)
-        self.add_update_row(layout, (self.update_refresh_btn, 1))
 
         # "Latest" here means the version VERSIONS.json names for this variant, which is the
         # latest one approved for these devices - not whatever is newest on GitHub. A build
@@ -1462,7 +1515,7 @@ class ControlApp(QMainWindow):
         return label
 
     def create_version_combo(self):
-        combo = QComboBox()
+        combo = FetchingComboBox(self.fetch_versions_before_popup)
         combo.setLayoutDirection(Qt.RightToLeft)
         # combobox-popup: 0 is what makes setMaxVisibleItems bind - the default popup sizes
         # itself to its contents and ignores the limit. Releases only accumulate, and this
@@ -1550,9 +1603,7 @@ class ControlApp(QMainWindow):
         self.populate_rollback_versions()
         # A PIN left by an older release, or set over SSH, holds the device just as
         # ENABLED=false does, so it shows as off too - and ticking the box clears it.
-        self.update_auto_chk.blockSignals(True)
-        self.update_auto_chk.setChecked(bool(status.get("enabled", True)) and not pinned)
-        self.update_auto_chk.blockSignals(False)
+        self.set_update_auto_ticked(bool(status.get("enabled", True)) and not pinned)
         self.show_update_hold(pinned or installed)
 
         custom_pointer = "" if status.get("pointer_is_default", True) else status.get("pointer", "")
@@ -1586,6 +1637,8 @@ class ControlApp(QMainWindow):
             f"التحديث التلقائي متوقف — الجهاز ثابت على الإصدار {version}، ولن يُحدَّث"
             " تلقائيًا حتى تفعيل «تحديث تلقائي يومي»" if held else "")
         self.update_pin_label.setVisible(held)
+        self.update_schedule_label.setVisible(
+            not held and bool(self.update_schedule_label.text()))
 
     def read_latest_version(self):
         """The version the daily check would install - VERSIONS.json's, not the newest
@@ -1615,26 +1668,37 @@ class ControlApp(QMainWindow):
         ):
             return False
         self.update_auto_chk.setChecked(False)
+        self.save_update_enabled()
         return True
+
+    def set_update_auto_ticked(self, ticked):
+        self.update_auto_chk.blockSignals(True)
+        self.update_auto_chk.setChecked(ticked)
+        self.update_auto_chk.blockSignals(False)
 
     def save_update_enabled(self):
         enabled = self.update_auto_chk.isChecked()
         move_to = ""
         if enabled:
+            # Unticked until the answer is in, so the screen never shows a tick that
+            # nothing has saved yet.
+            self.set_update_auto_ticked(False)
             installed = getattr(self, "update_installed_version", "")
             latest = self.read_latest_version()
             if latest and latest != installed:
-                if not arabic_confirm(
-                    self, "تفعيل التحديث التلقائي",
-                    f"الإصدار المثبَّت {installed} ليس أحدث إصدار معتمد.\n"
-                    "إن فعّلت التحديث التلقائي اليومي فسيُنقل الجهاز الآن إلى أحدث إصدار:"
-                    f" {latest}.\n\nهل تريد المتابعة؟"
-                ):
-                    self.update_auto_chk.blockSignals(True)
-                    self.update_auto_chk.setChecked(False)
-                    self.update_auto_chk.blockSignals(False)
+                if version_key(installed) > version_key(latest):
+                    text = (f"الإصدار المثبَّت {installed} أحدث من الإصدار المعتمد.\n"
+                            "إن فعّلت التحديث التلقائي اليومي فسيُرجَع الجهاز الآن إلى"
+                            f" الإصدار المعتمد: {latest}.")
+                else:
+                    text = (f"الإصدار المثبَّت {installed} ليس أحدث إصدار معتمد.\n"
+                            "إن فعّلت التحديث التلقائي اليومي فسيُنقل الجهاز الآن إلى أحدث"
+                            f" إصدار: {latest}.")
+                if not arabic_confirm(self, "تفعيل التحديث التلقائي",
+                                      text + "\n\nهل تريد المتابعة؟"):
                     return
                 move_to = latest
+            self.set_update_auto_ticked(True)
         self.write_update_conf("ENABLED", "true" if enabled else "false")
         if enabled:
             self.write_update_conf("PIN", "")
@@ -1642,10 +1706,23 @@ class ControlApp(QMainWindow):
         if move_to:
             self.start_update(["--now"], f"جارٍ الانتقال إلى {move_to}…")
 
+    def fetch_versions_before_popup(self, combo):
+        """Either list, on being opened. A fetch less than a minute old is reused, so
+        opening one list after the other does not ask twice.
+
+        The rollback list still opens when the fetch fails, as long as it holds the
+        retained backup - that one needs no network.
+        """
+        fresh = (self.update_versions_fetched_at is not None
+                 and datetime.now() - self.update_versions_fetched_at < UPDATE_LIST_FRESH_FOR)
+        if fresh or self.load_available_versions():
+            return True
+        arabic_error(self, "تعذر جلب الإصدارات",
+                     "تأكد من اتصال الجهاز بالإنترنت ثم أعد المحاولة.")
+        return combo is self.update_rollback_combo and combo.count() > 1
+
     def load_available_versions(self):
-        self.update_refresh_btn.setEnabled(False)
-        self.update_refresh_btn.setText("جارٍ الجلب…")
-        QApplication.processEvents()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         versions = []
         try:
             result = subprocess.run(
@@ -1655,15 +1732,12 @@ class ControlApp(QMainWindow):
             versions = [v.strip() for v in result.stdout.splitlines() if v.strip()]
         except (OSError, subprocess.SubprocessError):
             pass
-        self.update_refresh_btn.setEnabled(True)
-        self.update_refresh_btn.setText("جلب الإصدارات")
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not versions:
+            return False
 
         self.update_version_combo.clear()
-        if not versions:
-            self.update_version_combo.addItem("تعذر جلب الإصدارات", "")
-            arabic_error(self, "تعذر جلب الإصدارات",
-                         "تأكد من اتصال الجهاز بالإنترنت ثم أعد المحاولة.")
-            return
         self.update_version_combo.addItem("اختر إصدارًا…", "")
         for version in sorted(versions, key=version_key, reverse=True):
             self.update_version_combo.addItem(version, version)
@@ -1671,7 +1745,9 @@ class ControlApp(QMainWindow):
         # The same fetch fills the rollback list, which until now held only whatever backup
         # is on disk - the older releases are not knowable without asking.
         self.update_published_versions = versions
+        self.update_versions_fetched_at = datetime.now()
         self.populate_rollback_versions()
+        return True
 
     def make_update_busy_dialog(self, text):
         """Owns the screen for the whole update.
@@ -1720,7 +1796,7 @@ class ControlApp(QMainWindow):
         version = self.update_version_combo.currentData()
         if not version:
             arabic_error(self, "لم يتم اختيار إصدار",
-                         "اضغط «جلب الإصدارات» ثم اختر إصدارًا من القائمة.")
+                         "افتح القائمة واختر إصدارًا منها.")
             return
         if not self.confirm_update_hold(version):
             return
@@ -1730,7 +1806,7 @@ class ControlApp(QMainWindow):
         version = self.update_rollback_combo.currentData()
         if not version:
             arabic_error(self, "لم يتم اختيار إصدار",
-                         "اختر إصدارًا من القائمة أعلاه. إن كانت فارغة فاضغط «جلب الإصدارات».")
+                         "افتح القائمة أعلاه واختر إصدارًا منها.")
             return
         if not self.confirm_update_hold(version):
             return

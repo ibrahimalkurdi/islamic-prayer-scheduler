@@ -16,19 +16,58 @@ seen = []
 m.arabic_info  = lambda parent, title, text: seen.append(("info", title, text))
 m.arabic_error = lambda parent, title, text: seen.append(("error", title, text))
 answer = [True]
+ticked_while_asked = []
 def fake_confirm(parent, title, text):
     seen.append(("confirm", title, text))
+    ticked_while_asked.append(w.update_auto_chk.isChecked() if "التحديث التلقائي" in title else None)
     return answer[0]
 m.arabic_confirm = fake_confirm
 w = m.ControlApp()
+# A tap, not setChecked: a real tap goes through Qt's click handling, which is where the
+# box once ended up ticked on screen with ENABLED still false.
+def set_auto(on):
+    if w.update_auto_chk.isChecked() != on:
+        w.update_auto_chk.click()
 fails = []
 def chk(name, got, want):
     ok = got == want
     print(("  ✓ " if ok else "  ✗ ") + name + ("" if ok else f"  expected {want!r}, got {got!r}"))
     if not ok: fails.append(name)
 
-print("1. version list is fetched and offered newest-first")
-w.load_available_versions()
+print("1. opening a version list fetches it, newest-first")
+chk("there is no fetch button any more", hasattr(w, "update_refresh_btn"), False)
+chk("nothing is fetched before a list is opened", w.update_version_combo.count(), 1)
+from PyQt5.QtWidgets import QComboBox
+opened = []
+real_show = QComboBox.showPopup
+QComboBox.showPopup = lambda self: opened.append(self)
+real_load = w.load_available_versions
+loads = []
+def counting_load():
+    loads.append(1)
+    return real_load()
+w.load_available_versions = counting_load
+w.update_version_combo.showPopup()
+chk("opening the install list fetched", len(loads), 1)
+chk("and it opened", opened, [w.update_version_combo])
+w.update_rollback_combo.showPopup()
+chk("the rollback list reuses a fetch under a minute old", len(loads), 1)
+chk("and opens too", opened[-1], w.update_rollback_combo)
+
+# Offline: the install list stays shut and says why. The rollback list opens only if it
+# holds the retained backup, which needs no network.
+w.update_versions_fetched_at = None
+w.load_available_versions = lambda: False
+opened.clear(); seen.clear()
+w.update_version_combo.showPopup()
+chk("offline: the install list stays shut", opened, [])
+chk("with an error", seen and seen[-1][0], "error")
+w.update_rollback_combo.showPopup()
+chk("offline, no backup: the rollback list stays shut too",
+    opened, [w.update_rollback_combo] if w.update_rollback_backup else [])
+w.load_available_versions = real_load
+QComboBox.showPopup = real_show
+w.update_version_combo.hidePopup(); w.update_rollback_combo.hidePopup()
 items = [w.update_version_combo.itemData(i) for i in range(w.update_version_combo.count())]
 chk("placeholder then versions", items[0], "")
 chk("newest first", items[1], "1.1.0")
@@ -80,45 +119,61 @@ started = []
 w.start_update = lambda args, text: started.append(args)
 w.refresh_update_status()
 seen.clear(); answer[0] = False
-w.update_auto_chk.setChecked(True)
+set_auto(True)
 chk("the user is asked", seen and seen[-1][0], "confirm")
 chk("naming both versions", chosen in seen[-1][2] and "1.1.0" in seen[-1][2], True)
+chk("the box shows no tick while the question is open", ticked_while_asked[-1], False)
 chk("a no leaves the box unticked", w.update_auto_chk.isChecked(), False)
 chk("and ENABLED false", "ENABLED=false" in open(CONF, encoding="utf-8").read(), True)
 chk("and moves nothing", started, [])
 answer[0] = True
-w.update_auto_chk.setChecked(True)
+set_auto(True)
 chk("a yes ticks it", w.update_auto_chk.isChecked(), True)
 chk("writes ENABLED=true", "ENABLED=true" in open(CONF, encoding="utf-8").read(), True)
 chk("and moves the device to the latest now", started, [["--now"]])
-w.update_auto_chk.setChecked(False)
+set_auto(False)
 chk("unticking writes ENABLED=false", "ENABLED=false" in open(CONF, encoding="utf-8").read(), True)
 real_latest = w.read_latest_version
+answer[0] = False
+set_auto(True)
 w.read_latest_version = lambda: chosen
 seen.clear(); started.clear()
-w.update_auto_chk.setChecked(True)
+set_auto(True)
+chk("a tap after a no still runs", "ENABLED=true" in open(CONF, encoding="utf-8").read(), True)
 chk("already on the latest: no question", [k for k, *_ in seen], [])
 chk("and nothing to move", started, [])
+chk("and no red line under a ticked box", w.update_pin_label.isHidden(), True)
+answer[0] = True
+set_auto(False)
+w.read_latest_version = lambda: "0.9.0"
+seen.clear()
+set_auto(True)
+chk("a device ahead of the pointer is told it goes back",
+    "سيُرجَع" in seen[-1][2] and "0.9.0" in seen[-1][2], True)
+started.clear()
+set_auto(False)
+w.read_latest_version = lambda: chosen
 w.read_latest_version = lambda: ""
-w.update_auto_chk.setChecked(False)
-w.update_auto_chk.setChecked(True)
+set_auto(False)
+seen.clear()
+set_auto(True)
 chk("pointer unreachable: enabled without asking", [k for k, *_ in seen], [])
 w.read_latest_version = real_latest
 
 print("4. only the checkbox holds the device, and it says so in red")
 # isHidden() rather than isVisible(): the window is never shown in a headless run, so
 # every child reports invisible regardless of what the code asked for.
-w.update_auto_chk.setChecked(True)
+set_auto(True)
 w.refresh_update_status()
 chk("auto on: no hold notice", w.update_pin_label.isHidden(), True)
 chk("the old way-out button is gone", hasattr(w, "update_unpin_btn"), False)
-w.update_auto_chk.setChecked(False)
+set_auto(False)
 chk("auto off: the hold notice shows", w.update_pin_label.isHidden(), False)
 chk("naming the installed version", chosen in w.update_pin_label.text(), True)
 chk("in red", "#dc3545" in w.update_pin_label.styleSheet(), True)
 chk("switching auto off writes no PIN",
     "PIN=\n" in open(CONF, encoding="utf-8").read(), True)
-w.update_auto_chk.setChecked(True)
+set_auto(True)
 chk("auto on again: the notice goes", w.update_pin_label.isHidden(), True)
 
 # A PIN left by an older release holds the device too, so it must not hide behind a
@@ -127,12 +182,49 @@ w.write_update_conf("PIN", chosen)
 w.refresh_update_status()
 chk("a leftover PIN shows as auto off", w.update_auto_chk.isChecked(), False)
 chk("with the hold notice", w.update_pin_label.isHidden(), False)
-w.update_auto_chk.setChecked(True)
+set_auto(True)
 conf = open(CONF, encoding="utf-8").read()
 chk("ticking clears the PIN", "PIN=\n" in conf, True)
 chk("and enables updates", "ENABLED=true" in conf, True)
 chk("and the notice goes", w.update_pin_label.isHidden(), True)
 w.start_update = real_start
+
+print("4b. the grey line says when the daily check runs, read from cron")
+import types, tempfile
+real_run = m.subprocess.run
+def fake_crontab(text):
+    def run(args, *a, **k):
+        if args[:1] == ["crontab"]:
+            return types.SimpleNamespace(stdout=text, returncode=0)
+        return real_run(args, *a, **k)
+    return run
+m.subprocess.run = fake_crontab("00 02 * * * bash x/check_updates.sh --cron\n")
+chk("the live crontab's 02:00", m.update_check_time(), (2, 0))
+m.subprocess.run = fake_crontab("# 00 02 * * * check_updates.sh\n30 14 * * * bash check_updates.sh --cron\n")
+chk("a moved line moves it, and a commented one is skipped", m.update_check_time(), (14, 30))
+m.subprocess.run = fake_crontab("")
+tmpl = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
+tmpl.write("15 03 * * * bash check_updates.sh --cron\n"); tmpl.close()
+real_tmpl = m.CRONTAB_TEMPLATE_FILE
+m.CRONTAB_TEMPLATE_FILE = tmpl.name
+chk("no live line: config/crontab.txt answers", m.update_check_time(), (3, 15))
+m.CRONTAB_TEMPLATE_FILE = "/nonexistent"
+chk("neither: no time", m.update_check_time(), None)
+m.CRONTAB_TEMPLATE_FILE = real_tmpl
+os.unlink(tmpl.name)
+m.subprocess.run = real_run
+plain = lambda t: t.replace("\u2066", "").replace("\u2069", "")
+# Section 5 needs the device still behind the pointer, so no tick here may move it.
+real_latest = w.read_latest_version
+w.read_latest_version = lambda: ""
+set_auto(True)
+chk("the app says 2:00 AM", "2:00 AM" in plain(w.update_schedule_label.text()), True)
+chk("in grey", "#6c757d" in w.update_schedule_label.styleSheet(), True)
+chk("shown while the box is ticked", w.update_schedule_label.isHidden(), False)
+set_auto(False)
+chk("hidden while it is not", w.update_schedule_label.isHidden(), True)
+set_auto(True)
+w.read_latest_version = real_latest
 
 print("5. the result dialog says what actually happened")
 # check_updates.sh exits 0 for several outcomes that are not an install, and the app used
@@ -230,7 +322,7 @@ started = []
 real_start = w.start_update
 w.start_update = lambda args, text: started.append(args)
 
-w.update_auto_chk.setChecked(True)
+set_auto(True)
 seen.clear()
 w.update_rollback_combo.setCurrentIndex(1)          # the retained backup
 w.run_update_rollback()

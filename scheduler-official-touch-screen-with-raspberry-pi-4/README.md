@@ -409,9 +409,9 @@ release notes will say so.
 
 ### Controlling updates on a device
 
-From the Settings app, under **تحديثات البرنامج**: **جلب الإصدارات** fills both version
-lists, **التحديث إلى أحدث إصدار** installs the version `VERSIONS.json` names for this
-hardware, **تثبيت الإصدار المحدد** holds the device on one version, **الرجوع إلى إصدار
+From the Settings app, under **تحديثات البرنامج**: both version lists fetch what is
+published when opened, **التحديث إلى أحدث إصدار** installs the version `VERSIONS.json` names for this
+hardware, **تثبيت الإصدار المحدد** installs one version, **الرجوع إلى إصدار
 سابق** picks what to go back to — the backup kept on the device, or any older published
 version — and **تحديث تلقائي يومي** turns the 02:00 check off without stopping those
 buttons. Or edit `config/update.conf` directly:
