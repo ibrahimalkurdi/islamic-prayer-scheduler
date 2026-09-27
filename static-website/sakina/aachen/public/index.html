@@ -38,7 +38,7 @@
    needs no rewrite rule and the address can be shared as it stands. */
 function requestedDate() {
     const asked = new URLSearchParams(location.search).get("date");
-    return Site.parseLocal(asked) ? asked : Site.isoDate(new Date());
+    return Site.parseLocal(asked) ? asked : Site.isoDate(Site.now());
 }
 
 /* A site that is this page alone has no home page to go back to. */
@@ -55,13 +55,16 @@ let shown = requestedDate();
    for anything, and so a colour change can be noticed as it happens rather than at the
    next full redraw. */
 let currentDay = null;
+let carried = null;
 let lastState = null;
 
 async function render() {
     const day = await Site.dayData(shown);
-    currentDay = day;
-    const now = new Date();
+    const now = Site.now();
     const isToday = shown === Site.isoDate(now);
+    /* Shown on the Isha row, as the device shows it. */
+    carried = isToday && !Site.runningPeriod(day, now) ? await Site.eveningBefore(now) : null;
+    currentDay = day;
     const container = document.querySelector("#rows");
     container.textContent = "";
 
@@ -70,9 +73,10 @@ async function render() {
         row.className = "row";
 
         /* Only today has a period in force - a browsed date is a list, not a state. */
-        const span = isToday ? Site.spanAt(period, now) : null;
-        const start = Site.parseLocal(period.start);
-        const end = Site.parseLocal(period.end);
+        const live = carried && carried.name === period.name ? carried : period;
+        const span = isToday ? Site.spanAt(live, now) : null;
+        const start = Site.parseLocal(live.start);
+        const end = Site.parseLocal(live.end);
         const running = isToday && start && end && start <= now && now < end;
 
         /* Painted the way PrayerCard.apply_state paints it: a left-to-right gradient
@@ -126,7 +130,8 @@ async function render() {
    app hides it. */
 function runningState(now) {
     if (!currentDay || shown !== Site.isoDate(now)) return null;
-    const period = Site.runningPeriod(currentDay, now);
+    const period = Site.runningPeriod(currentDay, now)
+        || (carried && Site.runningPeriod({ periods: [carried] }, now));
     if (!period) return null;
     const span = Site.spanAt(period, now);
     if (!span) return null;
@@ -169,7 +174,7 @@ document.querySelector("#pick").addEventListener("change", (event) => {
     if (event.target.value) show(event.target.value);
 });
 document.querySelector("#today").addEventListener("click", () => {
-    show(Site.isoDate(new Date()));
+    show(Site.isoDate(Site.now()));
 });
 
 render().catch((e) => Site.fail(e.message));
@@ -179,7 +184,7 @@ render().catch((e) => Site.fail(e.message));
    colour has changed and redraws the list then, which is what keeps the highlight as
    sharp as the app's without polling the device for it. */
 setInterval(() => {
-    const now = new Date();
+    const now = Site.now();
     const state = runningState(now);
     const key = state ? `${state.period.name}/${state.color}` : null;
 
@@ -218,7 +223,7 @@ refreshVersion();
 /* And a full redraw on the minute regardless, so a day that rolls over at midnight is
    picked up even though nothing about the running period changed. */
 setInterval(() => {
-    if (shown === Site.isoDate(new Date())) render().catch(() => {});
+    if (shown === Site.isoDate(Site.now())) render().catch(() => {});
     refreshVersion();
 }, 60000);
 </script>

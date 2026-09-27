@@ -4,8 +4,9 @@
     static-website/sakina/build.py            this year and next
     static-website/sakina/build.py --year 2027
 
-A city is a folder here holding city.ini and prayer-times.csv. city.ini's daylight_saving
-says whether each year gets its timezone's clock changes or the table is used as it is.
+A city is a folder here holding city.ini and prayer-times.csv. city.ini's timezone is the
+clock the site tells the time in; daylight_saving says whether each year also gets that
+timezone's clock changes or the table is used as it is.
 prayer-times.csv is a symlink into the device's prayers-config/, so the website and the
 devices read one table. public/ is generated, committed by the workflow, and served by
 Cloudflare Pages as it stands.
@@ -47,6 +48,7 @@ def build_city(name, years):
                "--csv", table,
                "--place", place,
                "--app-name", f"{BRAND} - {place}",
+               "--clock-zone", city["timezone"],
                "--daily-only",
                "--icons-dir", ICONS,
                "--out", os.path.join(folder, "public")]

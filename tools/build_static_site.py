@@ -123,7 +123,7 @@ def released_version():
 
 
 def build(out_dir, maps, assets_dir, place="", daily_only=False, icons_dir=None,
-          app_name=""):
+          app_name="", clock_zone=""):
     """`maps` is {year: prayer map file}; one data/<year>.json is written per entry."""
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
@@ -194,7 +194,8 @@ def build(out_dir, maps, assets_dir, place="", daily_only=False, icons_dir=None,
             "window.DEVICE = false;\n"
             f"window.HOME = {'false' if daily_only else 'true'};\n"
             f"window.PLACE = {json.dumps(place, ensure_ascii=False)};\n"
-            f"window.VERSION = {json.dumps(released_version())};\n")
+            f"window.VERSION = {json.dumps(released_version())};\n"
+            f"window.TIMEZONE = {json.dumps(clock_zone or None)};\n")
 
     if not daily_only:
         strip_settings_link(os.path.join(out_dir, "index.html"))
@@ -275,6 +276,10 @@ def main():
     parser.add_argument("--icons-dir", help="a folder holding icon-32.png, icon-128.png "
                                             "and icon-256.png to use instead of the "
                                             "device's icon")
+    parser.add_argument("--clock-zone", default="",
+                        help="the IANA zone the pages tell the time in, so a city's site "
+                             "shows that city's time wherever it is opened; leave out to "
+                             "use the viewer's own clock")
     parser.add_argument("--app-name", default="",
                         help="the name under the icon on a phone's home screen")
     parser.add_argument("--daily-only", action="store_true",
@@ -292,7 +297,7 @@ def main():
             maps = {year: map_from_csv(args.csv, args.timezone, year, work_dir)
                     for year in years}
             build(args.out, maps, VARIANT_DIR, args.place, args.daily_only,
-                  args.icons_dir, args.app_name)
+                  args.icons_dir, args.app_name, args.clock_zone)
         return
 
     years = args.year or [this_year]
@@ -301,7 +306,7 @@ def main():
                      "from it, or use --csv")
     maps = {years[0]: map_from_device(args.scheduler_dir)}
     build(args.out, maps, args.scheduler_dir, args.place, args.daily_only, args.icons_dir,
-          args.app_name)
+          args.app_name, args.clock_zone)
 
 
 if __name__ == "__main__":

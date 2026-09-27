@@ -50,24 +50,14 @@ let day = null;
 let refreshAt = null;
 
 async function loadDay() {
-    const now = new Date();
+    const now = Site.now();
     day = await Site.dayData(null);
     refreshAt = null;
 
-    /* Between midnight and Fajr the running period is the evening before's Isha. The
-       device works that out itself, so its answer already covers these hours and this
-       never fires. A baked static year has no "today" - every day in it is written as it
-       stands at noon - so there the period is on yesterday's table. Which table to read
-       is a lookup; the rules stay where they were computed. */
+    /* Between midnight and Fajr, on a static host: see Site.eveningBefore. */
     if (!Site.runningPeriod(day, now)) {
-        const earlier = new Date(now);
-        earlier.setDate(earlier.getDate() - 1);
-        try {
-            const previous = await Site.dayData(Site.isoDate(earlier));
-            if (Site.runningPeriod(previous, now)) day = previous;
-        } catch (e) {
-            /* The data may not reach back that far - keep today's table and show --:-- */
-        }
+        const carried = await Site.eveningBefore(now);
+        if (carried) day = await Site.dayData(Site.isoDate(Site.parseLocal(carried.start)));
     }
 }
 
@@ -87,7 +77,7 @@ function nextBoundary(at) {
 
 function tick() {
     if (!day) return;
-    const now = new Date();
+    const now = Site.now();
 
     if (refreshAt && now >= refreshAt) {
         loadDay().then(paint).catch((e) => Site.fail(e.message));
@@ -97,7 +87,7 @@ function tick() {
 }
 
 function paint(at) {
-    const now = at instanceof Date ? at : new Date();
+    const now = at instanceof Date ? at : Site.now();
     const counter = document.querySelector("#counter");
     const period = Site.runningPeriod(day, now);
 

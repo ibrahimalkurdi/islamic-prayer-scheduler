@@ -27,6 +27,25 @@ const Site = (() => {
         return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
     }
 
+    /* The clock the pages read. A city's static site sets TIMEZONE so it runs on that
+       city's time wherever it is opened - Damascus read from Germany is an hour ahead of
+       the phone. The device leaves it unset and uses its own clock. Either way the answer
+       is a Date whose local fields are the city's wall clock, the same form parseLocal
+       gives the data, so the two compare directly. */
+    function now() {
+        const real = new Date();
+        if (!window.TIMEZONE) return real;
+        const parts = {};
+        const format = new Intl.DateTimeFormat("en-GB", {
+            timeZone: window.TIMEZONE, hourCycle: "h23",
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+        });
+        for (const part of format.formatToParts(real)) parts[part.type] = part.value;
+        return new Date(+parts.year, +parts.month - 1, +parts.day,
+                        +parts.hour, +parts.minute, +parts.second, real.getMilliseconds());
+    }
+
     /* Where the day's data comes from: the device's API, or a year baked into a file.
        DATA and DEVICE are set by config.js, which is the only file that differs between
        the two deployments. A static host has one file per year, named by DATA's {year},
@@ -59,7 +78,7 @@ const Site = (() => {
             return response.json();
         }
 
-        const when = dateStr ? parseLocal(dateStr) : new Date();
+        const when = dateStr ? parseLocal(dateStr) : now();
         const baked = await bakedYear(when.getFullYear());
         const key = `${when.getMonth() + 1}-${when.getDate()}`;
         const periods = baked && baked.days[key];
@@ -107,6 +126,22 @@ const Site = (() => {
         return `${hour}:${pad(date.getMinutes())} ${mark}`;
     }
 
+    /* Between midnight and Fajr the running period is the evening before's Isha. The
+       device works that out itself, so its answer already covers these hours and this
+       is never needed there. A baked static year writes each day as it stands at noon, so
+       there the period is on yesterday's table. Which table to read is a lookup; the
+       rules stay where they were computed. Null when yesterday has nothing running now,
+       or the data does not reach back that far. */
+    async function eveningBefore(at) {
+        const earlier = new Date(at);
+        earlier.setDate(earlier.getDate() - 1);
+        try {
+            return runningPeriod(await dayData(isoDate(earlier)), at);
+        } catch (e) {
+            return null;
+        }
+    }
+
     /* A time dropped into an Arabic sentence has to be isolated or the bidi algorithm
        lays "12:24 AM" out as "AM 12:24" - the digits are weak, AM is strong left-to-right.
        The two marks are invisible. Not needed where a time sits in its own element with
@@ -132,6 +167,6 @@ const Site = (() => {
         return body;
     }
 
-    return { pad, isoDate, parseLocal, dayData, spanAt, runningPeriod, clock12,
-             ltr, fail, json };
+    return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
+             clock12, ltr, fail, json };
 })();

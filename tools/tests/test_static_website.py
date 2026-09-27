@@ -143,6 +143,13 @@ check_true("data is looked up by year", 'window.DATA = "/data/{year}.json";' in 
 check_true("nothing acts on a device", "window.DEVICE = false;" in config_js)
 check_true("there is no home page to go back to", "window.HOME = false;" in config_js)
 check_true("the city is named", 'window.PLACE = "برلين";' in config_js)
+check_true("no clock zone given, the viewer's clock", "window.TIMEZONE = null;" in config_js)
+CLOCKED = os.path.join(ROOT, "clocked")
+subprocess.run([sys.executable, BUILDER, "--csv", TABLE, "--year", "2026", "--out", CLOCKED,
+                "--clock-zone", "Asia/Damascus"], check=True, capture_output=True)
+check_true("--clock-zone is written for the page",
+           'window.TIMEZONE = "Asia/Damascus";' in
+           open(os.path.join(CLOCKED, "static", "config.js"), encoding="utf-8").read())
 pi4 = json.load(open(os.path.join(REPO, "VERSIONS.json"), encoding="utf-8"))["pi4"]
 check_true("the released version is shown",
            f'window.VERSION = "{pi4["version"] if isinstance(pi4, dict) else pi4}";'
@@ -215,6 +222,20 @@ const Site = vm.runInContext(fs.readFileSync(path.join(out, "static", "app.js"),
         catch (e) { answer[label] = e.message; }
     }
     answer.fetched = fetched;
+    /* 03:00 is before Fajr: the running period is the evening before's Isha, which a
+       baked year keeps on yesterday's table. At noon today's table has its own. */
+    const small = await Site.eveningBefore(Site.parseLocal("2026-09-27T03:00:00"));
+    answer.smallHours = small && [small.name, small.start.slice(0, 10), small.end];
+    answer.noon = await Site.eveningBefore(Site.parseLocal("2026-09-27T12:00:00"));
+    /* The city's clock, whatever the viewer's: Tokyo has no daylight saving, so its wall
+       clock is UTC plus nine hours exactly. */
+    context.window.TIMEZONE = "Asia/Tokyo";
+    const tokyo = Site.now();
+    const utc = new Date();
+    answer.tokyoHour = tokyo.getHours() === (utc.getUTCHours() + 9) % 24;
+    answer.tokyoMinute = tokyo.getMinutes() === utc.getUTCMinutes();
+    context.window.TIMEZONE = null;
+    answer.ownClock = Math.abs(Site.now() - new Date()) < 1000;
     console.log(JSON.stringify(answer));
 })();
 """
@@ -230,6 +251,12 @@ const Site = vm.runInContext(fs.readFileSync(path.join(out, "static", "app.js"),
     check("a year not built says so", answer.get("missing"), "لا توجد مواقيت لهذا اليوم")
     check("and so does a host that answers with its own page", answer.get("html"),
           "لا توجد مواقيت لهذا اليوم")
+    check("before Fajr the running period is found on yesterday's table",
+          answer.get("smallHours"), ["العشاء", "2026-09-26", "2026-09-27T06:00:00"])
+    check("and is not looked for when today has its own", answer.get("noon"), None)
+    check("TIMEZONE sets the hour the page reads", answer.get("tokyoHour"), True)
+    check("and the minute", answer.get("tokyoMinute"), True)
+    check("without it the viewer's own clock is used", answer.get("ownClock"), True)
 
 print("6. the city folders")
 sys.path.insert(0, SAKINA)

@@ -1829,8 +1829,11 @@ static-website/sakina/
 baked separately through the same `prayer_dst.py` functions a device runs in January: the
 clock changes baked into the table are stripped and that year's real ones applied from
 tzdata for `timezone`, so a table carrying the wrong dates still produces the right site.
-With `false` the table is used as it stands and `timezone` is ignored. Berlin and Aachen
-are `true`; Damascus is `false`.
+With `false` the table is used as it stands. Berlin and Aachen are `true`; Damascus is
+`false`.
+
+`timezone` is also the clock the site tells the time in, whatever `daylight_saving` says:
+the Damascus site opened on a phone in Germany highlights by Damascus time, not the phone's.
 
 **Nothing is built by hand.** `.github/workflows/sakina-static-website.yml` runs the tests,
 runs `build.py` and commits any change to `public/` on main:

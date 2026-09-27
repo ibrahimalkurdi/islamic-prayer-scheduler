@@ -6,3 +6,4 @@ window.DEVICE = false;
 window.HOME = false;
 window.PLACE = "دمشق";
 window.VERSION = "1.3.5";
+window.TIMEZONE = "Asia/Damascus";
