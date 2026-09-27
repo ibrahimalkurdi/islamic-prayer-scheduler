@@ -1832,10 +1832,15 @@ device only hands out its address:
   and navigates to `http://<name>.local/settings/` if it answers within 10 s, or says the
   device is out of reach. Safari cannot fetch `http://` from an `https://` page at all, so
   there the page says settings work on the device's wifi only and offers the link.
-- The countdown's speaker works the same way: the mute cannot be sent from the public
-  site (`same_origin()` refuses it, and Safari would block it anyway), so in the app the
-  speaker opens `http://<name>.local/countdown/`, where the device's own button mutes.
-  Both go through `Site.openOnDevice()` in `app.js`.
+- The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
+  lets `PUBLIC_APP_ORIGIN` (`https://[<preview>.]sakina-<city>.pages.dev`) call
+  `/api/mute` and `/api/device` only - CORS headers, a preflight answer carrying
+  `Access-Control-Allow-Private-Network`, and `same_origin()` accepting it for those two
+  paths. Settings stay same-origin. The app posts `{}` as `text/plain`, reads the state
+  back, and follows it every 15 s once the permission is granted. A device that answers
+  but refuses - a release from before this - gets its own countdown opened instead.
+  Safari cannot make the request at all, so there the speaker opens
+  `http://<name>.local/countdown/` (`Site.openOnDevice()`), as the settings icon does.
 - Icon: the device's own prayer-app icon (`config/icons/athan-app-icon-*.png`), not the
   public site's Sakina icon; name «سكينة - جهازي». Installing it is the user's step: the
   button only opens the page, and the text under it says how to add it to the home screen.

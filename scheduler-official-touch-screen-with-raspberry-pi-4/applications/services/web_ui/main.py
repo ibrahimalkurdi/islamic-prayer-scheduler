@@ -18,6 +18,7 @@ import configparser
 import json
 import os
 import posixpath
+import re
 import socket
 import subprocess
 import sys
@@ -93,6 +94,11 @@ APPLY_TIMEOUT_SECONDS = 300
 # its city's site; any other device simply does not.
 PUBLIC_SITES = os.path.join(HERE, "public_sites.json")
 PRAYER_SOURCE_KEY = "prayer_csv_source_label"
+
+# The app a device hands out runs on those sites and mutes the device from there, so they
+# may call the two endpoints it needs - and nothing else; settings stay same-origin.
+PUBLIC_APP_ORIGIN = re.compile(r"^https://([a-z0-9-]+\.)?sakina-[a-z0-9-]+\.pages\.dev$")
+PUBLIC_APP_PATHS = ("/api/mute", "/api/device")
 
 
 class Device:
@@ -221,9 +227,21 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
+    def public_app(self):
+        """The Origin of the app a device hands out, when that is who is asking for one
+        of the endpoints it may use; otherwise None."""
+        origin = self.headers.get("Origin", "")
+        path = urllib.parse.urlsplit(self.path).path
+        if path in PUBLIC_APP_PATHS and PUBLIC_APP_ORIGIN.match(origin):
+            return origin
+        return None
+
     def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
+        if self.public_app():
+            self.send_header("Access-Control-Allow-Origin", self.public_app())
+            self.send_header("Vary", "Origin")
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         # Every answer is about this moment or about a file the touch screen may have
@@ -255,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             # that is not a browser, which is fine from the LAN - curl, a script.
             return self.headers.get("Sec-Fetch-Site") in (None, "same-origin")
         host = self.headers.get("Host", "")
-        return origin in (f"http://{host}", f"https://{host}")
+        return origin in (f"http://{host}", f"https://{host}") or self.public_app() is not None
 
     # ---- routing ----------------------------------------------------------
     def do_GET(self):
@@ -284,6 +302,22 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:  # a broken page must not take the service down
             self.log_message("error on %s: %s", path, error)
             return self.fail(500, str(error))
+
+    def do_OPTIONS(self):
+        """The preflight Chrome sends before the app's mute request, with Local Network
+        Access's own header answered too."""
+        origin = self.public_app()
+        if origin is None:
+            return self.fail(403, "cross-origin request refused")
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self):
         path, _ = self.split_path()

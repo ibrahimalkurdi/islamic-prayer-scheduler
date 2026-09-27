@@ -602,6 +602,47 @@ status, reply = post("/api/mute", {"muted": True}, origin=BASE)
 check("asked for twice, still muted", reply["muted"], True)
 post("/api/mute", {"muted": False}, origin=BASE)
 
+print("17b. the app a device hands out may mute it from the public site, and nothing more")
+APP_ORIGIN = "https://sakina-berlin.pages.dev"
+
+
+def raw(method, path, origin, body=None):
+    request = urllib.request.Request(BASE + path, data=body, method=method,
+                                     headers={"Origin": origin})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, response.read(), dict(response.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), dict(error.headers)
+
+
+status, _, headers = raw("OPTIONS", "/api/mute", APP_ORIGIN)
+check("the preflight is answered", status, 204)
+check("for that site", headers.get("Access-Control-Allow-Origin"), APP_ORIGIN)
+check("including Local Network Access's question",
+      headers.get("Access-Control-Allow-Private-Network"), "true")
+check_true("and a POST", "POST" in headers.get("Access-Control-Allow-Methods", ""))
+# The body is sent as text/plain, as the app sends it: a simple request, no preflight.
+status, body, headers = raw("POST", "/api/mute", APP_ORIGIN, b"{}")
+check("the app mutes", (status, json.loads(body)["muted"]), (200, True))
+check("and may read the answer", headers.get("Access-Control-Allow-Origin"), APP_ORIGIN)
+status, body, headers = raw("GET", "/api/mute", APP_ORIGIN)
+check("it reads the state", (status, json.loads(body)["muted"]), (200, True))
+check("with the header it needs", headers.get("Access-Control-Allow-Origin"), APP_ORIGIN)
+status, body, _ = raw("POST", "/api/mute", APP_ORIGIN, b"{}")
+check("and unmutes", json.loads(body)["muted"], False)
+check("a preview deployment of the site too",
+      raw("OPTIONS", "/api/mute", "https://1a2b3c.sakina-berlin.pages.dev")[0], 204)
+for origin in ("https://evil.pages.dev", "https://sakina-berlin.pages.dev.evil.example",
+               "http://sakina-berlin.pages.dev"):
+    check(f"{origin} is refused", raw("POST", "/api/mute", origin, b"{}")[0], 403)
+    check(f"and gets no preflight", raw("OPTIONS", "/api/mute", origin)[0], 403)
+check("the site may not touch settings",
+      raw("POST", "/api/settings", APP_ORIGIN, b'{"duha_time": 30}')[0], 403)
+check("nor read them",
+      raw("GET", "/api/settings", APP_ORIGIN)[2].get("Access-Control-Allow-Origin"), None)
+check("nor preflight them", raw("OPTIONS", "/api/settings", APP_ORIGIN)[0], 403)
+
 print("18. the touch screen would see that mute, because the flag is the state")
 mute_lib.write_mute_flag()
 check_true("shared.is_muted agrees", mute_lib.is_muted())
@@ -698,10 +739,16 @@ check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in home)
 check_true("a browser that cannot ask is told where settings work",
            "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز." in home)
-# The mute cannot be sent from the public site, so the speaker takes the user to the
-# device's own countdown, where it works.
-check_true("the app's speaker opens the device's countdown",
-           'Site.openOnDevice(Site.ownerHost(), "/countdown/"' in countdown)
+check_true("Chrome mutes and unmutes the device straight from the app",
+           'Site.deviceJson(host, "/api/mute",\n' in countdown
+           and 'method: "POST", body: "{}"' in countdown)
+check_true("and shows its state once the permission is there",
+           "Site.localNetworkAllowed().then((allowed) =>" in countdown)
+check_true("a device that refuses, from an older release, is opened instead",
+           "if (await Site.deviceAnswers(host)) location.href = target;" in countdown)
+# Safari cannot send it, so there the speaker opens the device's own countdown.
+check_true("elsewhere the speaker opens the device's countdown",
+           'Site.openOnDevice(host, "/countdown/", words, say)' in countdown)
 check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح." in countdown)
 check_true("under the speaker, not at the foot of the page",

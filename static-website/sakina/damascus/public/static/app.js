@@ -187,25 +187,63 @@ const Site = (() => {
        target, linkText) puts one on the page. */
     const DEVICE_CHECK_MS = 10000;
 
+    const canAskDevice = () => typeof navigator !== "undefined" && "userAgentData" in navigator;
+
+    /* A request to the device itself, given up after DEVICE_CHECK_MS - which includes
+       the time the permission prompt is open the first time. */
+    async function deviceFetch(host, path, options) {
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), DEVICE_CHECK_MS);
+        try {
+            return await fetch(`http://${host}.local${path}`, Object.assign(
+                { cache: "no-store", targetAddressSpace: "local", signal: abort.signal },
+                options));
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /* Whether the device answers at all. no-cors, so any device answers, whatever its
+       release. */
+    async function deviceAnswers(host) {
+        try {
+            await deviceFetch(host, "/api/device", { mode: "no-cors" });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /* The device's JSON. Only the calls main.py lets the public site make - the mute -
+       and only on a release that has PUBLIC_APP_ORIGIN; an older one refuses. */
+    async function deviceJson(host, path, options) {
+        const response = await deviceFetch(host, path, options);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+    }
+
+    /* Already allowed, so the state can be shown without the page raising the prompt on
+       its own; the first tap is what asks. */
+    async function localNetworkAllowed() {
+        try {
+            const status = await navigator.permissions.query({ name: "local-network-access" });
+            return status.state === "granted";
+        } catch (e) {
+            return false;
+        }
+    }
+
     async function openOnDevice(host, path, words, say) {
         const target = `http://${host}.local${path}`;
-        if (!("userAgentData" in navigator)) {
+        if (!canAskDevice()) {
             say("", words.homeOnly, target, words.open);
             return;
         }
         say("busy", "جارٍ الاتصال بالجهاز…");
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), DEVICE_CHECK_MS);
-        try {
-            await fetch(`http://${host}.local/api/device`, {
-                mode: "no-cors", cache: "no-store", targetAddressSpace: "local",
-                signal: abort.signal,
-            });
+        if (await deviceAnswers(host)) {
             location.href = target;
-        } catch (e) {
+        } else {
             say("bad", words.away, target, "حاول فتحها على أي حال");
-        } finally {
-            clearTimeout(timer);
         }
     }
 
@@ -225,7 +263,8 @@ const Site = (() => {
     }
 
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
-             clock12, ltr, fail, json, ownerHost, openOnDevice, noteSayer };
+             clock12, ltr, fail, json, ownerHost, openOnDevice, noteSayer, canAskDevice,
+             deviceAnswers, deviceJson, localNetworkAllowed };
 })();
 
 /* A static copy keeps working with no network: sw.js, written by the static build, holds

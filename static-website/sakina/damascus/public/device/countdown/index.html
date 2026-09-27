@@ -133,7 +133,10 @@ function paint(at) {
 /* ---- mute ---- */
 async function paintMute() {
     if (!window.DEVICE) return;
-    const state = await Site.json("/api/mute");
+    showMute(await Site.json("/api/mute"));
+}
+
+function showMute(state) {
     const button = document.querySelector("#mute");
 
     button.innerHTML = state.muted ? SPEAKER_OFF : SPEAKER_ON;
@@ -182,19 +185,55 @@ if (window.DEVICE) {
        request; the touch screen polls it every two seconds for the same reason. */
     setInterval(() => paintMute().catch(() => {}), 15000);
 } else if (Site.ownerHost()) {
-    /* The app a device hands out cannot mute from the public site, so its speaker opens
-       the device's own countdown, where the mute works - on the device's wifi. */
+    /* The app a device hands out, on the public site. Chrome mutes and unmutes the
+       device from here - Local Network Access, and main.py lets this site call
+       /api/mute. Safari cannot reach an http:// device from an https:// page at all, so
+       there the speaker opens the device's own countdown, where the mute works. */
+    const host = Site.ownerHost();
+    const target = `http://${host}.local/countdown/`;
+    const words = {
+        homeOnly: "كتم الصوت متاح فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
+        open: "فتح العدّاد على الجهاز",
+        away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.",
+    };
+    const say = Site.noteSayer("#speaker-note", "speaker-note");
     const button = document.querySelector("#mute");
     button.innerHTML = SPEAKER_ON;
-    button.setAttribute("aria-label", "كتم الصوت من الجهاز");
+    button.setAttribute("aria-label", "كتم الصوت");
     button.classList.remove("hidden");
-    button.addEventListener("click", () => {
-        Site.openOnDevice(Site.ownerHost(), "/countdown/", {
-            homeOnly: "كتم الصوت متاح فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
-            open: "فتح العدّاد على الجهاز",
-            away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.",
-        }, Site.noteSayer("#speaker-note", "speaker-note"));
-    });
+
+    if (Site.canAskDevice()) {
+        let polling = null;
+        const follow = () => {
+            if (polling) return;
+            polling = setInterval(() => {
+                Site.deviceJson(host, "/api/mute").then(showMute).catch(() => {});
+            }, 15000);
+        };
+        Site.localNetworkAllowed().then((allowed) => {
+            if (!allowed) return;
+            Site.deviceJson(host, "/api/mute").then(showMute).catch(() => {});
+            follow();
+        });
+        button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+                showMute(await Site.deviceJson(host, "/api/mute",
+                                               { method: "POST", body: "{}" }));
+                document.querySelector("#speaker-note").className = "note hidden speaker-note";
+                follow();
+            } catch (e) {
+                /* A device that answers but refused is on a release from before the
+                   app could mute it: its own page still can. */
+                if (await Site.deviceAnswers(host)) location.href = target;
+                else say("bad", words.away, target, "حاول فتحها على أي حال");
+            } finally {
+                button.disabled = false;
+            }
+        });
+    } else {
+        button.addEventListener("click", () => Site.openOnDevice(host, "/countdown/", words, say));
+    }
 } else {
     document.querySelector("#mute").remove();
 }
