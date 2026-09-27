@@ -243,50 +243,12 @@ if (window.DEVICE || owner) document.querySelector("#to-settings").classList.rem
 if (owner) {
     document.querySelector("#to-settings").addEventListener("click", (event) => {
         event.preventDefault();
-        openDeviceSettings(owner);
+        Site.openOnDevice(owner, "/settings/", {
+            homeOnly: "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
+            open: "فتح الإعدادات",
+            away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.",
+        }, Site.noteSayer("#settings-note"));
     });
-}
-
-/* The handed-out app lives on the public site, and the device answers only on its own
-   wifi. Chrome can ask first - Local Network Access, one permission prompt the first
-   time. Safari cannot reach an http:// address from an https:// page at all, so there
-   the note says where settings work and leaves the tap to the user. */
-const SETTINGS_CHECK_MS = 10000;
-
-function settingsNote(kind, text, target, linkText) {
-    const note = document.querySelector("#settings-note");
-    note.className = `note ${kind}`;
-    note.textContent = text;
-    if (linkText) {
-        const link = document.createElement("a");
-        link.href = target;
-        link.textContent = linkText;
-        note.append(document.createElement("br"), link);
-    }
-}
-
-async function openDeviceSettings(host) {
-    const target = `http://${host}.local/settings/`;
-    if (!("userAgentData" in navigator)) {
-        settingsNote("", "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
-                     target, "فتح الإعدادات");
-        return;
-    }
-    settingsNote("busy", "جارٍ الاتصال بالجهاز…");
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), SETTINGS_CHECK_MS);
-    try {
-        await fetch(`http://${host}.local/api/device`, {
-            mode: "no-cors", cache: "no-store", targetAddressSpace: "local",
-            signal: abort.signal,
-        });
-        location.href = target;
-    } catch (e) {
-        settingsNote("bad", "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.",
-                     target, "حاول فتحها على أي حال");
-    } finally {
-        clearTimeout(timer);
-    }
 }
 
 /* On the device, the way onto a phone: the same pages from the city's public site, under

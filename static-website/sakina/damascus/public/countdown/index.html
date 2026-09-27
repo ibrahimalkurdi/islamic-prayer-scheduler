@@ -180,6 +180,20 @@ if (window.DEVICE) {
        device rather than its own last tap. Slower than the countdown because it costs a
        request; the touch screen polls it every two seconds for the same reason. */
     setInterval(() => paintMute().catch(() => {}), 15000);
+} else if (Site.ownerHost()) {
+    /* The app a device hands out cannot mute from the public site, so its speaker opens
+       the device's own countdown, where the mute works - on the device's wifi. */
+    const button = document.querySelector("#mute");
+    button.innerHTML = SPEAKER_ON;
+    button.setAttribute("aria-label", "كتم الصوت من الجهاز");
+    button.classList.remove("hidden");
+    button.addEventListener("click", () => {
+        Site.openOnDevice(Site.ownerHost(), "/countdown/", {
+            homeOnly: "كتم الصوت متاح فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
+            open: "فتح العدّاد على الجهاز",
+            away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.",
+        }, Site.noteSayer("#error", "error-line"));
+    });
 } else {
     document.querySelector("#mute").remove();
 }

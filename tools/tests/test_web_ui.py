@@ -687,15 +687,26 @@ check_true("it says the phone's own add-to-home-screen step is the user's",
            "وعليك إضافتها بنفسك إلى الشاشة الرئيسية" in home)
 check_true("and only on the device", home.index("if (window.DEVICE) {\n    Site.json(\"/api/device\")") > 0)
 
-print("20b. a device's app opens settings on the device, or says it cannot")
-check_true("settings is the device's own address",
-           "const target = `http://${host}.local/settings/`" in home)
+print("20b. a device's app opens settings and the mute on the device, or says it cannot")
+app_js = get("/static/app.js")[1].decode("utf-8")
+countdown = get("/countdown/")[1].decode("utf-8")
+check_true("the device's own address", "const target = `http://${host}.local${path}`" in app_js)
 check_true("Chrome asks the device first, as a local-network request",
-           'targetAddressSpace: "local"' in home and 'mode: "no-cors"' in home)
+           'targetAddressSpace: "local"' in app_js and 'mode: "no-cors"' in app_js)
+check_true("settings goes to /settings/", 'Site.openOnDevice(owner, "/settings/"' in home)
 check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in home)
 check_true("a browser that cannot ask is told where settings work",
            "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز." in home)
+# The mute cannot be sent from the public site, so the speaker takes the user to the
+# device's own countdown, where it works.
+check_true("the app's speaker opens the device's countdown",
+           'Site.openOnDevice(Site.ownerHost(), "/countdown/"' in countdown)
+check_true("and says so when it is out of reach",
+           "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح." in countdown)
+check_true("the speaker stays off the public site",
+           countdown.index("} else if (Site.ownerHost()) {")
+           < countdown.index('document.querySelector("#mute").remove();'))
 
 print("20c. and it reports the version the daily page prints at its foot")
 VERSION_FILE = os.path.join(SCHEDULER, "var", "installed_version")

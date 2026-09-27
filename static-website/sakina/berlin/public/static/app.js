@@ -177,8 +177,55 @@ const Site = (() => {
         return m ? m[1].toLowerCase() : null;
     }
 
+    /* Settings and the mute live on the device, and the handed-out app is on the public
+       site, while the device answers only on its own wifi. Chrome can ask first - Local
+       Network Access, one permission prompt the first time. Safari cannot reach an
+       http:// address from an https:// page at all, so there the page only says where
+       this works and leaves the tap to the user.
+
+       `words` is the page's own sentences, {homeOnly, open, away}; say(kind, text,
+       target, linkText) puts one on the page. */
+    const DEVICE_CHECK_MS = 10000;
+
+    async function openOnDevice(host, path, words, say) {
+        const target = `http://${host}.local${path}`;
+        if (!("userAgentData" in navigator)) {
+            say("", words.homeOnly, target, words.open);
+            return;
+        }
+        say("busy", "جارٍ الاتصال بالجهاز…");
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), DEVICE_CHECK_MS);
+        try {
+            await fetch(`http://${host}.local/api/device`, {
+                mode: "no-cors", cache: "no-store", targetAddressSpace: "local",
+                signal: abort.signal,
+            });
+            location.href = target;
+        } catch (e) {
+            say("bad", words.away, target, "حاول فتحها على أي حال");
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /* say() for a .note element: the sentence, and the link under it when there is one. */
+    function noteSayer(selector, extraClass = "") {
+        return (kind, text, target, linkText) => {
+            const note = document.querySelector(selector);
+            note.className = `note ${kind} ${extraClass}`.trim();
+            note.textContent = text;
+            if (linkText) {
+                const link = document.createElement("a");
+                link.href = target;
+                link.textContent = linkText;
+                note.append(document.createElement("br"), link);
+            }
+        };
+    }
+
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
-             clock12, ltr, fail, json, ownerHost };
+             clock12, ltr, fail, json, ownerHost, openOnDevice, noteSayer };
 })();
 
 /* A static copy keeps working with no network: sw.js, written by the static build, holds
