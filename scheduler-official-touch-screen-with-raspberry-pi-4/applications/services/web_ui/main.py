@@ -95,10 +95,11 @@ APPLY_TIMEOUT_SECONDS = 300
 PUBLIC_SITES = os.path.join(HERE, "public_sites.json")
 PRAYER_SOURCE_KEY = "prayer_csv_source_label"
 
-# The app a device hands out runs on those sites and mutes the device from there, so they
-# may call the two endpoints it needs - and nothing else; settings stay same-origin.
+# The app a device hands out runs on those sites and reaches the device from there - its
+# settings page and its countdown's mute - so they may call the endpoints those need. The
+# browser still asks the user first (Local Network Access), per site.
 PUBLIC_APP_ORIGIN = re.compile(r"^https://([a-z0-9-]+\.)?sakina-[a-z0-9-]+\.pages\.dev$")
-PUBLIC_APP_PATHS = ("/api/mute", "/api/device")
+PUBLIC_APP_PATHS = ("/api/mute", "/api/device", "/api/settings", "/api/apply")
 
 
 class Device:

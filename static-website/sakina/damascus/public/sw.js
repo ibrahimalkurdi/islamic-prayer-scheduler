@@ -4,7 +4,7 @@
 
    Network first, so a rebuilt site is seen as soon as the phone is online; the copy kept
    here when the network is gone, or too slow to be worth waiting for. */
-const CACHE = "sakina-13ed99dbc2d0";
+const CACHE = "sakina-bddbe859e7a8";
 const FILES = [
     "/",
     "/countdown/",
@@ -16,6 +16,7 @@ const FILES = [
     "/device/",
     "/device/manifest.webmanifest",
     "/device/countdown/",
+    "/device/settings/",
     "/static/Amiri-Bold.ttf",
     "/static/Amiri.ttf",
     "/static/app.css",

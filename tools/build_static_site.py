@@ -23,14 +23,15 @@ Prayer times come from one of two places:
 The output is two apps from the same pages:
 
   * /             the daily list, landing page as on the device, and /countdown/.
-  * /d/<name>/    the same two, as the app a device hands out from its own daily page.
-                  Its settings icon opens http://<name>.local/settings/ - the one thing
-                  that still needs the device's wifi. The pages are written once, under
-                  device/, and _redirects maps every name onto them (Cloudflare Pages and
-                  Netlify read it). It has its own manifest and icon, so it installs as
-                  an app of its own beside the public one.
+  * /d/<name>/    the same two and the settings page, as the app a device hands out from
+                  its own daily page. Its settings and its countdown's mute talk to
+                  http://<name>.local from here (Chrome, on the device's wifi); Safari
+                  cannot, and is sent to the device's own pages. The pages are written
+                  once, under device/, and _redirects maps every name onto them
+                  (Cloudflare Pages and Netlify read it). It has its own manifest and
+                  icon, so it installs as an app of its own beside the public one.
 
-The settings page and the mute button stay behind: they act on one Raspberry Pi. config.js
+The public app has no settings page and no mute: they act on one Raspberry Pi. config.js
 is written with DEVICE = false. sw.js keeps every page and baked year on the phone, so
 both apps open with no network at all.
 """
@@ -62,8 +63,6 @@ from shared import prayer_logic  # noqa: E402
 import api  # noqa: E402
 import prayer_dst  # noqa: E402
 
-# Left behind, along with the mute button: they act on the device.
-DEVICE_ONLY = ("settings",)
 # A copy given no --app-name / --device-app-name is named these.
 DEFAULT_APP_NAME = "سكينة"
 DEFAULT_DEVICE_APP_NAME = "سكينة - جهازي"
@@ -138,8 +137,11 @@ def build(out_dir, maps, assets_dir, place="", icons_dir=None, app_name="",
         shutil.rmtree(out_dir)
     shutil.copytree(os.path.join(WEB_UI, "site"), out_dir)
 
-    for name in DEVICE_ONLY:
-        shutil.rmtree(os.path.join(out_dir, name), ignore_errors=True)
+    # Settings act on a device, so they go to the app a device hands out only - see
+    # write_owner_app - and never to the public root.
+    with open(os.path.join(out_dir, "settings", "index.html"), encoding="utf-8") as handle:
+        settings_page = handle.read()
+    shutil.rmtree(os.path.join(out_dir, "settings"))
     # The daily list is the landing page, as it is on the device.
     shutil.move(os.path.join(out_dir, "daily", "index.html"),
                 os.path.join(out_dir, "index.html"))
@@ -203,7 +205,8 @@ def build(out_dir, maps, assets_dir, place="", icons_dir=None, app_name="",
             f"window.VERSION = {json.dumps(released_version())};\n"
             f"window.TIMEZONE = {json.dumps(clock_zone or None)};\n")
 
-    write_owner_app(out_dir, assets_dir, device_app_name or DEFAULT_DEVICE_APP_NAME)
+    write_owner_app(out_dir, assets_dir, device_app_name or DEFAULT_DEVICE_APP_NAME,
+                    settings_page)
     name_app(os.path.join(out_dir, "static", "manifest.webmanifest"),
              public_pages(out_dir), app_name or DEFAULT_APP_NAME)
     with open(os.path.join(out_dir, "_redirects"), "w", encoding="utf-8") as out:
@@ -234,6 +237,7 @@ def read_font(assets_dir, member):
 
 
 PUBLIC_PAGES = ("index.html", os.path.join("countdown", "index.html"))
+SETTINGS_PAGE = os.path.join("settings", "index.html")
 
 
 def public_pages(out_dir):
@@ -258,26 +262,29 @@ def name_app(manifest_path, pages, app_name):
             handle.write(page.replace("</head>", meta + "</head>", 1))
 
 
-def write_owner_app(out_dir, assets_dir, app_name):
-    """The public pages again under device/, for /d/<name>/, with their own manifest and
-    icon so the app installs apart from the public one.
+def write_owner_app(out_dir, assets_dir, app_name, settings_page):
+    """The public pages and the settings page under device/, for /d/<name>/, with their
+    own manifest and icon so the app installs apart from the public one.
 
     Everything that tells the two apps apart is addressed relative to the page, so it
     resolves under /d/<name>/: a relative start_url is read against the manifest's own
     address, which makes every device's app start at its own /d/<name>/ without a file
     per device. The settings icon comes from the path too - see Site.ownerHost."""
     owner = os.path.join(out_dir, OWNER_DIR)
-    os.makedirs(os.path.join(owner, "countdown"))
+    pages = {}
     for page in PUBLIC_PAGES:
         with open(os.path.join(out_dir, page), encoding="utf-8") as handle:
-            text = handle.read()
+            pages[page] = handle.read()
+    pages[SETTINGS_PAGE] = settings_page
+    for page, text in pages.items():
+        os.makedirs(os.path.dirname(os.path.join(owner, page)), exist_ok=True)
         text = text.replace('href="/static/manifest.webmanifest"',
                             'href="manifest.webmanifest"')
         for url_name in ICONS:
             text = text.replace(f'href="/static/{url_name}"', f'href="{url_name}"')
         if page != "index.html":
-            # countdown/ is one level down; its icon links name the files beside the
-            # daily page.
+            # countdown/ and settings/ are one level down; their icon links name the
+            # files beside the daily page.
             text = text.replace('href="manifest.webmanifest"',
                                 'href="../manifest.webmanifest"')
             for url_name in ICONS:
@@ -293,7 +300,7 @@ def write_owner_app(out_dir, assets_dir, app_name):
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
     name_app(os.path.join(owner, "manifest.webmanifest"),
-             [os.path.join(owner, page) for page in PUBLIC_PAGES], app_name)
+             [os.path.join(owner, page) for page in pages], app_name)
 
     # The device's own prayer-app icon, whatever --icons-dir gave the public site: this is
     # the device's app, and it sits on a home screen that may carry the public one too.

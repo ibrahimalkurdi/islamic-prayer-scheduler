@@ -219,8 +219,8 @@ check_true("the countdown goes back to the daily list, relative",
            'class="corner back-corner" href="../"' in countdown)
 check_true("the settings page prints the address, for a phone that cannot resolve .local",
            'id="where"' in get("/settings/")[1].decode("utf-8"))
-check_true("the settings page goes back to it", 'href="/">→ اوقات الصلاة' in
-           get("/settings/")[1].decode("utf-8"))
+check_true("the settings page goes back to it, relative",
+           'href="../">→ اوقات الصلاة' in get("/settings/")[1].decode("utf-8"))
 
 print("3. a typed address without the trailing slash still lands")
 status, _, headers = get("/countdown", follow=False)
@@ -637,11 +637,23 @@ for origin in ("https://evil.pages.dev", "https://sakina-berlin.pages.dev.evil.e
                "http://sakina-berlin.pages.dev"):
     check(f"{origin} is refused", raw("POST", "/api/mute", origin, b"{}")[0], 403)
     check(f"and gets no preflight", raw("OPTIONS", "/api/mute", origin)[0], 403)
-check("the site may not touch settings",
-      raw("POST", "/api/settings", APP_ORIGIN, b'{"duha_time": 30}')[0], 403)
-check("nor read them",
-      raw("GET", "/api/settings", APP_ORIGIN)[2].get("Access-Control-Allow-Origin"), None)
-check("nor preflight them", raw("OPTIONS", "/api/settings", APP_ORIGIN)[0], 403)
+# The app's settings page reads and saves the device's settings the same way - and they
+# are checked the same way.
+status, body, headers = raw("GET", "/api/settings", APP_ORIGIN)
+check("the app reads the settings", (status, headers.get("Access-Control-Allow-Origin")),
+      (200, APP_ORIGIN))
+check_true("the real ones", "duha_time" in json.loads(body)["values"])
+check("and may preflight a save", raw("OPTIONS", "/api/settings", APP_ORIGIN)[0], 204)
+status, body, _ = raw("POST", "/api/settings", APP_ORIGIN, b'{"duha_time": -5}')
+check("a bad value from the app is refused like any other", status, 400)
+check_true("in words", bool(json.loads(body).get("error")))
+check("its apply state is readable",
+      raw("GET", "/api/apply", APP_ORIGIN)[2].get("Access-Control-Allow-Origin"), APP_ORIGIN)
+check("anything else is not", raw("OPTIONS", "/api/day", APP_ORIGIN)[0], 403)
+check("nor is it answered for the site",
+      raw("GET", "/api/day", APP_ORIGIN)[2].get("Access-Control-Allow-Origin"), None)
+check("a foreign site still may not save",
+      raw("POST", "/api/settings", "https://evil.example", b'{"duha_time": 30}')[0], 403)
 
 print("18. the touch screen would see that mute, because the flag is the state")
 mute_lib.write_mute_flag()
@@ -734,7 +746,17 @@ countdown = get("/countdown/")[1].decode("utf-8")
 check_true("the device's own address", "const target = `http://${host}.local${path}`" in app_js)
 check_true("Chrome asks the device first, as a local-network request",
            'targetAddressSpace: "local"' in app_js and 'mode: "no-cors"' in app_js)
-check_true("settings goes to /settings/", 'Site.openOnDevice(owner, "/settings/"' in home)
+check_true("on Chrome the app opens its own settings page, which talks to the device",
+           "if (owner && !Site.canAskDevice()) {" in home)
+check_true("elsewhere settings goes to the device's /settings/",
+           'Site.openOnDevice(owner, "/settings/"' in home)
+settings_page = get("/settings/")[1].decode("utf-8")
+check_true("the settings page asks the device itself when it is in the app",
+           "const api = owner ? (path, options) => Site.deviceJson(owner, path, options)"
+           in settings_page)
+check_true("and says so when the device is out of reach",
+           'show("error", "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.")'
+           in settings_page)
 check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in home)
 check_true("a browser that cannot ask is told where settings work",
@@ -831,8 +853,10 @@ build = subprocess.run([sys.executable,
                         "--year", str(datetime.now().year)],
                        capture_output=True, text=True)
 check("the build runs", build.returncode, 0)
-check("the settings page is not copied", os.path.isdir(os.path.join(OUT, "settings")),
-      False)
+check("the settings page is not at the public root",
+      os.path.isdir(os.path.join(OUT, "settings")), False)
+check_true("only in the app a device hands out",
+           os.path.isfile(os.path.join(OUT, "device", "settings", "index.html")))
 check("the daily list is the landing page, not a folder",
       (os.path.isdir(os.path.join(OUT, "daily")),
        'id="rows"' in open(os.path.join(OUT, "index.html"), encoding="utf-8").read()),
@@ -916,9 +940,11 @@ for folder, _, files in os.walk(OUT):
             continue
         text = open(os.path.join(folder, name), encoding="utf-8").read()
         for needle in ("/api/settings", "/api/mute", "/api/apply", "/api/device"):
-            # The countdown page still carries its mute code, guarded by DEVICE. What
-            # must not survive is any call made unconditionally.
-            if needle in text and "window.DEVICE" not in text:
+            # The countdown carries its mute code, guarded by DEVICE, and the device app's
+            # pages reach the device only as Site.ownerHost(). What must not survive is any
+            # call made unconditionally.
+            if (needle in text and "window.DEVICE" not in text
+                    and "Site.ownerHost()" not in text):
                 offenders.append(f"{name} calls {needle}")
 check("no unguarded device call", offenders, [])
 

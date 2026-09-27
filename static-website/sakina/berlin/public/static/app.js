@@ -214,12 +214,13 @@ const Site = (() => {
         }
     }
 
-    /* The device's JSON. Only the calls main.py lets the public site make - the mute -
-       and only on a release that has PUBLIC_APP_ORIGIN; an older one refuses. */
+    /* The device's JSON. Only the calls main.py lets the public site make - settings and
+       the mute - and only on a release that has PUBLIC_APP_ORIGIN; an older one refuses. */
     async function deviceJson(host, path, options) {
         const response = await deviceFetch(host, path, options);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        return body;
     }
 
     /* Already allowed, so the state can be shown without the page raising the prompt on

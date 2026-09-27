@@ -241,7 +241,9 @@ refreshVersion();
    a device hands out (Site.ownerHost), never on the public site. */
 const owner = Site.ownerHost();
 if (window.DEVICE || owner) document.querySelector("#to-settings").classList.remove("hidden");
-if (owner) {
+/* Chrome opens the app's own settings page, which talks to the device directly. Safari
+   cannot, so there it goes to the device's page on its wifi. */
+if (owner && !Site.canAskDevice()) {
     document.querySelector("#to-settings").addEventListener("click", (event) => {
         event.preventDefault();
         Site.openOnDevice(owner, "/settings/", {

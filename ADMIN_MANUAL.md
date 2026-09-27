@@ -1827,16 +1827,22 @@ device only hands out its address:
   file per device. The name lives in the path because an iPhone home-screen app keeps
   neither the query string nor Safari's storage.
 - `Site.ownerHost()` reads `<name>` from the path; only then does the settings icon show
-  off the device. Tapping it on Chrome fetches `http://<name>.local/api/device`
-  (`no-cors`, `targetAddressSpace: "local"` - Local Network Access, one permission prompt)
-  and navigates to `http://<name>.local/settings/` if it answers within 10 s, or says the
-  device is out of reach. Safari cannot fetch `http://` from an `https://` page at all, so
-  there the page says settings work on the device's wifi only and offers the link.
+  off the device. On Chrome it opens the app's own `settings/` (the device's settings page,
+  copied to `device/settings/` and never to the public root), which calls
+  `http://<name>.local/api/settings`, `/api/apply` and `/api/device` directly
+  (`targetAddressSpace: "local"` - Local Network Access, one permission prompt; CORS
+  below). Unreachable, it says the device is out of reach; reachable but refusing - an
+  older release - it opens `http://<name>.local/settings/` instead. Safari cannot fetch
+  `http://` from an `https://` page at all, so there the icon says settings work on the
+  device's wifi only and offers that link.
 - The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
   lets `PUBLIC_APP_ORIGIN` (`https://[<preview>.]sakina-<city>.pages.dev`) call
-  `/api/mute` and `/api/device` only - CORS headers, a preflight answer carrying
-  `Access-Control-Allow-Private-Network`, and `same_origin()` accepting it for those two
-  paths. Settings stay same-origin. The app posts `{}` as `text/plain`, reads the state
+  `PUBLIC_APP_PATHS` - `/api/mute`, `/api/device`, `/api/settings`, `/api/apply`, nothing
+  else - with CORS headers, a preflight answer carrying
+  `Access-Control-Allow-Private-Network`, and `same_origin()` accepting it for those
+  paths. A save from the app is validated exactly like one from the device's own page.
+  Trusting that origin means trusting what is deployed there.
+  The mute is posted as `{}` in `text/plain`; the app reads the state
   back, and follows it every 15 s once the permission is granted. A device that answers
   but refuses - a release from before this - gets its own countdown opened instead.
   Safari cannot make the request at all, so there the speaker opens
