@@ -239,6 +239,18 @@ body.full {
     height: clamp(2.2rem, 8vw, 3rem);
 }
 
+/* What the app's speaker says when the device is out of reach, right under it. */
+.counter .speaker-note {
+    position: absolute;
+    top: 3.6rem;
+    inset-inline-end: .6rem;
+    max-width: min(20rem, calc(100% - 1.2rem));
+    background: rgba(15, 23, 42, .85);
+    margin: 0;
+    font-size: .9rem;
+    text-align: start;
+}
+
 .counter .error-line {
     position: absolute;
     inset-inline: 1rem;

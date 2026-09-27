@@ -704,6 +704,8 @@ check_true("the app's speaker opens the device's countdown",
            'Site.openOnDevice(Site.ownerHost(), "/countdown/"' in countdown)
 check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح." in countdown)
+check_true("under the speaker, not at the foot of the page",
+           'Site.noteSayer("#speaker-note", "speaker-note")' in countdown)
 check_true("the speaker stays off the public site",
            countdown.index("} else if (Site.ownerHost()) {")
            < countdown.index('document.querySelector("#mute").remove();'))

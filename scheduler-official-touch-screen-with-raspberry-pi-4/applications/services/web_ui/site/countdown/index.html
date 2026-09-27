@@ -23,6 +23,7 @@
     <div class="digits" id="digits">--:--</div>
     <div class="mute-state" id="mute-state"></div>
 
+    <div class="note hidden speaker-note" id="speaker-note"></div>
     <div class="note bad hidden error-line" id="error"></div>
 </main>
 
@@ -191,7 +192,7 @@ if (window.DEVICE) {
             homeOnly: "كتم الصوت متاح فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
             open: "فتح العدّاد على الجهاز",
             away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.",
-        }, Site.noteSayer("#error", "error-line"));
+        }, Site.noteSayer("#speaker-note", "speaker-note"));
     });
 } else {
     document.querySelector("#mute").remove();
