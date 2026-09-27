@@ -683,6 +683,8 @@ with open(INI, "w", encoding="utf-8") as handle:
 check_true("the landing page offers it under the name the phone used",
            'location.hostname.endsWith(".local")' in home
            and "${info.public_site}/d/${encodeURIComponent(name)}/" in home)
+check_true("it says the phone's own add-to-home-screen step is the user's",
+           "وعليك إضافتها بنفسك إلى الشاشة الرئيسية" in home)
 check_true("and only on the device", home.index("if (window.DEVICE) {\n    Site.json(\"/api/device\")") > 0)
 
 print("20b. a device's app opens settings on the device, or says it cannot")

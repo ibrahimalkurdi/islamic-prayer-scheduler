@@ -9,8 +9,7 @@ app a device hands out, whose settings icon opens that device on its own wifi.
 <city>/prayer-times.csv   symlink into the devices' config/prayers-config/
 <city>/public/            generated — never edit by hand
 icons/                    the Sakina icon, shared by every city; source-thkr-allah.jpeg is
-                          the original, icon-*.png are cut from it full-bleed, and
-                          device-icon-*.png add a gear for the app a device hands out
+                          the original, icon-*.png are cut from it full-bleed
 build.py                  builds every city, this year and next, and writes the devices'
                           web_ui/public_sites.json
 ```

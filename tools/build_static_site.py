@@ -203,7 +203,7 @@ def build(out_dir, maps, assets_dir, place="", icons_dir=None, app_name="",
             f"window.VERSION = {json.dumps(released_version())};\n"
             f"window.TIMEZONE = {json.dumps(clock_zone or None)};\n")
 
-    write_owner_app(out_dir, icons_dir, device_app_name or DEFAULT_DEVICE_APP_NAME)
+    write_owner_app(out_dir, assets_dir, device_app_name or DEFAULT_DEVICE_APP_NAME)
     name_app(os.path.join(out_dir, "static", "manifest.webmanifest"),
              public_pages(out_dir), app_name or DEFAULT_APP_NAME)
     with open(os.path.join(out_dir, "_redirects"), "w", encoding="utf-8") as out:
@@ -258,7 +258,7 @@ def name_app(manifest_path, pages, app_name):
             handle.write(page.replace("</head>", meta + "</head>", 1))
 
 
-def write_owner_app(out_dir, icons_dir, app_name):
+def write_owner_app(out_dir, assets_dir, app_name):
     """The public pages again under device/, for /d/<name>/, with their own manifest and
     icon so the app installs apart from the public one.
 
@@ -295,14 +295,14 @@ def write_owner_app(out_dir, icons_dir, app_name):
     name_app(os.path.join(owner, "manifest.webmanifest"),
              [os.path.join(owner, page) for page in PUBLIC_PAGES], app_name)
 
-    # device-icon-*.png in --icons-dir marks the owner's app apart on a home screen that
-    # may carry the public one too; without them it takes the public icon.
-    for url_name in ICONS:
-        own = os.path.join(icons_dir, "device-" + url_name) if icons_dir else ""
-        source = own if own and os.path.isfile(own) else os.path.join(out_dir, "static",
-                                                                        url_name)
-        if os.path.isfile(source):
-            shutil.copyfile(source, os.path.join(owner, url_name))
+    # The device's own prayer-app icon, whatever --icons-dir gave the public site: this is
+    # the device's app, and it sits on a home screen that may carry the public one too.
+    for url_name, source in ICONS.items():
+        try:
+            shutil.copyfile(os.path.join(assets_dir, "config", "icons", source),
+                            os.path.join(owner, url_name))
+        except OSError:
+            print(f"WARNING: {source} not found - the device app's icon will be blank")
 
 
 def write_service_worker(out_dir):
@@ -343,9 +343,7 @@ def main():
     parser.add_argument("--place", default="", help="the city's name, shown on the page")
     parser.add_argument("--icons-dir", help="a folder holding icon-32.png, icon-128.png "
                                             "and icon-256.png to use instead of the "
-                                            "device's icon, and optionally the same "
-                                            "names prefixed device- for the app a "
-                                            "device hands out")
+                                            "device's icon on the public pages")
     parser.add_argument("--clock-zone", default="",
                         help="the IANA zone the pages tell the time in, so a city's site "
                              "shows that city's time wherever it is opened; leave out to "

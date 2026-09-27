@@ -164,17 +164,10 @@ check("no page links to a home page that is not there",
        if 'href="/"' in open(os.path.join(OUT, p), encoding="utf-8").read()], [])
 for size in (32, 128, 256):
     name = f"icon-{size}.png"
-    check(f"the device's app carries the Sakina device-{name}",
+    check(f"the device's app carries the prayer app's {name}, not Sakina's",
           open(os.path.join(OUT, "device", name), "rb").read(),
-          open(os.path.join(SAKINA_ICONS, f"device-{name}"), "rb").read())
-    check(f"device-{name} is a square PNG of that size",
-          png_size(os.path.join(SAKINA_ICONS, f"device-{name}")), (size, size))
-check("which differs from the public one",
-      open(os.path.join(OUT, "device", "icon-256.png"), "rb").read()
-      != open(os.path.join(OUT, "static", "icon-256.png"), "rb").read(), True)
-check("without device icons it takes the site's own",
-      open(os.path.join(DAMASCUS, "device", "icon-256.png"), "rb").read(),
-      open(os.path.join(DAMASCUS, "static", "icon-256.png"), "rb").read())
+          open(os.path.join(os.path.dirname(DEVICE_ICON), f"athan-app-icon-{size}.png"),
+               "rb").read())
 for name in ("app.css", "app.js", "Amiri.ttf", "Amiri-Bold.ttf", "icon-32.png", "icon-128.png",
              "icon-256.png", "manifest.webmanifest"):
     check_true(f"static/{name} is there", os.path.isfile(os.path.join(OUT, "static", name)))
