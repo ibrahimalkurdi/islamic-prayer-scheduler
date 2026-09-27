@@ -46,9 +46,7 @@ li { break-inside: avoid; }
 .keep { break-inside: avoid; }
 img[src*="assets/manual/app-"] { width: 60%; height: auto; }
 img[src*="assets/manual/settings-"] { width: 56%; height: auto; }
-img[src*="assets/manual/web-home"], img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"] { width: 160px; height: auto; }
-p:has(> img[src*="web-home"]), p:has(> img[src*="web-daily"]) { display: inline-block; width: 49%; margin: 0; }
-img[src*="web-add-"] { width: auto; height: auto; max-width: 100%; max-height: 165mm; }
+img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"] { width: 160px; height: auto; }
 p { orphans: 3; widows: 3; }
 .toc { break-after: page; font-size: 12pt; line-height: 1.45; }
 .toc h1 { margin-top: 0; }

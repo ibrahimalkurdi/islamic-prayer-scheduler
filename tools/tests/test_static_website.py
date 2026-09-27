@@ -81,7 +81,7 @@ def png_size(path):
 
 print("1. every year gets its own clock changes")
 OUT = os.path.join(ROOT, "berlin")
-result = build(OUT, "--timezone", "Europe/Berlin", "--place", "برلين", "--daily-only",
+result = build(OUT, "--timezone", "Europe/Berlin", "--place", "برلين",
                "--icons-dir", SAKINA_ICONS, "--app-name", "سكينة - برلين",
                "--year", "2026", "--year", "2027")
 check("the build runs", result.returncode, 0)
@@ -133,15 +133,17 @@ result = subprocess.run([sys.executable, BUILDER, "--csv", WRONG, "--year", "202
 check("without a zone the build runs", result.returncode, 0)
 check("and the table is used as it stands", dhuhr(AS_IS, 2026, "10-31"), "1:00 PM")
 
-print("4. the daily page, and nothing else")
+print("4. the daily page at the root, the countdown beside it, nothing for the device")
 check("the site root is the daily page",
       'id="rows"' in open(os.path.join(OUT, "index.html"), encoding="utf-8").read(), True)
-for page in ("countdown", "daily", "settings"):
+check_true("the countdown is there",
+           'id="digits"' in open(os.path.join(OUT, "countdown", "index.html"),
+                                 encoding="utf-8").read())
+for page in ("daily", "settings"):
     check(f"no {page}/ folder", os.path.exists(os.path.join(OUT, page)), False)
 config_js = open(os.path.join(OUT, "static", "config.js"), encoding="utf-8").read()
 check_true("data is looked up by year", 'window.DATA = "/data/{year}.json";' in config_js)
 check_true("nothing acts on a device", "window.DEVICE = false;" in config_js)
-check_true("there is no home page to go back to", "window.HOME = false;" in config_js)
 check_true("the city is named", 'window.PLACE = "برلين";' in config_js)
 check_true("no clock zone given, the viewer's clock", "window.TIMEZONE = null;" in config_js)
 CLOCKED = os.path.join(ROOT, "clocked")
@@ -157,8 +159,22 @@ check_true("the released version is shown",
 page = open(os.path.join(OUT, "index.html"), encoding="utf-8").read()
 check_true("the page shows VERSION when it is not on a device",
            "line.textContent = window.VERSION;" in page)
-check_true("the back link goes when there is no home",
-           'if (window.HOME === false) document.querySelector("#back").remove();' in page)
+check("no page links to a home page that is not there",
+      [p for p in ("index.html", "countdown/index.html")
+       if 'href="/"' in open(os.path.join(OUT, p), encoding="utf-8").read()], [])
+for size in (32, 128, 256):
+    name = f"icon-{size}.png"
+    check(f"the device's app carries the Sakina device-{name}",
+          open(os.path.join(OUT, "device", name), "rb").read(),
+          open(os.path.join(SAKINA_ICONS, f"device-{name}"), "rb").read())
+    check(f"device-{name} is a square PNG of that size",
+          png_size(os.path.join(SAKINA_ICONS, f"device-{name}")), (size, size))
+check("which differs from the public one",
+      open(os.path.join(OUT, "device", "icon-256.png"), "rb").read()
+      != open(os.path.join(OUT, "static", "icon-256.png"), "rb").read(), True)
+check("without device icons it takes the site's own",
+      open(os.path.join(DAMASCUS, "device", "icon-256.png"), "rb").read(),
+      open(os.path.join(DAMASCUS, "static", "icon-256.png"), "rb").read())
 for name in ("app.css", "app.js", "Amiri.ttf", "Amiri-Bold.ttf", "icon-32.png", "icon-128.png",
              "icon-256.png", "manifest.webmanifest"):
     check_true(f"static/{name} is there", os.path.isfile(os.path.join(OUT, "static", name)))
@@ -185,7 +201,7 @@ check("the manifest keeps its icons", [i["src"] for i in manifest["icons"]],
       ["icon-128.png", "icon-256.png"])
 plain = json.load(open(os.path.join(DAMASCUS, "static", "manifest.webmanifest"),
                        encoding="utf-8"))
-check("without --app-name the device's name stays", plain["name"], "مواقيت الصلاة")
+check("without --app-name it is Sakina", plain["name"], "سكينة")
 check("a device's map cannot be baked for two years",
       subprocess.run([sys.executable, BUILDER, "--scheduler-dir", ROOT, "--out",
                       os.path.join(ROOT, "x"), "--year", "2026", "--year", "2027"],
@@ -308,6 +324,13 @@ def changes_clocks(name):
 
 check("berlin and aachen change their clocks, damascus does not",
       [changes_clocks(c) for c in ("berlin", "aachen", "damascus")], [True, True, False])
+
+print("7. the devices know which site is theirs")
+shipped = json.load(open(sakina_build.PUBLIC_SITES, encoding="utf-8"))
+check("public_sites.json matches the city folders - rerun build.py after adding one",
+      shipped, sakina_build.public_sites())
+check("a table maps to its city's site", shipped.get("دمشق.csv"),
+      "https://sakina-damascus.pages.dev")
 
 shutil.rmtree(ROOT, ignore_errors=True)
 

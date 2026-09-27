@@ -167,6 +167,23 @@ const Site = (() => {
         return body;
     }
 
+    /* The public site also serves the app a device hands out, at /d/<name>/ - the same
+       pages, and the only thing that differs is this name: whose settings the settings
+       icon opens. It lives in the path because an iPhone home-screen app keeps neither
+       the query string nor the browser's storage. */
+    function ownerHost() {
+        if (window.DEVICE) return null;
+        const m = location.pathname.match(/^\/d\/([A-Za-z0-9-]{1,63})\//);
+        return m ? m[1].toLowerCase() : null;
+    }
+
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
-             clock12, ltr, fail, json };
+             clock12, ltr, fail, json, ownerHost };
 })();
+
+/* A static copy keeps working with no network: sw.js, written by the static build, holds
+   the pages and the baked years. The device has none - a .local address is not a secure
+   origin, so a browser would not run one there anyway. */
+if (!window.DEVICE && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+}

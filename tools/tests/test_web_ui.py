@@ -190,20 +190,37 @@ def post(path, payload, origin=None, want_status=200):
 
 
 print("1. the pages are served, and they are files not rendered HTML")
-for path, needle in (("/", "الوقت المتبقي للصلاة"),
+for path, needle in (("/", 'id="rows"'),
                      ("/countdown/", "id=\"digits\""),
-                     ("/daily/", "اوقات الصلاة"),
                      ("/settings/", "الاعدادات")):
     status, body, headers = get(path)
     check(f"GET {path}", status, 200)
     check_true(f"{path} contains {needle}", needle in body.decode("utf-8"))
     check(f"{path} is html", headers["Content-Type"], "text/html; charset=utf-8")
 
-print("2. the home page links to all three, and to nothing else")
+print("2. the daily list is the landing page, and its icons are the way to the others")
 _, body, _ = get("/")
 home = body.decode("utf-8")
-for target in ("/countdown/", "/daily/", "/settings/"):
-    check_true(f"home links to {target}", f'href="{target}"' in home)
+# Relative, so the same page works at / on the device and at /d/<name>/ on the public
+# site, where the handed-out app lives.
+for target in ("countdown/", "settings/"):
+    check_true(f"the landing page links to {target}", f'href="{target}"' in home)
+check_true("the settings icon starts hidden", 'class="icon-link hidden" id="to-settings"' in home)
+check_true("and is shown on the device or in a device's app",
+           'if (window.DEVICE || owner) document.querySelector("#to-settings")' in home)
+check("there is no separate home page any more",
+      os.path.exists(os.path.join(WEB_UI, "site", "index.html")), False)
+for old in ("/daily/", "/daily"):
+    status, _, headers = get(old, follow=False)
+    check(f"GET {old} redirects", status, 301)
+    check(f"{old} lands on the daily list at /", headers["Location"], "/")
+countdown = get("/countdown/")[1].decode("utf-8")
+check_true("the countdown goes back to the daily list, relative",
+           'class="corner back-corner" href="../"' in countdown)
+check_true("the settings page prints the address, for a phone that cannot resolve .local",
+           'id="where"' in get("/settings/")[1].decode("utf-8"))
+check_true("the settings page goes back to it", 'href="/">→ اوقات الصلاة' in
+           get("/settings/")[1].decode("utf-8"))
 
 print("3. a typed address without the trailing slash still lands")
 status, _, headers = get("/countdown", follow=False)
@@ -243,7 +260,7 @@ check("the two faces are different files",
       get("/static/Amiri.ttf")[1] != get("/static/Amiri-Bold.ttf")[1], True)
 
 # Every page, not just the home page: whichever one is open is the one that gets added.
-for page in ("/", "/countdown/", "/daily/", "/settings/"):
+for page in ("/", "/countdown/", "/settings/"):
     html = get(page)[1].decode("utf-8")
     check(f"{page} names an apple-touch-icon", 'rel="apple-touch-icon"' in html, True)
     check(f"{page} names a manifest", 'rel="manifest"' in html, True)
@@ -646,7 +663,39 @@ info = json.loads(body)
 check_true("a hostname", bool(info["hostname"]))
 check_true("and an address or an honest null", "ip" in info)
 
-print("20b. and it reports the version the daily page prints at its foot")
+print("20a. and which public site hands out its app, by the prayer table it uses")
+from main import PUBLIC_SITES  # noqa: E402
+sites = json.load(open(PUBLIC_SITES, encoding="utf-8"))
+check("the sites map carries berlin", sites.get("برلين.csv"), "https://sakina-berlin.pages.dev")
+check("with no table recorded there is none", info["public_site"], None)
+ini_before = open(INI, encoding="utf-8").read()
+for label, want in (
+        ("/home/x/Desktop/scheduler/config/prayers-config/برلين.csv",
+         "https://sakina-berlin.pages.dev"),
+        ("/home/x/Desktop/some-other-city.csv", None)):
+    with open(INI, "w", encoding="utf-8") as handle:
+        handle.write(ini_before.replace("[Settings]\n",
+                                        f"[Settings]\nprayer_csv_source_label = {label}\n"))
+    check(f"{os.path.basename(label)} -> {want}",
+          json.loads(get("/api/device")[1])["public_site"], want)
+with open(INI, "w", encoding="utf-8") as handle:
+    handle.write(ini_before)
+check_true("the landing page offers it under the name the phone used",
+           'location.hostname.endsWith(".local")' in home
+           and "${info.public_site}/d/${encodeURIComponent(name)}/" in home)
+check_true("and only on the device", home.index("if (window.DEVICE) {\n    Site.json(\"/api/device\")") > 0)
+
+print("20b. a device's app opens settings on the device, or says it cannot")
+check_true("settings is the device's own address",
+           "const target = `http://${host}.local/settings/`" in home)
+check_true("Chrome asks the device first, as a local-network request",
+           'targetAddressSpace: "local"' in home and 'mode: "no-cors"' in home)
+check_true("and says so when it is out of reach",
+           "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in home)
+check_true("a browser that cannot ask is told where settings work",
+           "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز." in home)
+
+print("20c. and it reports the version the daily page prints at its foot")
 VERSION_FILE = os.path.join(SCHEDULER, "var", "installed_version")
 
 
@@ -722,6 +771,12 @@ build = subprocess.run([sys.executable,
 check("the build runs", build.returncode, 0)
 check("the settings page is not copied", os.path.isdir(os.path.join(OUT, "settings")),
       False)
+check("the daily list is the landing page, not a folder",
+      (os.path.isdir(os.path.join(OUT, "daily")),
+       'id="rows"' in open(os.path.join(OUT, "index.html"), encoding="utf-8").read()),
+      (False, True))
+check_true("the countdown comes along",
+           os.path.isfile(os.path.join(OUT, "countdown", "index.html")))
 YEAR_FILE = os.path.join(OUT, "data", f"{datetime.now().year}.json")
 check_true("a year of data is written", os.path.isfile(YEAR_FILE))
 check("and only the year the device's map is for",
@@ -729,10 +784,51 @@ check("and only the year the device's map is for",
 config_js = open(os.path.join(OUT, "static", "config.js"), encoding="utf-8").read()
 check_true("DEVICE is false", "window.DEVICE = false" in config_js)
 check_true("and the data is the baked file", "/data/{year}.json" in config_js)
-static_home = open(os.path.join(OUT, "index.html"), encoding="utf-8").read()
-check("the home page has no settings link", "/settings/" in static_home, False)
-check_true("but still has the other two",
-           "/countdown/" in static_home and "/daily/" in static_home)
+
+print("23b. and the app a device hands out, at /d/<name>/")
+OWNER = os.path.join(OUT, "device")
+for page in ("index.html", os.path.join("countdown", "index.html")):
+    check_true(f"device/{page} is written", os.path.isfile(os.path.join(OWNER, page)))
+owner_home = open(os.path.join(OWNER, "index.html"), encoding="utf-8").read()
+owner_countdown = open(os.path.join(OWNER, "countdown", "index.html"),
+                       encoding="utf-8").read()
+check_true("its manifest is its own, beside the page",
+           'rel="manifest" href="manifest.webmanifest"' in owner_home
+           and 'rel="manifest" href="../manifest.webmanifest"' in owner_countdown)
+check_true("so is its icon", 'rel="apple-touch-icon" href="icon-256.png"' in owner_home)
+owner_manifest = json.load(open(os.path.join(OWNER, "manifest.webmanifest"),
+                                encoding="utf-8"))
+# Relative to the manifest's own address, which is what starts each device's app at its
+# own /d/<name>/.
+check("it starts where it was installed from",
+      (owner_manifest["start_url"], owner_manifest["scope"]), ("./", "./"))
+check("and has its own name", owner_manifest["name"], "سكينة - جهازي")
+check_true("iOS is given the same name",
+           'apple-mobile-web-app-title" content="سكينة - جهازي"' in owner_home)
+for icon in owner_manifest["icons"]:
+    check_true(f"device manifest icon {icon['src']} resolves",
+               os.path.isfile(os.path.join(OWNER, icon["src"])))
+check_true("the public app keeps the public name",
+           'apple-mobile-web-app-title" content="سكينة"'
+           in open(os.path.join(OUT, "index.html"), encoding="utf-8").read())
+redirects = open(os.path.join(OUT, "_redirects"), encoding="utf-8").read().splitlines()
+check("every /d/<name>/ is served from device/", redirects,
+      ["/d/:name /d/:name/ 301", "/d/:name/ /device/ 200",
+       "/d/:name/* /device/:splat 200"])
+
+print("23c. the offline copy holds every page and year")
+worker = open(os.path.join(OUT, "sw.js"), encoding="utf-8").read()
+kept = json.loads(worker[worker.index("const FILES = ") + len("const FILES = "):
+                         worker.index(";\nconst NETWORK_WAIT_MS")])
+missing = [f for f in kept
+           if not os.path.isfile(os.path.join(OUT, f.lstrip("/"), "index.html")
+                                 if f.endswith("/") else os.path.join(OUT, f.lstrip("/")))]
+check("every file it keeps exists", missing, [])
+for needed in ("/", "/countdown/", "/device/", "/device/countdown/",
+               f"/data/{datetime.now().year}.json", "/static/app.js"):
+    check_true(f"it keeps {needed}", needed in kept)
+check_true("its version is filled in", "__VERSION__" not in worker
+           and re.search(r'const CACHE = "sakina-[0-9a-f]{12}"', worker) is not None)
 # The icons live in config/icons/ on a device and are served from there, so copytree
 # does not bring them - a static copy without this step renders fine and still gets a
 # blank glyph on a phone's home screen, which is the whole point of having them.

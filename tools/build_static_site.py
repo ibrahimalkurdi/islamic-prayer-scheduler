@@ -3,7 +3,7 @@
 
     tools/build_static_site.py --scheduler-dir ~/Desktop/scheduler --out dist/site
     tools/build_static_site.py --csv berlin.csv --timezone Europe/Berlin \\
-        --place برلين --daily-only --out public
+        --place برلين --out public
 
 The pages are the same files the device serves - nothing is rendered in Python, here or
 there. What changes is where they get their data: on the device they fetch /api/day, and
@@ -20,25 +20,24 @@ Prayer times come from one of two places:
     each year gets that year's clock changes whatever the table itself has baked in.
     Without it the table is used as it stands, as on a device with daylight saving off.
 
-Two things do not come along, because neither means anything away from the Raspberry Pi
-they manage:
+The output is two apps from the same pages:
 
-  * the settings page, which writes that device's config.ini and runs its
-    apply_settings.sh
-  * the mute button, which silences that device's speaker
+  * /             the daily list, landing page as on the device, and /countdown/.
+  * /d/<name>/    the same two, as the app a device hands out from its own daily page.
+                  Its settings icon opens http://<name>.local/settings/ - the one thing
+                  that still needs the device's wifi. The pages are written once, under
+                  device/, and _redirects maps every name onto them (Cloudflare Pages and
+                  Netlify read it). It has its own manifest and icon, so it installs as
+                  an app of its own beside the public one.
 
-The home page is rendered with the settings link removed, and config.js is written with
-DEVICE = false, which is what the countdown page reads to drop its mute bar.
-
---daily-only publishes the daily list alone, as the site's only page.
-
-A note on what this output can and cannot be. A page served over HTTPS cannot talk to
-http://<hostname>.local, so a globally hosted copy can show prayer times but can never
-be the thing that controls a device. Those stay two deployments of the same front end.
+The settings page and the mute button stay behind: they act on one Raspberry Pi. config.js
+is written with DEVICE = false. sw.js keeps every page and baked year on the phone, so
+both apps open with no network at all.
 """
 
 import argparse
 import gzip
+import hashlib
 import html
 import json
 import os
@@ -63,9 +62,19 @@ from shared import prayer_logic  # noqa: E402
 import api  # noqa: E402
 import prayer_dst  # noqa: E402
 
-# Left behind, along with anything else that acts on the device.
+# Left behind, along with the mute button: they act on the device.
 DEVICE_ONLY = ("settings",)
-PAGES = ("countdown", "daily", "settings")
+# A copy given no --app-name / --device-app-name is named these.
+DEFAULT_APP_NAME = "سكينة"
+DEFAULT_DEVICE_APP_NAME = "سكينة - جهازي"
+# Where the pages of the app a device hands out are written; _redirects serves them at
+# /d/<name>/.
+OWNER_DIR = "device"
+SERVICE_WORKER = os.path.join(REPO, "tools", "static_site_sw.js")
+REDIRECTS = f"""/d/:name /d/:name/ 301
+/d/:name/ /{OWNER_DIR}/ 200
+/d/:name/* /{OWNER_DIR}/:splat 200
+"""
 
 # Mirrors FONTS in the web server: URL name -> member of Amiri.zip.
 FONTS = {
@@ -122,8 +131,8 @@ def released_version():
     return entry.get("version", "") if isinstance(entry, dict) else entry
 
 
-def build(out_dir, maps, assets_dir, place="", daily_only=False, icons_dir=None,
-          app_name="", clock_zone=""):
+def build(out_dir, maps, assets_dir, place="", icons_dir=None, app_name="",
+          clock_zone="", device_app_name=""):
     """`maps` is {year: prayer map file}; one data/<year>.json is written per entry."""
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
@@ -131,12 +140,10 @@ def build(out_dir, maps, assets_dir, place="", daily_only=False, icons_dir=None,
 
     for name in DEVICE_ONLY:
         shutil.rmtree(os.path.join(out_dir, name), ignore_errors=True)
-
-    if daily_only:
-        shutil.move(os.path.join(out_dir, "daily", "index.html"),
-                    os.path.join(out_dir, "index.html"))
-        for name in PAGES:
-            shutil.rmtree(os.path.join(out_dir, name), ignore_errors=True)
+    # The daily list is the landing page, as it is on the device.
+    shutil.move(os.path.join(out_dir, "daily", "index.html"),
+                os.path.join(out_dir, "index.html"))
+    shutil.rmtree(os.path.join(out_dir, "daily"))
 
     # The pages ask for their assets under /static/, which the device's server maps onto
     # site/. A static host has no such mapping, so the files are put where the pages
@@ -192,15 +199,16 @@ def build(out_dir, maps, assets_dir, place="", daily_only=False, icons_dir=None,
             "   nothing that would act on a Raspberry Pi. */\n"
             'window.DATA = "/data/{year}.json";\n'
             "window.DEVICE = false;\n"
-            f"window.HOME = {'false' if daily_only else 'true'};\n"
             f"window.PLACE = {json.dumps(place, ensure_ascii=False)};\n"
             f"window.VERSION = {json.dumps(released_version())};\n"
             f"window.TIMEZONE = {json.dumps(clock_zone or None)};\n")
 
-    if not daily_only:
-        strip_settings_link(os.path.join(out_dir, "index.html"))
-    if app_name:
-        name_app(out_dir, app_name)
+    write_owner_app(out_dir, icons_dir, device_app_name or DEFAULT_DEVICE_APP_NAME)
+    name_app(os.path.join(out_dir, "static", "manifest.webmanifest"),
+             public_pages(out_dir), app_name or DEFAULT_APP_NAME)
+    with open(os.path.join(out_dir, "_redirects"), "w", encoding="utf-8") as out:
+        out.write(REDIRECTS)
+    write_service_worker(out_dir)
 
     size = sum(os.path.getsize(os.path.join(root, f))
                for root, _, files in os.walk(out_dir) for f in files)
@@ -225,10 +233,16 @@ def read_font(assets_dir, member):
         return None
 
 
-def name_app(out_dir, app_name):
-    """The name under the icon once the site is added to a phone's home screen: Android
+PUBLIC_PAGES = ("index.html", os.path.join("countdown", "index.html"))
+
+
+def public_pages(out_dir):
+    return [os.path.join(out_dir, page) for page in PUBLIC_PAGES]
+
+
+def name_app(manifest_path, pages, app_name):
+    """The name under the icon once the app is added to a phone's home screen: Android
     takes it from the manifest, iOS from apple-mobile-web-app-title."""
-    manifest_path = os.path.join(out_dir, "static", "manifest.webmanifest")
     with open(manifest_path, encoding="utf-8") as handle:
         manifest = json.load(handle)
     manifest["name"] = manifest["short_name"] = app_name
@@ -237,28 +251,82 @@ def name_app(out_dir, app_name):
         handle.write("\n")
 
     meta = f'<meta name="apple-mobile-web-app-title" content="{html.escape(app_name)}">\n'
-    for folder, _, files in os.walk(out_dir):
-        for name in files:
-            if name != "index.html":
+    for path in pages:
+        with open(path, encoding="utf-8") as handle:
+            page = handle.read()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(page.replace("</head>", meta + "</head>", 1))
+
+
+def write_owner_app(out_dir, icons_dir, app_name):
+    """The public pages again under device/, for /d/<name>/, with their own manifest and
+    icon so the app installs apart from the public one.
+
+    Everything that tells the two apps apart is addressed relative to the page, so it
+    resolves under /d/<name>/: a relative start_url is read against the manifest's own
+    address, which makes every device's app start at its own /d/<name>/ without a file
+    per device. The settings icon comes from the path too - see Site.ownerHost."""
+    owner = os.path.join(out_dir, OWNER_DIR)
+    os.makedirs(os.path.join(owner, "countdown"))
+    for page in PUBLIC_PAGES:
+        with open(os.path.join(out_dir, page), encoding="utf-8") as handle:
+            text = handle.read()
+        text = text.replace('href="/static/manifest.webmanifest"',
+                            'href="manifest.webmanifest"')
+        for url_name in ICONS:
+            text = text.replace(f'href="/static/{url_name}"', f'href="{url_name}"')
+        if page != "index.html":
+            # countdown/ is one level down; its icon links name the files beside the
+            # daily page.
+            text = text.replace('href="manifest.webmanifest"',
+                                'href="../manifest.webmanifest"')
+            for url_name in ICONS:
+                text = text.replace(f'href="{url_name}"', f'href="../{url_name}"')
+        with open(os.path.join(owner, page), "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    with open(os.path.join(out_dir, "static", "manifest.webmanifest"),
+              encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    manifest["start_url"] = manifest["scope"] = "./"
+    with open(os.path.join(owner, "manifest.webmanifest"), "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    name_app(os.path.join(owner, "manifest.webmanifest"),
+             [os.path.join(owner, page) for page in PUBLIC_PAGES], app_name)
+
+    # device-icon-*.png in --icons-dir marks the owner's app apart on a home screen that
+    # may carry the public one too; without them it takes the public icon.
+    for url_name in ICONS:
+        own = os.path.join(icons_dir, "device-" + url_name) if icons_dir else ""
+        source = own if own and os.path.isfile(own) else os.path.join(out_dir, "static",
+                                                                        url_name)
+        if os.path.isfile(source):
+            shutil.copyfile(source, os.path.join(owner, url_name))
+
+
+def write_service_worker(out_dir):
+    """sw.js, with the list of files it keeps and a version that changes whenever any of
+    them does - which is what makes a phone take the new copy."""
+    files = []
+    digest = hashlib.sha256()
+    for root, _, names in sorted(os.walk(out_dir)):
+        for name in sorted(names):
+            path = os.path.join(root, name)
+            relative = os.path.relpath(path, out_dir).replace(os.sep, "/")
+            if relative in ("_redirects", "sw.js"):
                 continue
-            path = os.path.join(folder, name)
-            with open(path, encoding="utf-8") as handle:
-                page = handle.read()
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(page.replace("</head>", meta + "</head>", 1))
-
-
-def strip_settings_link(index_path):
-    """The home page is a plain file, so the link is removed from it here rather than
-    hidden with CSS - a static copy should not carry a link to a page it does not have."""
-    with open(index_path, encoding="utf-8") as handle:
-        html = handle.read()
-    start = html.find('<a class="tile" href="/settings/"')
-    if start == -1:
-        return
-    end = html.find("</a>", start) + len("</a>\n")
-    with open(index_path, "w", encoding="utf-8") as handle:
-        handle.write(html[:start] + html[end:])
+            with open(path, "rb") as handle:
+                digest.update(relative.encode() + b"\0" + handle.read())
+            if relative.endswith("index.html"):
+                relative = relative[:-len("index.html")]
+            files.append("/" + relative)
+    with open(SERVICE_WORKER, encoding="utf-8") as handle:
+        worker = handle.read()
+    worker = worker.replace("__VERSION__", digest.hexdigest()[:12])
+    worker = worker.replace("__FILES__", json.dumps(files, ensure_ascii=False, indent=4))
+    with open(os.path.join(out_dir, "sw.js"), "w", encoding="utf-8") as out:
+        out.write(worker)
 
 
 def main():
@@ -275,15 +343,17 @@ def main():
     parser.add_argument("--place", default="", help="the city's name, shown on the page")
     parser.add_argument("--icons-dir", help="a folder holding icon-32.png, icon-128.png "
                                             "and icon-256.png to use instead of the "
-                                            "device's icon")
+                                            "device's icon, and optionally the same "
+                                            "names prefixed device- for the app a "
+                                            "device hands out")
     parser.add_argument("--clock-zone", default="",
                         help="the IANA zone the pages tell the time in, so a city's site "
                              "shows that city's time wherever it is opened; leave out to "
                              "use the viewer's own clock")
     parser.add_argument("--app-name", default="",
                         help="the name under the icon on a phone's home screen")
-    parser.add_argument("--daily-only", action="store_true",
-                        help="publish the daily list alone, as the site's only page")
+    parser.add_argument("--device-app-name", default="",
+                        help="the name under the icon of the app a device hands out")
     parser.add_argument("--out", default=os.path.join(REPO, "dist", "site"))
     parser.add_argument("--year", type=int, action="append",
                         help="a year to bake; repeat for more. Defaults to this year, and "
@@ -296,8 +366,8 @@ def main():
         with tempfile.TemporaryDirectory() as work_dir:
             maps = {year: map_from_csv(args.csv, args.timezone, year, work_dir)
                     for year in years}
-            build(args.out, maps, VARIANT_DIR, args.place, args.daily_only,
-                  args.icons_dir, args.app_name, args.clock_zone)
+            build(args.out, maps, VARIANT_DIR, args.place, args.icons_dir,
+                  args.app_name, args.clock_zone, args.device_app_name)
         return
 
     years = args.year or [this_year]
@@ -305,8 +375,8 @@ def main():
         parser.error("a device's map holds one year's daylight saving; bake one year "
                      "from it, or use --csv")
     maps = {years[0]: map_from_device(args.scheduler_dir)}
-    build(args.out, maps, args.scheduler_dir, args.place, args.daily_only, args.icons_dir,
-          args.app_name, args.clock_zone)
+    build(args.out, maps, args.scheduler_dir, args.place, args.icons_dir, args.app_name,
+          args.clock_zone, args.device_app_name)
 
 
 if __name__ == "__main__":

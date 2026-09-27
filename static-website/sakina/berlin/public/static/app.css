@@ -62,27 +62,63 @@ h1 {
 
 a { color: var(--accent); }
 
-/* ---- home ---- */
-.tiles {
-    display: grid;
-    gap: 1rem;
+/* ---- the daily page's top row ----
+   The title, and the way to the other two pages as icons beside it: the daily list is
+   the landing page, so these are the site's whole navigation. */
+.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    margin-bottom: 1rem;
 }
 
-.tile {
-    display: block;
-    background: var(--card);
+.top h1 { margin: 0; }
+.top + .sub { margin-top: -.6rem; }
+
+.top-icons {
+    display: flex;
+    gap: .5rem;
+}
+
+.icon-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.6rem;
+    height: 2.6rem;
     border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1.35rem 1.5rem;
-    text-decoration: none;
+    border-radius: 12px;
+    background: var(--card);
     color: var(--text);
-    font-size: 1.45rem;
 }
 
-.tile:active { background: #24324a; }
+.icon-link:active { background: #24324a; }
 
-.tile small {
-    display: block;
+.icon-link svg {
+    width: 1.5rem;
+    height: 1.5rem;
+    fill: currentColor;
+}
+
+/* Offered on the device only, under the list: a thing done once, not every visit. */
+.install {
+    margin-top: 1.4rem;
+    text-align: center;
+}
+
+.install-button {
+    display: inline-block;
+    padding: .5rem 1.2rem;
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--page);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.install p {
+    margin: .4rem 0 0;
     color: var(--muted);
     font-size: .85rem;
 }
@@ -492,8 +528,6 @@ button.ghost {
 
     .row.running .name,
     .row.running .clock { font-size: 1.5rem; }
-
-    .tile { padding: 1rem 1.2rem; font-size: 1.3rem; }
 
     fieldset { padding: .6rem .7rem .8rem; }
 

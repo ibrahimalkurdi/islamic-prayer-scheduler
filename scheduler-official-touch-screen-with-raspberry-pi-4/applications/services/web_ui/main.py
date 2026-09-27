@@ -14,6 +14,7 @@ same as anyone standing in front of its touch screen. See ADMIN_MANUAL.md sectio
 """
 
 import argparse
+import configparser
 import json
 import os
 import posixpath
@@ -52,11 +53,13 @@ CONTENT_TYPES = {
 # The pages, by the URL each is reached at. A fixed table rather than a path joined onto
 # SITE_DIR: nothing a request can say is ever turned into a file name.
 PAGES = {
-    "/": "index.html",
+    "/": "daily/index.html",
     "/countdown/": "countdown/index.html",
-    "/daily/": "daily/index.html",
     "/settings/": "settings/index.html",
 }
+# Where the daily list used to live, for a bookmark or home-screen icon made before it
+# became the landing page.
+MOVED = {"/daily/": "/"}
 # The assets those pages ask for, likewise fixed.
 ASSETS = ("app.css", "app.js", "config.js", "manifest.webmanifest")
 
@@ -84,6 +87,12 @@ FONTS = {
 }
 
 APPLY_TIMEOUT_SECONDS = 300
+
+# The city sites on the public host, by the prayer table each is built from. Written by
+# static-website/sakina/build.py. A device whose table is one of these offers the app from
+# its city's site; any other device simply does not.
+PUBLIC_SITES = os.path.join(HERE, "public_sites.json")
+PRAYER_SOURCE_KEY = "prayer_csv_source_label"
 
 
 class Device:
@@ -128,6 +137,21 @@ class Device:
         except OSError:
             self._icons[name] = b""
         return self._icons[name] or None
+
+    def public_site(self):
+        """The public site for the prayer table this device was set to, or None.
+
+        Keyed by the table's file name, the one thing the Settings app records about
+        where the times came from."""
+        config = configparser.ConfigParser(interpolation=None)
+        try:
+            config.read(self.ini_path, encoding="utf-8")
+            with open(PUBLIC_SITES, encoding="utf-8") as handle:
+                sites = json.load(handle)
+        except (OSError, ValueError, configparser.Error):
+            return None
+        source = config.get("Settings", PRAYER_SOURCE_KEY, fallback="").strip()
+        return sites.get(os.path.basename(source)) if source else None
 
     def reload_times(self):
         """The prayer map is rewritten under a running server - by apply_settings.sh here,
@@ -239,6 +263,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in PAGES:
                 return self.serve_file(PAGES[path])
+            if path.rstrip("/") + "/" in MOVED:
+                return self.redirect(MOVED[path.rstrip("/") + "/"])
             # "/countdown" without the slash is what someone types.
             if path.rstrip("/") + "/" in PAGES and path != "/":
                 return self.redirect(path.rstrip("/") + "/")
@@ -356,6 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             # a server that keeps running, and the daily page prints this the same way
             # the touch screen's daily list does.
             "version": device_info.installed_version(self.device.scheduler_dir),
+            "public_site": self.device.public_site(),
         })
 
     def api_settings_get(self):

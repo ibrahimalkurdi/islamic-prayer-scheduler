@@ -14,10 +14,21 @@
 </head>
 <body>
 
-<a class="back" href="/" id="back">→ الصفحة الرئيسية</a>
-
-<h1>اوقات الصلاة</h1>
+<header class="top">
+    <h1>اوقات الصلاة</h1>
+    <nav class="top-icons">
+        <a class="icon-link" href="countdown/" aria-label="الوقت المتبقي للصلاة"
+           title="الوقت المتبقي للصلاة"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/>
+        </svg></a>
+        <a class="icon-link hidden" id="to-settings" href="settings/" aria-label="الاعدادات"
+           title="الاعدادات"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+        </svg></a>
+    </nav>
+</header>
 <p class="sub hidden" id="place"></p>
+<div class="note hidden" id="settings-note"></div>
 
 <div class="list-nav">
     <input type="date" id="pick">
@@ -28,6 +39,11 @@
 
 <div class="rows" id="rows"></div>
 <div class="note bad hidden" id="error"></div>
+
+<div class="install hidden" id="install">
+    <a class="install-button" id="install-link" href="#">ثبّت التطبيق على هاتفك</a>
+    <p>يفتح مواقيت الصلاة والعداد حتى خارج شبكة الواي فاي، والإعدادات من داخلها.</p>
+</div>
 
 <p class="version hidden" id="version"></p>
 
@@ -41,8 +57,6 @@ function requestedDate() {
     return Site.parseLocal(asked) ? asked : Site.isoDate(Site.now());
 }
 
-/* A site that is this page alone has no home page to go back to. */
-if (window.HOME === false) document.querySelector("#back").remove();
 if (window.PLACE) {
     const place = document.querySelector("#place");
     place.textContent = window.PLACE;
@@ -219,6 +233,74 @@ function refreshVersion() {
 }
 
 refreshVersion();
+
+/* Settings acts on one Raspberry Pi, so it is offered on the device itself and in the app
+   a device hands out (Site.ownerHost), never on the public site. */
+const owner = Site.ownerHost();
+if (window.DEVICE || owner) document.querySelector("#to-settings").classList.remove("hidden");
+if (owner) {
+    document.querySelector("#to-settings").addEventListener("click", (event) => {
+        event.preventDefault();
+        openDeviceSettings(owner);
+    });
+}
+
+/* The handed-out app lives on the public site, and the device answers only on its own
+   wifi. Chrome can ask first - Local Network Access, one permission prompt the first
+   time. Safari cannot reach an http:// address from an https:// page at all, so there
+   the note says where settings work and leaves the tap to the user. */
+const SETTINGS_CHECK_MS = 10000;
+
+function settingsNote(kind, text, target, linkText) {
+    const note = document.querySelector("#settings-note");
+    note.className = `note ${kind}`;
+    note.textContent = text;
+    if (linkText) {
+        const link = document.createElement("a");
+        link.href = target;
+        link.textContent = linkText;
+        note.append(document.createElement("br"), link);
+    }
+}
+
+async function openDeviceSettings(host) {
+    const target = `http://${host}.local/settings/`;
+    if (!("userAgentData" in navigator)) {
+        settingsNote("", "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
+                     target, "فتح الإعدادات");
+        return;
+    }
+    settingsNote("busy", "جارٍ الاتصال بالجهاز…");
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), SETTINGS_CHECK_MS);
+    try {
+        await fetch(`http://${host}.local/api/device`, {
+            mode: "no-cors", cache: "no-store", targetAddressSpace: "local",
+            signal: abort.signal,
+        });
+        location.href = target;
+    } catch (e) {
+        settingsNote("bad", "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.",
+                     target, "حاول فتحها على أي حال");
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/* On the device, the way onto a phone: the same pages from the city's public site, under
+   this device's name so its settings icon knows where to go. Named as the phone reached
+   this page - a device's mDNS name can differ from its hostname. */
+if (window.DEVICE) {
+    Site.json("/api/device").then((info) => {
+        if (!info.public_site) return;
+        const name = location.hostname.endsWith(".local")
+            ? location.hostname.slice(0, -".local".length)
+            : info.hostname;
+        document.querySelector("#install-link").href =
+            `${info.public_site}/d/${encodeURIComponent(name)}/`;
+        document.querySelector("#install").classList.remove("hidden");
+    }).catch(() => {});
+}
 
 /* And a full redraw on the minute regardless, so a day that rolls over at midnight is
    picked up even though nothing about the running period changed. */

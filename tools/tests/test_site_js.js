@@ -112,6 +112,20 @@ const d = new Date(2026, 2, 10, 13, 0, 0);
 check("isoDate", Site.isoDate(d), "2026-03-10");
 
 console.log("");
+/* 4. The handed-out app knows whose settings to open from its address alone. */
+for (const [where, device, want] of [
+        ["/d/louay/", false, "louay"],
+        ["/d/Ihms-LR/countdown/", false, "ihms-lr"],
+        ["/d/louay", false, null],
+        ["/", false, null],
+        ["/countdown/", false, null],
+        ["/d/bad.name/", false, null],
+        ["/d/louay/", true, null]]) {
+    context.location = { pathname: where };
+    context.window.DEVICE = device;
+    check(`ownerHost ${where}${device ? " on a device" : ""}`, Site.ownerHost(), want);
+}
+
 if (failures.length) {
     console.log(`FAILED (${failures.length} of ${checks} checks)`);
     console.log(failures.join("\n"));

@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>اوقات الصلاة</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="icon-32.png" sizes="32x32">
+<link rel="icon" href="icon-256.png" sizes="256x256">
+<link rel="apple-touch-icon" href="icon-256.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-title" content="سكينة - جهازي">
+</head>
+<body>
+
+<header class="top">
+    <h1>اوقات الصلاة</h1>
+    <nav class="top-icons">
+        <a class="icon-link" href="countdown/" aria-label="الوقت المتبقي للصلاة"
+           title="الوقت المتبقي للصلاة"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/>
+        </svg></a>
+        <a class="icon-link hidden" id="to-settings" href="settings/" aria-label="الاعدادات"
+           title="الاعدادات"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+        </svg></a>
+    </nav>
+</header>
+<p class="sub hidden" id="place"></p>
+<div class="note hidden" id="settings-note"></div>
+
+<div class="list-nav">
+    <input type="date" id="pick">
+    <button class="ghost" id="today">اليوم</button>
+</div>
+
+<div class="badge-row hidden" id="badge-row"><span class="badge" id="badge">--:--</span></div>
+
+<div class="rows" id="rows"></div>
+<div class="note bad hidden" id="error"></div>
+
+<div class="install hidden" id="install">
+    <a class="install-button" id="install-link" href="#">ثبّت التطبيق على هاتفك</a>
+    <p>يفتح مواقيت الصلاة والعداد حتى خارج شبكة الواي فاي، والإعدادات من داخلها.</p>
+</div>
+
+<p class="version hidden" id="version"></p>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+/* One page serves every date: the date is read from the query string, so a static host
+   needs no rewrite rule and the address can be shared as it stands. */
+function requestedDate() {
+    const asked = new URLSearchParams(location.search).get("date");
+    return Site.parseLocal(asked) ? asked : Site.isoDate(Site.now());
+}
+
+if (window.PLACE) {
+    const place = document.querySelector("#place");
+    place.textContent = window.PLACE;
+    place.classList.remove("hidden");
+    document.title = `${document.title} - ${window.PLACE}`;
+}
+
+let shown = requestedDate();
+/* Kept from the last render so the badge can tick every second without asking the device
+   for anything, and so a colour change can be noticed as it happens rather than at the
+   next full redraw. */
+let currentDay = null;
+let carried = null;
+let lastState = null;
+
+async function render() {
+    const day = await Site.dayData(shown);
+    const now = Site.now();
+    const isToday = shown === Site.isoDate(now);
+    /* Shown on the Isha row, as the device shows it. */
+    carried = isToday && !Site.runningPeriod(day, now) ? await Site.eveningBefore(now) : null;
+    currentDay = day;
+    const container = document.querySelector("#rows");
+    container.textContent = "";
+
+    for (const period of day.periods) {
+        const row = document.createElement("div");
+        row.className = "row";
+
+        /* Only today has a period in force - a browsed date is a list, not a state. */
+        const live = carried && carried.name === period.name ? carried : period;
+        const span = isToday ? Site.spanAt(live, now) : null;
+        const start = Site.parseLocal(live.start);
+        const end = Site.parseLocal(live.end);
+        const running = isToday && start && end && start <= now && now < end;
+
+        /* Painted the way PrayerCard.apply_state paints it: a left-to-right gradient
+           into the darker shade, a derived border and a glow of the same colour - except
+           makrooh, which is flat so it matches the orange the counter paints exactly.
+           Every one of these shades is worked out on the device, not here. */
+        const style = running && span ? day.cards.active[span.color] : null;
+        if (style) {
+            row.style.background = style.flat
+                ? style.from
+                : `linear-gradient(to left, ${style.from}, ${style.to})`;
+            row.style.color = style.text;
+            row.style.borderColor = style.border;
+            row.style.boxShadow = `0 0 16px ${style.glow}`;
+            row.classList.add("running");
+        } else {
+            row.style.background = day.cards.idle.background;
+            row.style.color = day.cards.idle.text;
+            row.style.borderColor = day.cards.idle.border;
+        }
+
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = period.display;
+        row.appendChild(name);
+
+        const right = document.createElement("span");
+        if (span && span.makrooh && running) {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = day.makrooh_label;
+            right.appendChild(tag);
+            right.appendChild(document.createTextNode(" "));
+        }
+        const clock = document.createElement("span");
+        clock.className = "clock";
+        clock.textContent = period.clock || "--:--";
+        right.appendChild(clock);
+        row.appendChild(right);
+
+        container.appendChild(row);
+    }
+
+    document.querySelector("#pick").value = shown;
+    document.querySelector("#error").classList.add("hidden");
+    paintBadge(now);
+}
+
+/* How long the running period still has to run, in the pill above the list. Hidden when
+   nothing is running - on a browsed date there is no such thing, which is also when the
+   app hides it. */
+function runningState(now) {
+    if (!currentDay || shown !== Site.isoDate(now)) return null;
+    const period = Site.runningPeriod(currentDay, now)
+        || (carried && Site.runningPeriod({ periods: [carried] }, now));
+    if (!period) return null;
+    const span = Site.spanAt(period, now);
+    if (!span) return null;
+    return { period, color: span.color, end: Site.parseLocal(period.end) };
+}
+
+function paintBadge(now) {
+    const badge = document.querySelector("#badge");
+    const state = runningState(now);
+
+    /* The row itself is hidden, not just the pill: hide() takes the widget out of the
+       layout on the device, so the gap closes rather than being left empty. */
+    const row = document.querySelector("#badge-row");
+    if (!state) {
+        row.classList.add("hidden");
+        return;
+    }
+
+    const minutes = Math.max(0, Math.floor((state.end - now) / 60000));
+    badge.textContent = `${Site.pad(Math.floor(minutes / 60))}:${Site.pad(minutes % 60)}`;
+
+    const style = currentDay.cards.badge[state.color];
+    badge.style.background =
+        `linear-gradient(to bottom left, ${style.from}, ${style.to})`;
+    badge.style.borderColor = style.border;
+    badge.style.color = style.text;
+    badge.style.boxShadow = `0 0 26px ${style.glow}`;
+    row.classList.remove("hidden");
+}
+
+function show(date) {
+    shown = date;
+    const url = new URL(location.href);
+    url.searchParams.set("date", date);
+    history.replaceState(null, "", url);
+    render().catch((e) => Site.fail(e.message));
+}
+
+document.querySelector("#pick").addEventListener("change", (event) => {
+    if (event.target.value) show(event.target.value);
+});
+document.querySelector("#today").addEventListener("click", () => {
+    show(Site.isoDate(Site.now()));
+});
+
+render().catch((e) => Site.fail(e.message));
+
+/* The badge counts down in minutes, so it is repainted every second from the data
+   already in hand - no request. The same tick notices when the running period or its
+   colour has changed and redraws the list then, which is what keeps the highlight as
+   sharp as the app's without polling the device for it. */
+setInterval(() => {
+    const now = Site.now();
+    const state = runningState(now);
+    const key = state ? `${state.period.name}/${state.color}` : null;
+
+    if (key !== lastState) {
+        lastState = key;
+        render().catch(() => {});
+        return;
+    }
+    paintBadge(now);
+}, 1000);
+
+/* The installed version at the foot of the page, the line the touch screen's own daily
+   list carries. A static host shows the release the devices run, baked in as VERSION.
+
+   Re-read on the minute rather than once, for the reason the app re-reads it on every
+   refresh - check_updates.sh writes var/installed_version only after the new release
+   passes its health check, which is after the page is already open. */
+function refreshVersion() {
+    if (!window.DEVICE) {
+        if (!window.VERSION) return;
+        const line = document.querySelector("#version");
+        line.textContent = window.VERSION;
+        line.classList.remove("hidden");
+        return;
+    }
+    Site.json("/api/device").then((info) => {
+        const line = document.querySelector("#version");
+        if (!info.version) return;
+        line.textContent = info.version;
+        line.classList.remove("hidden");
+    }).catch(() => {});
+}
+
+refreshVersion();
+
+/* Settings acts on one Raspberry Pi, so it is offered on the device itself and in the app
+   a device hands out (Site.ownerHost), never on the public site. */
+const owner = Site.ownerHost();
+if (window.DEVICE || owner) document.querySelector("#to-settings").classList.remove("hidden");
+if (owner) {
+    document.querySelector("#to-settings").addEventListener("click", (event) => {
+        event.preventDefault();
+        openDeviceSettings(owner);
+    });
+}
+
+/* The handed-out app lives on the public site, and the device answers only on its own
+   wifi. Chrome can ask first - Local Network Access, one permission prompt the first
+   time. Safari cannot reach an http:// address from an https:// page at all, so there
+   the note says where settings work and leaves the tap to the user. */
+const SETTINGS_CHECK_MS = 10000;
+
+function settingsNote(kind, text, target, linkText) {
+    const note = document.querySelector("#settings-note");
+    note.className = `note ${kind}`;
+    note.textContent = text;
+    if (linkText) {
+        const link = document.createElement("a");
+        link.href = target;
+        link.textContent = linkText;
+        note.append(document.createElement("br"), link);
+    }
+}
+
+async function openDeviceSettings(host) {
+    const target = `http://${host}.local/settings/`;
+    if (!("userAgentData" in navigator)) {
+        settingsNote("", "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
+                     target, "فتح الإعدادات");
+        return;
+    }
+    settingsNote("busy", "جارٍ الاتصال بالجهاز…");
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), SETTINGS_CHECK_MS);
+    try {
+        await fetch(`http://${host}.local/api/device`, {
+            mode: "no-cors", cache: "no-store", targetAddressSpace: "local",
+            signal: abort.signal,
+        });
+        location.href = target;
+    } catch (e) {
+        settingsNote("bad", "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.",
+                     target, "حاول فتحها على أي حال");
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/* On the device, the way onto a phone: the same pages from the city's public site, under
+   this device's name so its settings icon knows where to go. Named as the phone reached
+   this page - a device's mDNS name can differ from its hostname. */
+if (window.DEVICE) {
+    Site.json("/api/device").then((info) => {
+        if (!info.public_site) return;
+        const name = location.hostname.endsWith(".local")
+            ? location.hostname.slice(0, -".local".length)
+            : info.hostname;
+        document.querySelector("#install-link").href =
+            `${info.public_site}/d/${encodeURIComponent(name)}/`;
+        document.querySelector("#install").classList.remove("hidden");
+    }).catch(() => {});
+}
+
+/* And a full redraw on the minute regardless, so a day that rolls over at midnight is
+   picked up even though nothing about the running period changed. */
+setInterval(() => {
+    if (shown === Site.isoDate(Site.now())) render().catch(() => {});
+    refreshVersion();
+}, 60000);
+</script>
+</body>
+</html>

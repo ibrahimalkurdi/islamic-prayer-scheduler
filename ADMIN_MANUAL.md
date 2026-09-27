@@ -77,7 +77,7 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_site_js.py` | the website's JavaScript, held to the same answers the device gives |
 | `tools/tests/test_layout.py` | measures the pages in a real browser at phone sizes: nothing wider than the screen, and a whole day visible without scrolling |
 | `tools/build_static_site.py` | bakes the prayer pages into a directory a static host can serve (§18) |
-| `tools/tests/test_static_website.py` | the public city sites: each year's clock changes, the daily page alone, New Year in the browser, the city folders (§18) |
+| `tools/tests/test_static_website.py` | the public city sites: each year's clock changes, the pages and the device app, New Year in the browser, the city folders (§18) |
 | `static-website/sakina/` | the public city sites and their builder (§18) |
 | `.github/workflows/sakina-static-website.yml` | rebuilds and commits the city sites (§18) |
 | `tools/build_manual_pdf.sh` | builds `USER_MANUAL_AR.pdf` from the `.md`: cover, index with page numbers, then the manual numbered from 1. Run it after every edit to the manual |
@@ -1646,11 +1646,15 @@ Every device also serves its three screens over the local network, so a prayer t
 checked or a setting changed from a phone instead of at the touch screen.
 
 ```
-http://<hostname>.local/            the three links
+http://<hostname>.local/            اوقات الصلاة, any date - the landing page, with a
+                                    countdown icon and a settings icon at the top
 http://<hostname>.local/countdown/  الوقت المتبقي للصلاة, and the mute button
-http://<hostname>.local/daily/      اوقات الصلاة, any date
 http://<hostname>.local/settings/   الاعدادات
 ```
+
+`/daily/`, where the list lived when `/` was a page of three links, answers 301 to `/`.
+The pages link each other relatively (`countdown/`, `../`) so the same files work at `/d/<name>/`
+on the public site - see "The app a device hands out" below.
 
 **Added to a phone's home screen** it carries the same icon the touch screen uses. The
 pages link an `apple-touch-icon` and a `manifest.webmanifest`, and the PNGs are served
@@ -1661,11 +1665,12 @@ copies them into the static output, which `copytree` does not do on its own.
 **`.local` is the weak link, not the device.** mDNS resolution fails outright on some
 phones — observed as `ping: unknown host louay.local` seconds after the same phone had
 pinged it at 0% loss. Where a device matters, give it a DHCP reservation on the router and
-use the address. Every page reports it, so it is never a mystery:
+use the address. The settings page prints it under its title, and the API reports it:
 
 ```bash
 curl -s http://<hostname>.local/api/device
-{"hostname": "louay", "ip": "192.168.2.159", "now": "…", "version": "1.3.0"}
+{"hostname": "louay", "ip": "192.168.2.159", "now": "…", "version": "1.3.0",
+ "public_site": "https://sakina-berlin.pages.dev"}
 ```
 
 The hostname is the device's user name, set by `init.sh` along with `avahi-daemon`
@@ -1796,17 +1801,46 @@ tools/build_static_site.py --scheduler-dir ~/Desktop/scheduler --out dist/site
 ```
 
 Writes a directory any static host can serve: the same pages, with the year baked into
-`data/<year>.json` by running the same `prayer_logic` over every date. The settings page and
-the mute button are not copied — both exist to manage one Raspberry Pi and mean nothing
-away from it — and the home page is written with two links instead of three.
+`data/<year>.json` by running the same `prayer_logic` over every date. The daily list is the
+root and the countdown sits at `countdown/`. The settings page and the mute button are not
+copied — both act on one Raspberry Pi. `sw.js` keeps every page and baked year on the phone
+(network first, the kept copy when offline or after 3 s), so an installed app opens with no
+network at all.
 
-A page served over HTTPS cannot talk to `http://<hostname>.local`, so a public copy can
-show prayer times but can never control a device.
+### The app a device hands out — `/d/<name>/`
+
+`http://<hostname>.local` cannot load off the device's wifi: the name does not resolve, so
+nothing on the Pi can fail over, and a `.local` address can have no certificate and so no
+service worker. The app that works everywhere is therefore the city's public site, and the
+device only hands out its address:
+
+- The device's landing page shows **ثبّت التطبيق على هاتفك** when `/api/device` reports a
+  `public_site`. That comes from `web_ui/public_sites.json` - prayer table file name to
+  site, written by `static-website/sakina/build.py` - looked up by the file name in
+  `config.ini`'s `prayer_csv_source_label`. A device on any other table shows no button.
+- The button opens `https://sakina-<city>.pages.dev/d/<name>/`, `<name>` being the `.local`
+  name the phone used (mDNS names can differ from `hostname`; ihms-lr's is).
+- The build writes those pages once, under `device/`, and `_redirects` serves every
+  `/d/<name>/…` from there (status 200). They link their own `manifest.webmanifest` and
+  icon relatively, and that manifest's `start_url` and `scope` are `./` - resolved against
+  the manifest's own address, so each device's app starts at its own `/d/<name>/` with no
+  file per device. The name lives in the path because an iPhone home-screen app keeps
+  neither the query string nor Safari's storage.
+- `Site.ownerHost()` reads `<name>` from the path; only then does the settings icon show
+  off the device. Tapping it on Chrome fetches `http://<name>.local/api/device`
+  (`no-cors`, `targetAddressSpace: "local"` - Local Network Access, one permission prompt)
+  and navigates to `http://<name>.local/settings/` if it answers within 10 s, or says the
+  device is out of reach. Safari cannot fetch `http://` from an `https://` page at all, so
+  there the page says settings work on the device's wifi only and offers the link.
+- Icon: `static-website/sakina/icons/device-icon-*.png` (the Sakina icon with a gear);
+  name «سكينة - جهازي».
+
+Nothing to set up on Cloudflare for this: `_redirects` is a file in `public/`.
 
 ### The public city sites — `static-website/sakina/`
 
-One site per city, each the daily list alone, served by Cloudflare Pages. Added to a phone's
-home screen it carries the Sakina icon (`static-website/sakina/icons/`) and the name
+One site per city - the daily list, the countdown, and the app devices hand out - served by
+Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`static-website/sakina/icons/`) and the name
 «سكينة - <place>», e.g. «سكينة - برلين»:
 
 | city | address |
@@ -1824,6 +1858,11 @@ static-website/sakina/
     prayer-times.csv        symlink into config/prayers-config/ — one table for devices and site
     public/                 generated; Cloudflare serves it as it stands. Never edit by hand
 ```
+
+`build.py` also rewrites `web_ui/public_sites.json`, which ships to the devices. The
+workflow commits `public/` only, so a new city's entry is committed by hand with its
+folder, and reaches the devices with the next release. `test_static_website.py` fails
+while the two disagree.
 
 `daylight_saving` in `city.ini` is the same switch a device has. With `true`, each year is
 baked separately through the same `prayer_dst.py` functions a device runs in January: the
@@ -1884,6 +1923,8 @@ The watch path keeps a push that changes nothing of a city's site from redeployi
 | `config/systemd/scheduler_web_ui.service` | the unit |
 | `logs/web_ui.log` | its log |
 | `tools/build_static_site.py` | the public build |
+| `tools/static_site_sw.js` | the offline copy's service worker, filled in by the build |
+| `applications/services/web_ui/public_sites.json` | which prayer table has which public site |
 | `static-website/sakina/build.py` | builds every city site |
 | `.github/workflows/sakina-static-website.yml` | rebuilds and commits them |
 | `tools/tests/test_static_website.py` | their tests |

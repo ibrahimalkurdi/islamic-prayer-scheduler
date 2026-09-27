@@ -502,14 +502,20 @@ The hostname is the device's user name — `louay.local`, `ahmad.local`. Step 7'
 
 | page | |
 |---|---|
-| `http://louay.local/` | the three links |
+| `http://louay.local/` | اوقات الصلاة — any date; icons at the top for the other two |
 | `http://louay.local/countdown/` | الوقت المتبقي للصلاة — the countdown, and the mute button |
-| `http://louay.local/daily/` | اوقات الصلاة — any date |
 | `http://louay.local/settings/` | الاعدادات — the same settings, applied the same way |
 
-Added to a phone's home screen it carries the device's own icon. If `louay.local` ever
-fails to resolve — mDNS is unreliable on some phones — use the address instead; the home
-page always prints it, and a DHCP reservation on the router makes it permanent.
+**On the phone, away from home too:** the landing page's **ثبّت التطبيق على هاتفك** opens
+the same pages from the city's public site at `https://sakina-<city>.pages.dev/d/louay/`.
+Installed from there, the list and the countdown work anywhere, even offline; its settings
+icon opens `http://louay.local/settings/` on the home wifi and says it is out of reach
+elsewhere. The button shows only on a device whose prayer table has a public site —
+ADMIN_MANUAL.md §18.
+
+If `louay.local` ever fails to resolve — mDNS is unreliable on some phones — use the
+address instead; the settings page prints it under its title, and a DHCP reservation on
+the router makes it permanent.
 
 Saving from the browser runs the same `apply_settings.sh` the Settings app runs, and
 refuses the same values with the same messages. The touch screen picks the change up on
@@ -522,8 +528,8 @@ Two things worth knowing:
   nothing is reachable from the internet — but if the wifi is shared with guests, that
   is who can reach it.
 - **`.local` needs mDNS.** iPhone, Mac and Windows 10+ resolve it out of the box. Some
-  older Android phones do not; the home page prints the device's IP address so it can be
-  used instead.
+  older Android phones do not; the settings page prints the device's IP address so it can
+  be used instead.
 
 To check it is running:
 

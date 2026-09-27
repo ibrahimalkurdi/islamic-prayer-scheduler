@@ -10,10 +10,15 @@ timezone's clock changes or the table is used as it is.
 prayer-times.csv is a symlink into the device's prayers-config/, so the website and the
 devices read one table. public/ is generated, committed by the workflow, and served by
 Cloudflare Pages as it stands.
+
+It also writes the devices' web_ui/public_sites.json - which table has which site - so a
+device can hand out the app from its own city's site. That file ships in a release, so a
+new city reaches the devices with the next one; commit it with the new city's folder.
 """
 
 import argparse
 import configparser
+import json
 import os
 import subprocess
 import sys
@@ -23,6 +28,9 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 BUILDER = os.path.join(REPO, "tools", "build_static_site.py")
 ICONS = os.path.join(HERE, "icons")
 BRAND = "سكينة"
+# Read by the device's web server, to offer each device the app from its own city's site.
+PUBLIC_SITES = os.path.join(REPO, "scheduler-official-touch-screen-with-raspberry-pi-4",
+                            "applications", "services", "web_ui", "public_sites.json")
 
 
 def cities():
@@ -37,6 +45,26 @@ def place_of(folder, city):
     return city.get("place") or os.path.splitext(os.path.basename(table))[0]
 
 
+def site_url(name):
+    return f"https://sakina-{name}.pages.dev"
+
+
+def public_sites():
+    """{prayer table's file name: its city's site}. A device knows its table by that name
+    only - see PRAYER_SOURCE_KEY in the web server."""
+    sites = {}
+    for name in cities():
+        table = os.path.realpath(os.path.join(HERE, name, "prayer-times.csv"))
+        sites[os.path.basename(table)] = site_url(name)
+    return sites
+
+
+def write_public_sites():
+    with open(PUBLIC_SITES, "w", encoding="utf-8") as handle:
+        json.dump(public_sites(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
 def build_city(name, years):
     folder = os.path.join(HERE, name)
     config = configparser.ConfigParser(interpolation=None)
@@ -49,7 +77,6 @@ def build_city(name, years):
                "--place", place,
                "--app-name", f"{BRAND} - {place}",
                "--clock-zone", city["timezone"],
-               "--daily-only",
                "--icons-dir", ICONS,
                "--out", os.path.join(folder, "public")]
     if config.getboolean("city", "daylight_saving"):
@@ -69,6 +96,7 @@ def main():
     args = parser.parse_args()
     for name in args.city or cities():
         build_city(name, args.year or [])
+    write_public_sites()
 
 
 if __name__ == "__main__":

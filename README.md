@@ -49,10 +49,13 @@ The system supports automatic audio playback for prayers, nawafel, athkar, and Q
     - Playback timing for nawafel, athkar, and Quran
 
 - **The same screens from a phone on the same wifi**
-  - `http://<hostname>.local` serves the countdown, the day's prayer list and the
-    settings, so a time can be checked or a setting changed without walking to the device
-  - Add it to a phone's home screen and it carries the app's own icon
-  - LAN only, no account, no internet route in or out
+  - `http://<hostname>.local` opens on the day's prayer list, with icons for the
+    countdown and the settings, so a time can be checked or a setting changed without
+    walking to the device
+  - Its **ثبّت التطبيق على هاتفك** button installs the same pages from the city's public
+    site: the list and the countdown then work anywhere, even offline, and settings opens
+    on the home wifi
+  - The device itself is LAN only, no account, no internet route in
 
 ---
 

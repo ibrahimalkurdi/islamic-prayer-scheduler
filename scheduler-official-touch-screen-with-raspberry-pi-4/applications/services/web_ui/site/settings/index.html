@@ -13,10 +13,10 @@
 </head>
 <body>
 
-<a class="back" href="/">→ الصفحة الرئيسية</a>
+<a class="back" href="/">→ اوقات الصلاة</a>
 
 <h1>الاعدادات</h1>
-<p class="sub">التغييرات تُطبَّق على هذا الجهاز فقط.</p>
+<p class="sub">التغييرات تُطبَّق على هذا الجهاز فقط.<br><span id="where"></span></p>
 
 <div class="note bad hidden" id="error"></div>
 <div class="note good hidden" id="ok"></div>
@@ -272,6 +272,17 @@ Site.json("/api/settings").then((payload) => {
     state = payload;
     buildForm();
 }).catch((e) => show("error", e.message));
+
+/* The address is printed because an older Android phone may not resolve .local, and then
+   this is the number to write down. The name as the phone reached it when it did: a
+   device's mDNS name can differ from its hostname. */
+Site.json("/api/device").then((info) => {
+    const bits = [];
+    if (location.hostname.endsWith(".local")) bits.push(location.hostname);
+    else if (info.hostname) bits.push(`${info.hostname}.local`);
+    if (info.ip) bits.push(info.ip);
+    document.querySelector("#where").textContent = bits.join(" · ");
+}).catch(() => {});
 </script>
 </body>
 </html>

@@ -1,0 +1,3 @@
+/d/:name /d/:name/ 301
+/d/:name/ /device/ 200
+/d/:name/* /device/:splat 200
