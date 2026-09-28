@@ -32,8 +32,35 @@
 
 <div class="install app-install hidden" id="app-install">
     <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
-    <p id="app-install-ios" class="hidden">لإضافته إلى الشاشة الرئيسية: زر المشاركة ثم
-       «إضافة إلى الشاشة الرئيسية».</p>
+</div>
+
+<div class="guide hidden" id="ios-guide" role="dialog" aria-modal="true"
+     aria-labelledby="ios-guide-title">
+    <div class="guide-card">
+        <h2 id="ios-guide-title">ثبّت التطبيق في خطوتين</h2>
+        <ol>
+            <li>
+                <span class="guide-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3l-4 4 1.4 1.4L11 6.8V15h2V6.8l1.6 1.6L16 7z"/>
+                    <path d="M6 10h3v2H7v8h10v-8h-2v-2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1z"/>
+                </svg></span>
+                <span>اضغط زر <b>المشاركة</b> في أسفل Safari.
+                    <small>إن لم تجده، فاضغط <b>⋯</b> أولًا.</small></span>
+            </li>
+            <li>
+                <span class="guide-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/>
+                    <path d="M11 7.5h2V11h3.5v2H13v3.5h-2V13H7.5v-2H11z"/>
+                </svg></span>
+                <span>اختر <b>إضافة إلى الشاشة الرئيسية</b>، ثم <b>إضافة</b>.
+                    <small>إن لم تظهر، فمرّر القائمة إلى الأسفل.</small></span>
+            </li>
+        </ol>
+        <button class="ghost" id="ios-guide-close">حسنًا</button>
+    </div>
+    <div class="guide-arrow" aria-hidden="true"><svg viewBox="0 0 24 24">
+        <path d="M11 4h2v12l4.5-4.5 1.4 1.4L12 19.8l-6.9-6.9 1.4-1.4L11 16z"/>
+    </svg></div>
 </div>
 
 <div class="list-nav">
@@ -259,7 +286,7 @@ if (owner && !Site.canAskDevice()) {
 
 /* The page a device's install button opens installs itself. Chrome hands over its install
    dialog only from a tap on this page, so the button is the one step left; Safari has no
-   such dialog, so an iPhone is told where Apple keeps it. Nothing shows once installed. */
+   such dialog, so on an iPhone the same button shows the two taps in Safari's own menu. Nothing shows once installed. */
 if (owner && !Site.installedApp()) {
     const box = document.querySelector("#app-install");
     let offer = null;
@@ -268,7 +295,12 @@ if (owner && !Site.installedApp()) {
         offer = event;
         box.classList.remove("hidden");
     });
+    const guide = document.querySelector("#ios-guide");
     document.querySelector("#app-install-button").addEventListener("click", async () => {
+        if (Site.isIosSafari()) {
+            guide.classList.remove("hidden");
+            return;
+        }
         if (!offer) return;
         /* Chrome offers its dialog once per page load, whichever way it is answered. */
         offer.prompt();
@@ -277,11 +309,10 @@ if (owner && !Site.installedApp()) {
         offer = null;
     });
     window.addEventListener("appinstalled", () => box.classList.add("hidden"));
-    if (Site.isIosSafari()) {
-        document.querySelector("#app-install-button").classList.add("hidden");
-        document.querySelector("#app-install-ios").classList.remove("hidden");
-        box.classList.remove("hidden");
-    }
+    document.querySelector("#ios-guide-close").addEventListener("click", () => {
+        guide.classList.add("hidden");
+    });
+    if (Site.isIosSafari()) box.classList.remove("hidden");
 }
 
 /* On the device, the way onto a phone: the same pages from the city's public site, under

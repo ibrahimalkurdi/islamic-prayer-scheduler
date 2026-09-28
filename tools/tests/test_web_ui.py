@@ -900,6 +900,8 @@ check_true("the public app keeps the public name",
 check_true("the app's page offers to install itself",
            'id="app-install-button"' in owner_home and "beforeinstallprompt" in owner_home
            and "if (owner && !Site.installedApp())" in owner_home)
+check_true("and on an iPhone the same button shows the way through Safari's menu",
+           'id="ios-guide"' in owner_home and "if (Site.isIosSafari()) {\n            guide" in owner_home)
 redirects = open(os.path.join(OUT, "_redirects"), encoding="utf-8").read().splitlines()
 check("every /d/<name>/ is served from device/", redirects,
       ["/d/:name /d/:name/ 301", "/d/:name/ /device/ 200",

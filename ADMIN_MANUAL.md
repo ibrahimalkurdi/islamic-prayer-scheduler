@@ -1824,7 +1824,8 @@ device only hands out its address:
   **ثبّت التطبيق**, whose tap opens Chrome's install dialog. A page on `.local` cannot do
   this for the app - the dialog only installs the page it is called from, and only on
   HTTPS - so the device's button is one tap and this is the second. Safari has no such
-  event; there the page shows where Share → Add to Home Screen is. Installed, it shows
+  event and no page can reach its Add to Home Screen, so on an iPhone the same button opens
+  a two-step picture guide (Share, then Add to Home Screen) with an arrow to the toolbar. Installed, it shows
   nothing (`display-mode: standalone`, `navigator.standalone`).
 - The build writes those pages once, under `device/`, and `_redirects` serves every
   `/d/<name>/…` from there (status 200). They link their own `manifest.webmanifest` and

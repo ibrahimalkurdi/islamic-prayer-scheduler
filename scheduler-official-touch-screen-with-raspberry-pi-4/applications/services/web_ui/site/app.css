@@ -125,6 +125,94 @@ a { color: var(--accent); }
     margin: 0 0 1rem;
 }
 
+/* Safari keeps "Add to Home Screen" in its own share menu, where no page can reach, so
+   an iPhone is shown the way there over the page, pointing down to Safari's toolbar. */
+.guide {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem 1rem 5.5rem;
+    background: rgba(15, 23, 42, .85);
+}
+
+.guide-card {
+    width: min(24rem, 100%);
+    padding: 1.2rem;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--card);
+    text-align: center;
+}
+
+.guide-card h2 {
+    margin: 0 0 1rem;
+    font-size: 1.2rem;
+}
+
+.guide-card ol {
+    margin: 0 0 1rem;
+    padding: 0;
+    list-style: none;
+    text-align: start;
+}
+
+.guide-card li {
+    display: flex;
+    align-items: flex-start;
+    gap: .8rem;
+    margin-bottom: .9rem;
+}
+
+.guide-card small {
+    display: block;
+    margin-top: .2rem;
+    color: var(--muted);
+}
+
+.guide-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: 10px;
+    background: var(--page);
+    color: var(--accent);
+}
+
+.guide-icon svg {
+    width: 1.6rem;
+    height: 1.6rem;
+    fill: currentColor;
+}
+
+.guide-arrow {
+    position: absolute;
+    bottom: .8rem;
+    left: 50%;
+    transform: translateX(-50%);
+    color: var(--accent);
+    animation: guide-bob 1.2s ease-in-out infinite;
+}
+
+.guide-arrow svg {
+    width: 3rem;
+    height: 3rem;
+    fill: currentColor;
+}
+
+@keyframes guide-bob {
+    50% { transform: translate(-50%, .5rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .guide-arrow { animation: none; }
+}
+
 .install p {
     margin: .4rem 0 0;
     color: var(--muted);

@@ -508,7 +508,7 @@ The hostname is the device's user name — `louay.local`, `ahmad.local`. Step 7'
 
 **On the phone, away from home too:** the landing page's **ثبّت التطبيق على هاتفك** opens
 the same pages from the city's public site at `https://sakina-<city>.pages.dev/d/louay/`.
-Its **ثبّت التطبيق** button installs it (Android; an iPhone gets the Share-menu steps).
+Its **ثبّت التطبيق** button installs it (Android; on an iPhone it shows the two Share-menu taps).
 Installed, the list and the countdown work anywhere, even offline; its settings
 icon opens `http://louay.local/settings/` on the home wifi and says it is out of reach
 elsewhere. The button shows only on a device whose prayer table has a public site —
