@@ -4,5 +4,5 @@
 window.DATA = "/data/{year}.json";
 window.DEVICE = false;
 window.PLACE = "دمشق";
-window.VERSION = "1.3.5";
+window.VERSION = "1.4.0";
 window.TIMEZONE = "Asia/Damascus";
