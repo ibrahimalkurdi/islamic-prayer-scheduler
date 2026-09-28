@@ -1820,6 +1820,12 @@ device only hands out its address:
   `config.ini`'s `prayer_csv_source_label`. A device on any other table shows no button.
 - The button opens `https://sakina-<city>.pages.dev/d/<name>/`, `<name>` being the `.local`
   name the phone used (mDNS names can differ from `hostname`; ihms-lr's is).
+- That page installs itself: on Chrome it keeps the `beforeinstallprompt` event and shows
+  **ثبّت التطبيق**, whose tap opens Chrome's install dialog. A page on `.local` cannot do
+  this for the app - the dialog only installs the page it is called from, and only on
+  HTTPS - so the device's button is one tap and this is the second. Safari has no such
+  event; there the page shows where Share → Add to Home Screen is. Installed, it shows
+  nothing (`display-mode: standalone`, `navigator.standalone`).
 - The build writes those pages once, under `device/`, and `_redirects` serves every
   `/d/<name>/…` from there (status 200). They link their own `manifest.webmanifest` and
   icon relatively, and that manifest's `start_url` and `scope` are `./` - resolved against

@@ -29,6 +29,12 @@
 <p class="sub hidden" id="place"></p>
 <div class="note hidden" id="settings-note"></div>
 
+<div class="install app-install hidden" id="app-install">
+    <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
+    <p id="app-install-ios" class="hidden">لإضافته إلى الشاشة الرئيسية: زر المشاركة ثم
+       «إضافة إلى الشاشة الرئيسية».</p>
+</div>
+
 <div class="list-nav">
     <input type="date" id="pick">
     <button class="ghost" id="today">اليوم</button>
@@ -42,9 +48,8 @@
 <div class="install hidden" id="install">
     <a class="install-button" id="install-link" href="#">ثبّت التطبيق على هاتفك</a>
     <p>يفتح مواقيت الصلاة والعداد حتى خارج شبكة الواي فاي، والإعدادات من داخلها.</p>
-    <p>بعد الضغط تُفتح صفحة التطبيق، وعليك إضافتها بنفسك إلى الشاشة الرئيسية للهاتف: في
-       iPhone من زر المشاركة ثم «إضافة إلى الشاشة الرئيسية»، وفي أندرويد من القائمة ⋮ ثم
-       «تثبيت التطبيق».</p>
+    <p>بعد الضغط تُفتح صفحة التطبيق: في أندرويد اضغط فيها «ثبّت التطبيق»، وفي iPhone أضِفها
+       من زر المشاركة ثم «إضافة إلى الشاشة الرئيسية».</p>
 </div>
 
 <p class="version hidden" id="version"></p>
@@ -251,6 +256,33 @@ if (owner && !Site.canAskDevice()) {
             away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.",
         }, Site.noteSayer("#settings-note"));
     });
+}
+
+/* The page a device's install button opens installs itself. Chrome hands over its install
+   dialog only from a tap on this page, so the button is the one step left; Safari has no
+   such dialog, so an iPhone is told where Apple keeps it. Nothing shows once installed. */
+if (owner && !Site.installedApp()) {
+    const box = document.querySelector("#app-install");
+    let offer = null;
+    window.addEventListener("beforeinstallprompt", (event) => {
+        event.preventDefault();
+        offer = event;
+        box.classList.remove("hidden");
+    });
+    document.querySelector("#app-install-button").addEventListener("click", async () => {
+        if (!offer) return;
+        /* Chrome offers its dialog once per page load, whichever way it is answered. */
+        offer.prompt();
+        await offer.userChoice;
+        box.classList.add("hidden");
+        offer = null;
+    });
+    window.addEventListener("appinstalled", () => box.classList.add("hidden"));
+    if (Site.isIosSafari()) {
+        document.querySelector("#app-install-button").classList.add("hidden");
+        document.querySelector("#app-install-ios").classList.remove("hidden");
+        box.classList.remove("hidden");
+    }
 }
 
 /* On the device, the way onto a phone: the same pages from the city's public site, under

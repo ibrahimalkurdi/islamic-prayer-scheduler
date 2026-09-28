@@ -126,6 +126,19 @@ for (const [where, device, want] of [
     check(`ownerHost ${where}${device ? " on a device" : ""}`, Site.ownerHost(), want);
 }
 
+/* 5. Which phone gets the install button and which the Share-menu steps - none, once
+   installed. */
+for (const [who, nav, media, ios, installed] of [
+        ["Android Chrome", { userAgentData: {} }, false, false, false],
+        ["installed on Android", { userAgentData: {} }, true, false, true],
+        ["iPhone Safari", { standalone: false }, false, true, false],
+        ["installed on iPhone", { standalone: true }, false, true, true]]) {
+    context.navigator = nav;
+    context.matchMedia = () => ({ matches: media });
+    check(`isIosSafari on ${who}`, Site.isIosSafari(), ios);
+    check(`installedApp on ${who}`, Site.installedApp(), installed);
+}
+
 if (failures.length) {
     console.log(`FAILED (${failures.length} of ${checks} checks)`);
     console.log(failures.join("\n"));

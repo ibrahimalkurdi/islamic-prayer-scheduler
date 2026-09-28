@@ -736,8 +736,8 @@ with open(INI, "w", encoding="utf-8") as handle:
 check_true("the landing page offers it under the name the phone used",
            'location.hostname.endsWith(".local")' in home
            and "${info.public_site}/d/${encodeURIComponent(name)}/" in home)
-check_true("it says the phone's own add-to-home-screen step is the user's",
-           "وعليك إضافتها بنفسك إلى الشاشة الرئيسية" in home)
+check_true("it says what is left to tap on the page it opens",
+           "اضغط فيها «ثبّت التطبيق»" in home and "إضافة إلى الشاشة الرئيسية" in home)
 check_true("and only on the device", home.index("if (window.DEVICE) {\n    Site.json(\"/api/device\")") > 0)
 
 print("20b. a device's app opens settings and the mute on the device, or says it cannot")
@@ -897,6 +897,11 @@ for icon in owner_manifest["icons"]:
 check_true("the public app keeps the public name",
            'apple-mobile-web-app-title" content="سكينة"'
            in open(os.path.join(OUT, "index.html"), encoding="utf-8").read())
+# Chrome's install dialog only installs the page it is called from, so the page the
+# device's button opens is the one that carries the install button.
+check_true("the app's page offers to install itself",
+           'id="app-install-button"' in owner_home and "beforeinstallprompt" in owner_home
+           and "if (owner && !Site.installedApp())" in owner_home)
 redirects = open(os.path.join(OUT, "_redirects"), encoding="utf-8").read().splitlines()
 check("every /d/<name>/ is served from device/", redirects,
       ["/d/:name /d/:name/ 301", "/d/:name/ /device/ 200",

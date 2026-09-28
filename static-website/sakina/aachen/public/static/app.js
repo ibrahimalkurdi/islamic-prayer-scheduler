@@ -189,6 +189,12 @@ const Site = (() => {
 
     const canAskDevice = () => typeof navigator !== "undefined" && "userAgentData" in navigator;
 
+    /* navigator.standalone exists only on iOS, whose browsers install nothing themselves. */
+    const isIosSafari = () => typeof navigator !== "undefined" && "standalone" in navigator;
+
+    const installedApp = () => (typeof navigator !== "undefined" && navigator.standalone === true)
+        || (typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches);
+
     /* A request to the device itself, given up after DEVICE_CHECK_MS - which includes
        the time the permission prompt is open the first time. */
     async function deviceFetch(host, path, options) {
@@ -265,7 +271,7 @@ const Site = (() => {
 
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
              clock12, ltr, fail, json, ownerHost, openOnDevice, noteSayer, canAskDevice,
-             deviceAnswers, deviceJson, localNetworkAllowed };
+             isIosSafari, installedApp, deviceAnswers, deviceJson, localNetworkAllowed };
 })();
 
 /* A static copy keeps working with no network: sw.js, written by the static build, holds
