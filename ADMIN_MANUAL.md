@@ -1858,11 +1858,11 @@ device only hands out its address:
   can't-connect page.
 - iOS shows any address outside the installed app in a Safari window over it (address
   bar, ✕), and no page can prevent that. So every app→device link is
-  `Site.devicePage()` - the device page plus `?from=app` - and `Site.openDevicePage()`
-  says once (a `localStorage` mark, kept per installed app) that ✕ returns to the app
-  before going. On a device page carrying `?from=app`, `Site.backToAppHint()` turns the
-  back arrows into that same reminder, since in that window they would only lead to the
-  device's other pages.
+  `Site.devicePage()` - the device page plus `?from=app`. A device page carrying it
+  (`Site.backToAppHint()`) keeps a line at its top saying ✕ returns to the app, and hides
+  its back arrows, since in that window they would only lead to the device's other
+  pages. Said on the app's own list instead, it read as a warning about
+  the list.
 - Icon: the device's own prayer-app icon (`config/icons/athan-app-icon-*.png`), not the
   public site's Sakina icon; name «سكينة - جهازي». Installing it is the user's step: the
   button only opens the page, and the text under it says how to add it to the home screen.

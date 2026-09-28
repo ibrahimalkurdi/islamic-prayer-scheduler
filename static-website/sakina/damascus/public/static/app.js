@@ -242,42 +242,22 @@ const Site = (() => {
     const devicePage = (host, path) => `http://${host}.local${path}?from=app`;
 
     const BACK_TO_APP = "للعودة إلى التطبيق اضغط ✕ في أعلى الشاشة.";
-    const SHEET_SEEN = "sakina-sheet-seen";
 
-    /* iOS shows another address in a Safari window over the app, whatever the page does.
-       The first time, say so before going; after that, just go. */
-    function openDevicePage(host, path, say) {
-        const target = devicePage(host, path);
-        let seen = true;
-        try {
-            seen = localStorage.getItem(SHEET_SEEN) === "1";
-            localStorage.setItem(SHEET_SEEN, "1");
-        } catch (e) {
-            seen = true;
-        }
-        if (seen) location.href = target;
-        else say("", `تُفتح الصفحة في نافذة فوق التطبيق. ${BACK_TO_APP}`, target, "متابعة");
-    }
-
-    /* The page's back arrow, in that window, would only lead further in. */
+    /* iOS shows such a page in a Safari window over the app, whatever the app does, and
+       the page's own back arrow would only lead further in. So the page says at its top,
+       for as long as it is open, that X is the way back, and the arrow is taken away.
+       app.js loads at the end of <body>, so the page is all there by now. */
     function backToAppHint() {
         if (!window.DEVICE || typeof document === "undefined"
             || new URLSearchParams(location.search).get("from") !== "app") return;
-        document.addEventListener("click", (event) => {
-            if (!event.target.closest("a.back, a.back-corner")) return;
-            event.preventDefault();
-            let toast = document.querySelector(".toast");
-            if (!toast) {
-                toast = document.createElement("div");
-                toast.className = "toast";
-                toast.setAttribute("role", "status");
-                document.body.append(toast);
-            }
-            toast.textContent = BACK_TO_APP;
-            toast.classList.remove("hidden");
-            clearTimeout(backToAppHint.timer);
-            backToAppHint.timer = setTimeout(() => toast.classList.add("hidden"), 5000);
-        });
+        const bar = document.createElement("div");
+        bar.className = "back-to-app";
+        bar.setAttribute("role", "status");
+        bar.textContent = BACK_TO_APP;
+        document.body.prepend(bar);
+        for (const back of document.querySelectorAll("a.back, a.back-corner")) {
+            back.classList.add("hidden");
+        }
     }
 
     /* say() for a .note element: the sentence, and the link under it when there is one. */
@@ -298,7 +278,7 @@ const Site = (() => {
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
              clock12, ltr, fail, json, ownerHost, noteSayer, canAskDevice,
              isIosSafari, installedApp, deviceAnswers, deviceJson, localNetworkAllowed,
-             devicePage, openDevicePage, backToAppHint };
+             devicePage, backToAppHint };
 })();
 
 Site.backToAppHint();

@@ -528,21 +528,22 @@ button.ghost {
 .note.good { background: #14532d; border-color: #3f9668; }
 .note.busy { background: #1e293b; }
 
-/* On a device's page opened from the app: how to get back to it. */
-.toast {
-    position: fixed;
-    inset-inline: 1rem;
-    bottom: 1.2rem;
-    z-index: 10;
-    max-width: 24rem;
-    margin: 0 auto;
+/* On a device's page opened from the app: how to get back to it, first on the page. In
+   the flow rather than over it, so on the countdown it pushes the counter down instead
+   of covering the speaker. */
+.back-to-app {
+    margin-bottom: 1rem;
     padding: .7rem 1rem;
     border: 1px solid var(--border);
     border-radius: 12px;
     background: var(--card);
     color: var(--text);
     text-align: center;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, .4);
+}
+
+body.full .back-to-app {
+    flex: none;
+    margin: .6rem .6rem 0;
 }
 
 .back {

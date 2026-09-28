@@ -228,7 +228,7 @@ if (window.DEVICE) {
             }
         });
     } else {
-        button.addEventListener("click", () => Site.openDevicePage(host, "/countdown/", say));
+        button.addEventListener("click", () => { location.href = target; });
     }
 } else {
     document.querySelector("#mute").remove();

@@ -28,7 +28,6 @@
     </nav>
 </header>
 <p class="sub hidden" id="place"></p>
-<div class="note hidden" id="settings-note"></div>
 
 <div class="install app-install hidden" id="app-install">
     <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
@@ -275,12 +274,7 @@ if (window.DEVICE || owner) document.querySelector("#to-settings").classList.rem
    can neither reach the device nor check the wifi, so there it opens the device's own
    page; off its wifi Safari says it cannot open it. */
 if (owner && !Site.canAskDevice()) {
-    const gear = document.querySelector("#to-settings");
-    gear.href = Site.devicePage(owner, "/settings/");
-    gear.addEventListener("click", (event) => {
-        event.preventDefault();
-        Site.openDevicePage(owner, "/settings/", Site.noteSayer("#settings-note"));
-    });
+    document.querySelector("#to-settings").href = Site.devicePage(owner, "/settings/");
 }
 
 /* The page a device's install button opens installs itself. Chrome hands over its install
