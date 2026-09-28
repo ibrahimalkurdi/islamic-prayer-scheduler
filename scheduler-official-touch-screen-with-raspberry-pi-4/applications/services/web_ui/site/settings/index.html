@@ -281,7 +281,7 @@ api("/api/settings").then((payload) => {
     /* A device that answers but refused is on a release from before the app could reach
        its settings: its own page still can. */
     if (await Site.deviceAnswers(owner)) {
-        location.href = `http://${owner}.local/settings/`;
+        location.href = Site.devicePage(owner, "/settings/");
         return;
     }
     show("error", "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.");

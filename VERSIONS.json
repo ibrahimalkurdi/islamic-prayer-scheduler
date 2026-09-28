@@ -85,7 +85,7 @@
   },
 
   "pi4": {
-    "version": "1.4.3",
+    "version": "1.4.4",
     "exclude": [],
     "include": []
   },

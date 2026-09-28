@@ -528,6 +528,23 @@ button.ghost {
 .note.good { background: #14532d; border-color: #3f9668; }
 .note.busy { background: #1e293b; }
 
+/* On a device's page opened from the app: how to get back to it. */
+.toast {
+    position: fixed;
+    inset-inline: 1rem;
+    bottom: 1.2rem;
+    z-index: 10;
+    max-width: 24rem;
+    margin: 0 auto;
+    padding: .7rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    color: var(--text);
+    text-align: center;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .4);
+}
+
 .back {
     display: inline-block;
     margin-bottom: 1rem;

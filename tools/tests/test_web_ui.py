@@ -746,9 +746,19 @@ check_true("Chrome asks the device first, as a local-network request",
            'targetAddressSpace: "local"' in app_js and 'mode: "no-cors"' in app_js)
 check_true("on Chrome the app opens its own settings page, which talks to the device",
            "if (owner && !Site.canAskDevice()) {" in home)
-check_true("elsewhere settings says where it works and links the device's /settings/",
-           "`http://${owner}.local/settings/`, \"فتح الإعدادات\"" in home
-           and "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز." in home)
+# Safari cannot check the wifi, so a note on every tap read as an error even on the
+# device's wifi; iOS opens the page in a window over the app, which is said once.
+check_true("elsewhere settings opens the device's /settings/",
+           'Site.openDevicePage(owner, "/settings/", Site.noteSayer("#settings-note"))' in home)
+check_true("marked as opened from the app",
+           "`http://${host}.local${path}?from=app`" in app_js)
+check_true("saying the first time only that X returns to the app",
+           'localStorage.getItem(SHEET_SEEN) === "1"' in app_js
+           and "if (seen) location.href = target;" in app_js
+           and "للعودة إلى التطبيق اضغط ✕ في أعلى الشاشة." in app_js)
+check_true("and there the page's back arrow says the same instead of leading further in",
+           'get("from") !== "app"' in app_js and 'closest("a.back, a.back-corner")' in app_js
+           and "Site.backToAppHint();" in app_js)
 settings_page = get("/settings/")[1].decode("utf-8")
 check_true("the settings page asks the device itself when it is in the app",
            "const api = owner ? (path, options) => Site.deviceJson(owner, path, options)"
@@ -765,11 +775,10 @@ check_true("and shows its state once the permission is there",
            "Site.localNetworkAllowed().then((allowed) =>" in countdown)
 check_true("a device that refuses, from an older release, is opened instead",
            "if (await Site.deviceAnswers(host)) location.href = target;" in countdown)
-# Safari cannot send it, or check first, so there the speaker goes straight to the
-# device's own countdown - a note there read as an error even on the device's wifi.
-check_true("elsewhere the speaker opens the device's countdown directly",
-           'button.addEventListener("click", () => { location.href = target; });' in countdown
-           and "openOnDevice" not in countdown)
+# Safari cannot send it, or check first, so there the speaker opens the device's own
+# countdown, the same way settings does.
+check_true("elsewhere the speaker opens the device's countdown",
+           'Site.openDevicePage(host, "/countdown/", say)' in countdown)
 check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح." in countdown)
 check_true("under the speaker, not at the foot of the page",

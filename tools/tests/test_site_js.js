@@ -139,6 +139,9 @@ for (const [who, nav, media, ios, installed] of [
     check(`installedApp on ${who}`, Site.installedApp(), installed);
 }
 
+/* 6. A device page the app opens is marked, so that page knows X is the way back. */
+check("devicePage", Site.devicePage("louay", "/settings/"), "http://louay.local/settings/?from=app");
+
 if (failures.length) {
     console.log(`FAILED (${failures.length} of ${checks} checks)`);
     console.log(failures.join("\n"));

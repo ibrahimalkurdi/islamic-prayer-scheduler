@@ -1840,8 +1840,8 @@ device only hands out its address:
   (`targetAddressSpace: "local"` - Local Network Access, one permission prompt; CORS
   below). Unreachable, it says the device is out of reach; reachable but refusing - an
   older release - it opens `http://<name>.local/settings/` instead. Safari cannot fetch
-  `http://` from an `https://` page at all, nor check the wifi, so there the icon says settings
-  work on the device's wifi only and offers `http://<name>.local/settings/` as a link.
+  `http://` from an `https://` page at all, nor check the wifi, so there the icon opens
+  `http://<name>.local/settings/`; off the wifi Safari says it cannot open it.
 - The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
   lets `PUBLIC_APP_ORIGIN` (`https://[<preview>.]sakina-<city>.pages.dev`) call
   `PUBLIC_APP_PATHS` - `/api/mute`, `/api/device`, `/api/settings`, `/api/apply`, nothing
@@ -1852,10 +1852,17 @@ device only hands out its address:
   The mute is posted as `{}` in `text/plain`; the app reads the state
   back, and follows it every 15 s once the permission is granted. A device that answers
   but refuses - a release from before this - gets its own countdown opened instead.
-  Safari cannot make the request at all, so there the speaker goes straight to
-  `http://<name>.local/countdown/`, with no note first - Safari cannot check the wifi
-  either, and a note shown on every tap read as an error on the device's own wifi. Off
-  it, Safari shows its own can't-connect page.
+  Safari cannot make the request at all, so there the speaker opens
+  `http://<name>.local/countdown/`. Safari cannot check the wifi either, and a note shown
+  on every tap read as an error on the device's own wifi; off it, Safari shows its own
+  can't-connect page.
+- iOS shows any address outside the installed app in a Safari window over it (address
+  bar, ✕), and no page can prevent that. So every app→device link is
+  `Site.devicePage()` - the device page plus `?from=app` - and `Site.openDevicePage()`
+  says once (a `localStorage` mark, kept per installed app) that ✕ returns to the app
+  before going. On a device page carrying `?from=app`, `Site.backToAppHint()` turns the
+  back arrows into that same reminder, since in that window they would only lead to the
+  device's other pages.
 - Icon: the device's own prayer-app icon (`config/icons/athan-app-icon-*.png`), not the
   public site's Sakina icon; name «سكينة - جهازي». Installing it is the user's step: the
   button only opens the page, and the text under it says how to add it to the home screen.

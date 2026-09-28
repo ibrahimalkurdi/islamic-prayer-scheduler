@@ -188,10 +188,10 @@ if (window.DEVICE) {
     /* The app a device hands out, on the public site. Chrome mutes and unmutes the
        device from here - Local Network Access, and main.py lets this site call
        /api/mute. Safari cannot reach an http:// device from an https:// page at all, so
-       there the speaker goes straight to the device's own countdown, where the mute
-       works - with no check first, since Safari could not make one. */
+       there the speaker opens the device's own countdown, where the mute works - with
+       no check first, since Safari could not make one. */
     const host = Site.ownerHost();
-    const target = `http://${host}.local/countdown/`;
+    const target = Site.devicePage(host, "/countdown/");
     const away = "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.";
     const say = Site.noteSayer("#speaker-note", "speaker-note");
     const button = document.querySelector("#mute");
@@ -229,7 +229,7 @@ if (window.DEVICE) {
             }
         });
     } else {
-        button.addEventListener("click", () => { location.href = target; });
+        button.addEventListener("click", () => Site.openDevicePage(host, "/countdown/", say));
     }
 } else {
     document.querySelector("#mute").remove();
