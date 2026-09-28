@@ -1840,8 +1840,8 @@ device only hands out its address:
   (`targetAddressSpace: "local"` - Local Network Access, one permission prompt; CORS
   below). Unreachable, it says the device is out of reach; reachable but refusing - an
   older release - it opens `http://<name>.local/settings/` instead. Safari cannot fetch
-  `http://` from an `https://` page at all, so there the icon says settings work on the
-  device's wifi only and offers that link.
+  `http://` from an `https://` page at all, nor check the wifi, so there the icon links
+  straight to `http://<name>.local/settings/`; off the wifi Safari says it cannot open it.
 - The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
   lets `PUBLIC_APP_ORIGIN` (`https://[<preview>.]sakina-<city>.pages.dev`) call
   `PUBLIC_APP_PATHS` - `/api/mute`, `/api/device`, `/api/settings`, `/api/apply`, nothing
@@ -1852,8 +1852,10 @@ device only hands out its address:
   The mute is posted as `{}` in `text/plain`; the app reads the state
   back, and follows it every 15 s once the permission is granted. A device that answers
   but refuses - a release from before this - gets its own countdown opened instead.
-  Safari cannot make the request at all, so there the speaker opens
-  `http://<name>.local/countdown/` (`Site.openOnDevice()`), as the settings icon does.
+  Safari cannot make the request at all, so there the speaker goes straight to
+  `http://<name>.local/countdown/`, with no note first - Safari cannot check the wifi
+  either, and a note shown on every tap read as an error on the device's own wifi. Off
+  it, Safari shows its own can't-connect page.
 - Icon: the device's own prayer-app icon (`config/icons/athan-app-icon-*.png`), not the
   public site's Sakina icon; name «سكينة - جهازي». Installing it is the user's step: the
   button only opens the page, and the text under it says how to add it to the home screen.

@@ -741,13 +741,15 @@ check_true("and only on the device", home.index("if (window.DEVICE) {\n    Site.
 print("20b. a device's app opens settings and the mute on the device, or says it cannot")
 app_js = get("/static/app.js")[1].decode("utf-8")
 countdown = get("/countdown/")[1].decode("utf-8")
-check_true("the device's own address", "const target = `http://${host}.local${path}`" in app_js)
+check_true("the device's own address", "fetch(`http://${host}.local${path}`" in app_js)
 check_true("Chrome asks the device first, as a local-network request",
            'targetAddressSpace: "local"' in app_js and 'mode: "no-cors"' in app_js)
 check_true("on Chrome the app opens its own settings page, which talks to the device",
            "if (owner && !Site.canAskDevice()) {" in home)
-check_true("elsewhere settings goes to the device's /settings/",
-           'Site.openOnDevice(owner, "/settings/"' in home)
+# Safari cannot check the wifi, so a note there read as an error even on the device's wifi.
+check_true("elsewhere settings goes straight to the device's /settings/",
+           'document.querySelector("#to-settings").href = `http://${owner}.local/settings/`;'
+           in home and "openOnDevice" not in app_js)
 settings_page = get("/settings/")[1].decode("utf-8")
 check_true("the settings page asks the device itself when it is in the app",
            "const api = owner ? (path, options) => Site.deviceJson(owner, path, options)"
@@ -755,10 +757,8 @@ check_true("the settings page asks the device itself when it is in the app",
 check_true("and says so when the device is out of reach",
            'show("error", "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة.")'
            in settings_page)
-check_true("and says so when it is out of reach",
-           "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in home)
-check_true("a browser that cannot ask is told where settings work",
-           "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز." in home)
+check_true("and its settings page says so when the device is out of reach",
+           "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in settings_page)
 check_true("Chrome mutes and unmutes the device straight from the app",
            'Site.deviceJson(host, "/api/mute",\n' in countdown
            and 'method: "POST", body: "{}"' in countdown)
@@ -766,9 +766,11 @@ check_true("and shows its state once the permission is there",
            "Site.localNetworkAllowed().then((allowed) =>" in countdown)
 check_true("a device that refuses, from an older release, is opened instead",
            "if (await Site.deviceAnswers(host)) location.href = target;" in countdown)
-# Safari cannot send it, so there the speaker opens the device's own countdown.
-check_true("elsewhere the speaker opens the device's countdown",
-           'Site.openOnDevice(host, "/countdown/", words, say)' in countdown)
+# Safari cannot send it, or check first, so there the speaker goes straight to the
+# device's own countdown - a note there read as an error even on the device's wifi.
+check_true("elsewhere the speaker opens the device's countdown directly",
+           'button.addEventListener("click", () => { location.href = target; });' in countdown
+           and "openOnDevice" not in countdown)
 check_true("and says so when it is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح." in countdown)
 check_true("under the speaker, not at the foot of the page",

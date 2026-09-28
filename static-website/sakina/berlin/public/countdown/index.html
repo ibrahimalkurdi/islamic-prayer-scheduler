@@ -188,14 +188,11 @@ if (window.DEVICE) {
     /* The app a device hands out, on the public site. Chrome mutes and unmutes the
        device from here - Local Network Access, and main.py lets this site call
        /api/mute. Safari cannot reach an http:// device from an https:// page at all, so
-       there the speaker opens the device's own countdown, where the mute works. */
+       there the speaker goes straight to the device's own countdown, where the mute
+       works - with no check first, since Safari could not make one. */
     const host = Site.ownerHost();
     const target = `http://${host}.local/countdown/`;
-    const words = {
-        homeOnly: "كتم الصوت متاح فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
-        open: "فتح العدّاد على الجهاز",
-        away: "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.",
-    };
+    const away = "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.";
     const say = Site.noteSayer("#speaker-note", "speaker-note");
     const button = document.querySelector("#mute");
     button.innerHTML = SPEAKER_ON;
@@ -226,13 +223,13 @@ if (window.DEVICE) {
                 /* A device that answers but refused is on a release from before the
                    app could mute it: its own page still can. */
                 if (await Site.deviceAnswers(host)) location.href = target;
-                else say("bad", words.away, target, "حاول فتحها على أي حال");
+                else say("bad", away, target, "حاول فتحها على أي حال");
             } finally {
                 button.disabled = false;
             }
         });
     } else {
-        button.addEventListener("click", () => Site.openOnDevice(host, "/countdown/", words, say));
+        button.addEventListener("click", () => { location.href = target; });
     }
 } else {
     document.querySelector("#mute").remove();
