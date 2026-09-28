@@ -11,6 +11,9 @@ prayer-times.csv is a symlink into the device's prayers-config/, so the website 
 devices read one table. public/ is generated, committed by the workflow, and served by
 Cloudflare Pages as it stands.
 
+Every site then gets every other city's years too, so its pages can switch between them
+offline - see link_cities in tools/build_static_site.py.
+
 It also writes the devices' web_ui/public_sites.json - which table has which site - so a
 device can hand out the app from its own city's site. That file ships in a release, so a
 new city reaches the devices with the next one; commit it with the new city's folder.
@@ -65,10 +68,15 @@ def write_public_sites():
         handle.write("\n")
 
 
-def build_city(name, years):
-    folder = os.path.join(HERE, name)
+def read_city(folder):
     config = configparser.ConfigParser(interpolation=None)
     config.read(os.path.join(folder, "city.ini"), encoding="utf-8")
+    return config
+
+
+def build_city(name, years):
+    folder = os.path.join(HERE, name)
+    config = read_city(folder)
     city = config["city"]
     table = os.path.join(folder, "prayer-times.csv")
     place = place_of(folder, city)
@@ -86,6 +94,22 @@ def build_city(name, years):
     subprocess.run(command, check=True)
 
 
+def link_all():
+    """Every built city's years into every built city's site. Run over all of them, not
+    only the ones just built, so a rebuilt table reaches the other sites as well."""
+    sys.path.insert(0, os.path.dirname(BUILDER))
+    import build_static_site
+    sites = {}
+    for name in cities():
+        folder = os.path.join(HERE, name)
+        if os.path.isdir(os.path.join(folder, "public", "data")):
+            city = read_city(folder)["city"]
+            sites[name] = (os.path.join(folder, "public"), place_of(folder, city),
+                           city["timezone"])
+    for name in sites:
+        build_static_site.link_cities(sites, name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -96,6 +120,7 @@ def main():
     args = parser.parse_args()
     for name in args.city or cities():
         build_city(name, args.year or [])
+    link_all()
     write_public_sites()
 
 

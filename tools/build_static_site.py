@@ -31,6 +31,10 @@ The output is two apps from the same pages:
                   (Cloudflare Pages and Netlify read it). It has its own manifest and
                   icon, so it installs as an app of its own beside the public one.
 
+Given the other cities' built sites (link_cities, which static-website/sakina/build.py
+runs), a copy also carries their years, and its pages offer every city in place of its
+own - only what the phone shows, never what a device is set to.
+
 The public app has no settings page and no mute: they act on one Raspberry Pi. config.js
 is written with DEVICE = false. sw.js keeps every page and baked year on the phone, so
 both apps open with no network at all.
@@ -194,16 +198,7 @@ def build(out_dir, maps, assets_dir, place="", icons_dir=None, app_name="",
             json.dump(payload, out, ensure_ascii=False, separators=(",", ":"))
         summary.append(f"{len(payload['days'])} days of {year}")
 
-    with open(os.path.join(static, "config.js"), "w", encoding="utf-8") as out:
-        out.write(
-            "/* Written by tools/build_static_site.py. This copy is served from a static\n"
-            "   host, so it reads a baked year rather than a device's API, and offers\n"
-            "   nothing that would act on a Raspberry Pi. */\n"
-            'window.DATA = "/data/{year}.json";\n'
-            "window.DEVICE = false;\n"
-            f"window.PLACE = {json.dumps(place, ensure_ascii=False)};\n"
-            f"window.VERSION = {json.dumps(released_version())};\n"
-            f"window.TIMEZONE = {json.dumps(clock_zone or None)};\n")
+    write_config(out_dir, place, clock_zone)
 
     write_owner_app(out_dir, assets_dir, device_app_name or DEFAULT_DEVICE_APP_NAME,
                     settings_page)
@@ -234,6 +229,49 @@ def read_font(assets_dir, member):
             return bundle.read(member)
     except (OSError, KeyError, zipfile.BadZipFile):
         return None
+
+
+def write_config(out_dir, place, clock_zone, home="", cities=()):
+    """config.js. `cities` are the other sites whose years link_cities copied in, which
+    the pages offer in place of this one - see Site.applyCity."""
+    with open(os.path.join(out_dir, "static", "config.js"), "w", encoding="utf-8") as out:
+        out.write(
+            "/* Written by tools/build_static_site.py. This copy is served from a static\n"
+            "   host, so it reads a baked year rather than a device's API, and offers\n"
+            "   nothing that would act on a Raspberry Pi. */\n"
+            'window.DATA = "/data/{year}.json";\n'
+            "window.DEVICE = false;\n"
+            f"window.PLACE = {json.dumps(place, ensure_ascii=False)};\n"
+            f"window.VERSION = {json.dumps(released_version())};\n"
+            f"window.TIMEZONE = {json.dumps(clock_zone or None)};\n")
+        if cities:
+            out.write(f"window.CITY = {json.dumps(home)};\n"
+                      "window.CITIES = "
+                      + json.dumps(list(cities), ensure_ascii=False, indent=4) + ";\n")
+
+
+def link_cities(sites, home):
+    """Give the built site of `home` every other city's years, under data/<city>/, so its
+    pages can show any of them with no request to another host - and with none at all
+    once sw.js has them. `sites` is {city: (out_dir, place, clock_zone)}, each already
+    built; the service worker is rewritten to keep the new files too."""
+    out_dir, place, clock_zone = sites[home]
+    data_dir = os.path.join(out_dir, "data")
+    for name in os.listdir(data_dir):
+        if os.path.isdir(os.path.join(data_dir, name)):
+            shutil.rmtree(os.path.join(data_dir, name))
+    cities = []
+    for city, (other_dir, other_place, other_zone) in sorted(sites.items()):
+        data = "/data/{year}.json"
+        if city != home:
+            data = f"/data/{city}/{{year}}.json"
+            shutil.copytree(os.path.join(other_dir, "data"), os.path.join(data_dir, city),
+                            ignore=lambda folder, names: [n for n in names
+                                                          if not n.endswith(".json")])
+        cities.append({"id": city, "place": other_place,
+                       "timezone": other_zone or None, "data": data})
+    write_config(out_dir, place, clock_zone, home, cities)
+    write_service_worker(out_dir)
 
 
 PUBLIC_PAGES = ("index.html", os.path.join("countdown", "index.html"))

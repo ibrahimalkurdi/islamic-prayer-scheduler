@@ -142,6 +142,55 @@ for (const [who, nav, media, ios, installed] of [
 /* 6. A device page the app opens is marked, so that page knows X is the way back. */
 check("devicePage", Site.devicePage("louay", "/settings/"), "http://louay.local/settings/?from=app");
 
+/* 7. A phone can show another city's years in place of the site's own. The choice is
+   kept per app - the public one and each device's apart - and the site's own city is
+   never stored, and a device lists no cities at all. */
+const store = new Map();
+context.localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+};
+const BERLIN = { id: "berlin", place: "برلين", timezone: "Europe/Berlin", data: "/data/{year}.json" };
+const DAMASCUS = { id: "damascus", place: "دمشق", timezone: "Asia/Damascus",
+                   data: "/data/damascus/{year}.json" };
+const fresh = () => Object.assign(context.window, {
+    DEVICE: false, DATA: "/data/{year}.json", TIMEZONE: "Europe/Berlin", PLACE: "برلين",
+    CITY: "berlin", CITIES: [BERLIN, DAMASCUS] });
+context.location = { pathname: "/d/louay/" };
+fresh();
+check("the site's own city is shown at first", Site.shownCity().id, "berlin");
+check("which is the device's", Site.homeCity().id, "berlin");
+check("a city is chosen", Site.chooseCity("damascus"), true);
+Site.applyCity();
+check("its years are read", context.window.DATA, "/data/damascus/{year}.json");
+check("on its clock", context.window.TIMEZONE, "Asia/Damascus");
+check("under its name", context.window.PLACE, "دمشق");
+context.location = { pathname: "/d/ihms-lr/" };
+fresh();
+Site.applyCity();
+check("another device's app keeps its own city", context.window.PLACE, "برلين");
+context.location = { pathname: "/" };
+check("and so does the public app", Site.shownCity().id, "berlin");
+context.location = { pathname: "/d/louay/countdown/" };
+fresh();
+Site.applyCity();
+check("the countdown follows the choice", context.window.DATA, "/data/damascus/{year}.json");
+Site.chooseCity("berlin");
+check("going back stores nothing", store.size, 0);
+store.set("sakina-city:louay", "atlantis");
+fresh();
+Site.applyCity();
+check("a city no longer offered falls back to the site's", context.window.PLACE, "برلين");
+context.window.DEVICE = true;
+check("a device offers no cities", Site.cities().length, 0);
+context.window.DEVICE = false;
+context.localStorage = { getItem() { throw new Error("blocked"); },
+                         setItem() { throw new Error("blocked"); },
+                         removeItem() { throw new Error("blocked"); } };
+check("blocked storage shows the site's own city", Site.shownCity().id, "berlin");
+check("and refuses the choice rather than reloading into it", Site.chooseCity("damascus"), false);
+
 if (failures.length) {
     console.log(`FAILED (${failures.length} of ${checks} checks)`);
     console.log(failures.join("\n"));

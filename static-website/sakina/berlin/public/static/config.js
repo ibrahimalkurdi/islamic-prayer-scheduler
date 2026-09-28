@@ -6,3 +6,24 @@ window.DEVICE = false;
 window.PLACE = "برلين";
 window.VERSION = "1.4.7";
 window.TIMEZONE = "Europe/Berlin";
+window.CITY = "berlin";
+window.CITIES = [
+    {
+        "id": "aachen",
+        "place": "آخن",
+        "timezone": "Europe/Berlin",
+        "data": "/data/aachen/{year}.json"
+    },
+    {
+        "id": "berlin",
+        "place": "برلين",
+        "timezone": "Europe/Berlin",
+        "data": "/data/{year}.json"
+    },
+    {
+        "id": "damascus",
+        "place": "دمشق",
+        "timezone": "Asia/Damascus",
+        "data": "/data/damascus/{year}.json"
+    }
+];

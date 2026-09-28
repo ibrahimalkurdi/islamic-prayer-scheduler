@@ -10,8 +10,9 @@ app a device hands out, whose settings icon opens that device on its own wifi.
 <city>/public/            generated — never edit by hand
 icons/                    the Sakina icon, shared by every city; source-thkr-allah.jpeg is
                           the original, icon-*.png are cut from it full-bleed
-build.py                  builds every city, this year and next, and writes the devices'
-                          web_ui/public_sites.json
+build.py                  builds every city, this year and next, copies every city's
+                          years into every site (data/<city>/) so the pages can switch
+                          between them, and writes the devices' web_ui/public_sites.json
 ```
 
 `public/` is rebuilt and committed by `.github/workflows/sakina-static-website.yml` on any

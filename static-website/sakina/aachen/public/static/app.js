@@ -260,6 +260,51 @@ const Site = (() => {
         }
     }
 
+    /* A city's site carries every city's years (config.js's CITIES), and a phone may
+       show any of them instead of the site's own - chosen on the daily list, kept on the
+       phone. Only the view changes; a device keeps its own prayer table. Each app keeps
+       its own choice: the public one and every device's are told apart by their path. */
+    const CITY_KEY = "sakina-city";
+
+    const cityKey = () => `${CITY_KEY}:${ownerHost() || ""}`;
+
+    function storedCity() {
+        try {
+            return localStorage.getItem(cityKey());
+        } catch (e) {
+            return null;
+        }
+    }
+
+    const cities = () => (window.DEVICE ? [] : window.CITIES || []);
+
+    const homeCity = () => cities().find((city) => city.id === window.CITY) || null;
+
+    const shownCity = () => cities().find((city) => city.id === storedCity()) || homeCity();
+
+    /* The site's own city is never stored, so the phone follows it if it is renamed. */
+    function chooseCity(id) {
+        try {
+            if (!homeCity() || id === homeCity().id) {
+                localStorage.removeItem(cityKey());
+            } else {
+                localStorage.setItem(cityKey(), id);
+            }
+        } catch (e) {
+            return false;
+        }
+        return true;
+    }
+
+    /* Run before any page reads DATA, TIMEZONE or PLACE; each of them reads it lazily. */
+    function applyCity() {
+        const city = shownCity();
+        if (!city || city === homeCity()) return;
+        window.DATA = city.data;
+        window.TIMEZONE = city.timezone;
+        window.PLACE = city.place;
+    }
+
     /* say() for a .note element: the sentence, and the link under it when there is one. */
     function noteSayer(selector, extraClass = "") {
         return (kind, text, target, linkText) => {
@@ -278,9 +323,10 @@ const Site = (() => {
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
              clock12, ltr, fail, json, ownerHost, noteSayer, canAskDevice,
              isIosSafari, installedApp, deviceAnswers, deviceJson, localNetworkAllowed,
-             devicePage, backToAppHint };
+             devicePage, backToAppHint, cities, homeCity, shownCity, chooseCity, applyCity };
 })();
 
+Site.applyCity();
 Site.backToAppHint();
 
 /* A static copy keeps working with no network: sw.js, written by the static build, holds

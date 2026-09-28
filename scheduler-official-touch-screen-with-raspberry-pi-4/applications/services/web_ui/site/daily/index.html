@@ -27,6 +27,20 @@
     </nav>
 </header>
 <p class="sub hidden" id="place"></p>
+<p class="city-diff hidden" id="city-diff">هذه المدينة مختلفة عن المضبوطة في الجهاز. للإبقاء عليها نفسها بدّل إلى <a href="#" id="city-home"></a></p>
+
+<div class="guide confirm hidden" id="city-confirm" role="dialog" aria-modal="true"
+     aria-labelledby="city-confirm-title">
+    <div class="guide-card">
+        <h2 id="city-confirm-title">تغيير المدينة</h2>
+        <p>هل تريد تغيير المدينة من <b id="city-from"></b> إلى <b id="city-to"></b>؟</p>
+        <p class="confirm-note hidden" id="city-device-note">ملاحظة: هذا التغيير لا يغيّر ملف الإعدادات في الجهاز، ولتغييره يجب تعديله من الجهاز نفسه.</p>
+        <div class="confirm-actions">
+            <button class="yes" id="city-yes">نعم</button>
+            <button class="ghost" id="city-no">لا</button>
+        </div>
+    </div>
+</div>
 
 <div class="install app-install hidden" id="app-install">
     <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
@@ -93,6 +107,63 @@ if (window.PLACE) {
     place.textContent = window.PLACE;
     place.classList.remove("hidden");
     document.title = `${document.title} - ${window.PLACE}`;
+}
+
+/* The name becomes a list of every city the site carries. Choosing one asks first, then
+   reloads the page on that city's years and clock. In the app a device hands out, the
+   site's own city is the device's: the note under the name says when the phone shows
+   another, and the link in it goes straight back. */
+if (Site.cities().length > 1) {
+    const current = Site.shownCity();
+    const home = Site.homeCity();
+    const fromDevice = Boolean(Site.ownerHost());
+    const select = document.createElement("select");
+    select.id = "city";
+    select.setAttribute("aria-label", "المدينة");
+    for (const city of Site.cities()) {
+        select.add(new Option(city.place, city.id, false, city === current));
+    }
+    const pick = document.createElement("span");
+    pick.className = "city-pick";
+    pick.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+    pick.prepend(select);
+    document.querySelector("#place").replaceChildren(pick);
+
+    const show = (id) => {
+        if (Site.chooseCity(id)) location.reload();
+    };
+    const confirm = document.querySelector("#city-confirm");
+    const keep = () => {
+        select.value = current.id;
+        confirm.classList.add("hidden");
+    };
+    select.addEventListener("change", () => {
+        if (select.value === current.id) return;
+        document.querySelector("#city-from").textContent = current.place;
+        document.querySelector("#city-to").textContent =
+            Site.cities().find((city) => city.id === select.value).place;
+        confirm.classList.remove("hidden");
+    });
+    document.querySelector("#city-yes").addEventListener("click", () => show(select.value));
+    document.querySelector("#city-no").addEventListener("click", keep);
+    confirm.addEventListener("click", (event) => { if (event.target === confirm) keep(); });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !confirm.classList.contains("hidden")) keep();
+    });
+
+    if (fromDevice) {
+        document.querySelector("#city-device-note").classList.remove("hidden");
+        if (current !== home) {
+            const back = document.querySelector("#city-home");
+            back.textContent = home.place;
+            back.addEventListener("click", (event) => {
+                event.preventDefault();
+                show(home.id);
+            });
+            document.querySelector("#place").classList.add("above-diff");
+            document.querySelector("#city-diff").classList.remove("hidden");
+        }
+    }
 }
 
 let shown = requestedDate();

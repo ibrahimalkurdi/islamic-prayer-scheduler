@@ -918,6 +918,29 @@ check_true("the app's page offers to install itself",
            and "if (owner && !Site.installedApp())" in owner_home)
 check_true("and on an iPhone the same button shows the way through Safari's menu",
            'id="ios-guide"' in owner_home and "if (Site.isIosSafari()) {\n            guide" in owner_home)
+# The city under the title is a list of every city the site carries. A change is asked
+# first, and in a device's app the page says the device keeps its own table.
+check_true("the city is chosen from a list in place of its name",
+           "if (Site.cities().length > 1)" in owner_home
+           and 'document.querySelector("#place").replaceChildren(pick);' in owner_home)
+check_true("nothing changes before نعم",
+           'addEventListener("change", () => {' in owner_home
+           and 'querySelector("#city-yes").addEventListener("click", () => show(select.value));'
+           in owner_home
+           and "هل تريد تغيير المدينة من" in owner_home)
+check_true("and لا puts the list back",
+           "select.value = current.id;" in owner_home
+           and 'querySelector("#city-no").addEventListener("click", keep);' in owner_home)
+check_true("the window says the device's file is not changed, in a device's app only",
+           "هذا التغيير لا يغيّر ملف الإعدادات في الجهاز" in owner_home
+           and 'if (fromDevice) {\n        document.querySelector("#city-device-note")'
+           in owner_home)
+check_true("another city than the device's says so, with a way straight back",
+           "هذه المدينة مختلفة عن المضبوطة في الجهاز. للإبقاء عليها نفسها بدّل إلى" in owner_home
+           and "show(home.id);" in owner_home)
+check_true("the choice is applied before any page reads the data",
+           app_js.index("Site.applyCity();") < app_js.index("Site.backToAppHint();")
+           and "window.DEVICE ? [] : window.CITIES" in app_js)
 redirects = open(os.path.join(OUT, "_redirects"), encoding="utf-8").read().splitlines()
 check("every /d/<name>/ is served from device/", redirects,
       ["/d/:name /d/:name/ 301", "/d/:name/ /device/ 200",

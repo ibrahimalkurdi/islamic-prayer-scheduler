@@ -1906,6 +1906,19 @@ With `false` the table is used as it stands. Berlin and Aachen are `true`; Damas
 `timezone` is also the clock the site tells the time in, whatever `daylight_saving` says:
 the Damascus site opened on a phone in Germany highlights by Damascus time, not the phone's.
 
+**Every site carries every city.** After building, `build.py` runs
+`build_static_site.link_cities` over all the built cities: each site gets the others'
+years under `data/<city>/<year>.json`, and its `config.js` gets `CITY` (its own) and
+`CITIES` (id, place, timezone, data path of each). `sw.js` keeps them all, so a phone can
+switch offline; that is about 65 KB gzipped per city and year. The city under the daily
+list's title becomes a list of them. Choosing one asks first, then `Site.chooseCity()`
+stores it in `localStorage` under `sakina-city:<device name>` (empty for the public app,
+so each app keeps its own) and reloads. `Site.applyCity()` runs before any page reads
+`DATA`, `TIMEZONE` or `PLACE`, so the countdown follows too. The site's own city is never
+stored. In the app a device hands out, the site's own city is the device's; any other
+shows a yellow line under the name linking straight back to it. Only the phone's view
+changes; the device keeps its table. A device's own pages list no cities.
+
 **Nothing is built by hand.** `.github/workflows/sakina-static-website.yml` runs the tests,
 runs `build.py` and commits any change to `public/` on main:
 

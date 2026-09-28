@@ -325,6 +325,45 @@ check("public_sites.json matches the city folders - rerun build.py after adding 
 check("a table maps to its city's site", shipped.get("دمشق.csv"),
       "https://sakina-damascus.pages.dev")
 
+print("8. every site carries every city")
+sys.path.insert(0, os.path.dirname(BUILDER))
+import build_static_site  # noqa: E402
+
+LINKED = {"berlin": (OUT, "برلين", "Europe/Berlin"),
+          "damascus": (DAMASCUS, "دمشق", "Asia/Damascus")}
+build_static_site.link_cities(LINKED, "berlin")
+build_static_site.link_cities(LINKED, "berlin")
+check("the other city's years sit under its name",
+      sorted(os.listdir(os.path.join(OUT, "data", "damascus"))), ["2026.json"])
+check("copied as they are",
+      open(os.path.join(OUT, "data", "damascus", "2026.json"), "rb").read(),
+      open(os.path.join(DAMASCUS, "data", "2026.json"), "rb").read())
+check("the site's own city is not copied into itself",
+      os.path.exists(os.path.join(OUT, "data", "berlin")), False)
+config_js = open(os.path.join(OUT, "static", "config.js"), encoding="utf-8").read()
+check_true("config.js names the site's own city", 'window.CITY = "berlin";' in config_js)
+cities_js = json.loads(config_js.split("window.CITIES = ", 1)[1].rstrip().rstrip(";"))
+check("config.js lists every city, once, linking twice",
+      [(c["id"], c["place"], c["timezone"], c["data"]) for c in cities_js],
+      [("berlin", "برلين", "Europe/Berlin", "/data/{year}.json"),
+       ("damascus", "دمشق", "Asia/Damascus", "/data/damascus/{year}.json")])
+check_true("and still reads its own years by default",
+           'window.DATA = "/data/{year}.json";' in config_js)
+check_true("sw.js keeps the other city's years for offline",
+           '"/data/damascus/2026.json"' in open(os.path.join(OUT, "sw.js"),
+                                                encoding="utf-8").read())
+
+for name in sakina_build.cities():
+    public = os.path.join(SAKINA, name, "public")
+    shipped_config = open(os.path.join(public, "static", "config.js"), encoding="utf-8").read()
+    listed = json.loads(shipped_config.split("window.CITIES = ", 1)[1].rstrip().rstrip(";"))
+    check(f"{name}'s site offers every city - rerun build.py",
+          [c["id"] for c in listed], list(sakina_build.cities()))
+    for other in sakina_build.cities():
+        if other != name:
+            check_true(f"{name}'s site has {other}'s years",
+                       os.path.isdir(os.path.join(public, "data", other)))
+
 shutil.rmtree(ROOT, ignore_errors=True)
 
 print()

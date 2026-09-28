@@ -125,6 +125,76 @@ a { color: var(--accent); }
     margin: 0 0 1rem;
 }
 
+/* The city's name as the list of every city the site carries. */
+.city-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    padding: .15rem .6rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--card);
+}
+
+.city-pick select {
+    appearance: none;
+    -webkit-appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 1rem;
+    padding: 0 .1rem;
+    cursor: pointer;
+}
+
+.city-pick svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.5;
+    color: var(--muted);
+}
+
+.sub.above-diff { margin-bottom: .6rem; }
+
+.city-diff {
+    margin: 0 0 1.2rem;
+    padding: .5rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    color: #FACC15;
+    font-size: .9rem;
+    text-align: center;
+}
+
+.city-diff a { color: #FACC15; }
+
+/* Asked before the city changes, so a stray tap on the list changes nothing. */
+.guide.confirm { padding-bottom: 1rem; }
+
+.guide-card p { margin: .4rem 0; }
+
+.guide-card .confirm-note {
+    font-size: .88rem;
+    color: var(--muted);
+}
+
+.confirm-actions {
+    display: flex;
+    gap: .8rem;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.confirm-actions .yes {
+    border-color: transparent;
+    background: #16A34A;
+    color: #fff;
+}
+
 /* Safari keeps "Add to Home Screen" in its own share menu, where no page can reach, so
    an iPhone is shown the way there over the page, pointing down to Safari's toolbar. */
 .guide {
