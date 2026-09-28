@@ -1840,8 +1840,8 @@ device only hands out its address:
   (`targetAddressSpace: "local"` - Local Network Access, one permission prompt; CORS
   below). Unreachable, it says the device is out of reach; reachable but refusing - an
   older release - it opens `http://<name>.local/settings/` instead. Safari cannot fetch
-  `http://` from an `https://` page at all, nor check the wifi, so there the icon links
-  straight to `http://<name>.local/settings/`; off the wifi Safari says it cannot open it.
+  `http://` from an `https://` page at all, nor check the wifi, so there the icon says settings
+  work on the device's wifi only and offers `http://<name>.local/settings/` as a link.
 - The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
   lets `PUBLIC_APP_ORIGIN` (`https://[<preview>.]sakina-<city>.pages.dev`) call
   `PUBLIC_APP_PATHS` - `/api/mute`, `/api/device`, `/api/settings`, `/api/apply`, nothing

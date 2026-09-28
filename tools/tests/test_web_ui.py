@@ -746,10 +746,9 @@ check_true("Chrome asks the device first, as a local-network request",
            'targetAddressSpace: "local"' in app_js and 'mode: "no-cors"' in app_js)
 check_true("on Chrome the app opens its own settings page, which talks to the device",
            "if (owner && !Site.canAskDevice()) {" in home)
-# Safari cannot check the wifi, so a note there read as an error even on the device's wifi.
-check_true("elsewhere settings goes straight to the device's /settings/",
-           'document.querySelector("#to-settings").href = `http://${owner}.local/settings/`;'
-           in home and "openOnDevice" not in app_js)
+check_true("elsewhere settings says where it works and links the device's /settings/",
+           "`http://${owner}.local/settings/`, \"فتح الإعدادات\"" in home
+           and "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز." in home)
 settings_page = get("/settings/")[1].decode("utf-8")
 check_true("the settings page asks the device itself when it is in the app",
            "const api = owner ? (path, options) => Site.deviceJson(owner, path, options)"

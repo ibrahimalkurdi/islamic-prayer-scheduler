@@ -27,6 +27,7 @@
     </nav>
 </header>
 <p class="sub hidden" id="place"></p>
+<div class="note hidden" id="settings-note"></div>
 
 <div class="install app-install hidden" id="app-install">
     <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
@@ -270,10 +271,15 @@ refreshVersion();
 const owner = Site.ownerHost();
 if (window.DEVICE || owner) document.querySelector("#to-settings").classList.remove("hidden");
 /* Chrome opens the app's own settings page, which talks to the device directly. Safari
-   can neither reach the device nor check the wifi, so there it goes straight to the
-   device's own page; off its wifi Safari says it cannot open it. */
+   can neither reach the device nor check the wifi, so there the gear says where settings
+   work and the link under it opens the device's own page. */
 if (owner && !Site.canAskDevice()) {
-    document.querySelector("#to-settings").href = `http://${owner}.local/settings/`;
+    document.querySelector("#to-settings").addEventListener("click", (event) => {
+        event.preventDefault();
+        Site.noteSayer("#settings-note")("",
+            "الإعدادات متاحة فقط عند الاتصال بشبكة الواي فاي الخاصة بالجهاز.",
+            `http://${owner}.local/settings/`, "فتح الإعدادات");
+    });
 }
 
 /* The page a device's install button opens installs itself. Chrome hands over its install
