@@ -534,10 +534,11 @@ button.ghost {
 .back-to-app {
     margin-bottom: 1rem;
     padding: .7rem 1rem;
-    border: 1px solid var(--border);
+    border: 1px solid #EAB308;
     border-radius: 12px;
-    background: var(--card);
-    color: var(--text);
+    background: #FACC15;
+    color: #0F172A;
+    font-weight: 700;
     text-align: center;
 }
 
