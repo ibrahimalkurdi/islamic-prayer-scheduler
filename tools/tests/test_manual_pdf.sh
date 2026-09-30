@@ -11,6 +11,9 @@ trap 'rm -rf "$WORK"' EXIT
 fail=0
 chk() { if [ "$2" = "$3" ]; then echo "  ✓ $1"; else echo "  ✗ $1 — expected $3, got $2"; fail=1; fi; }
 
+COVER_PNG="$REPO_ROOT/scheduler-official-touch-screen-with-raspberry-pi-4/assets/manual/cover.png"
+COVER_BEFORE="$(md5sum < "$COVER_PNG" 2> /dev/null)"
+
 echo "build"
 bash "$REPO_ROOT/tools/build_manual_pdf.sh" "$WORK/manual.pdf" > "$WORK/build.log" 2>&1
 chk "build_manual_pdf.sh succeeds" "$?" "0"
@@ -41,7 +44,8 @@ def words(p):
 def footer(p):
     return " ".join(t for _, y0, _, _, t in words(p) if y0 > 800) or None
 
-chk("cover has no page number", footer(1), None)
+# The cover prints its date at the foot; a page number is a number on its own.
+chk("cover has no page number", (footer(1) or "").isdigit(), False)
 chk("index has no page number", footer(2), None)
 chk("first manual page is numbered 1", footer(3), "1")
 wrong = [p for p in range(3, pages + 1) if footer(p) != str(p - 2)]
@@ -63,6 +67,21 @@ chk("each index number is the number on the page its link opens", mismatched, []
 sys.exit(1 if fail else 0)
 EOF
 
+echo "a device's copy"
+bash "$REPO_ROOT/tools/build_manual_pdf.sh" --device louay "$WORK/device.pdf" > "$WORK/device.log" 2>&1
+chk "build_manual_pdf.sh --device succeeds" "$?" "0"
+COVER="$(pdftotext -f 1 -l 1 "$WORK/device.pdf" - 2> /dev/null)"
+chk "its cover names the device's address" "$(grep -c 'http://louay.local' <<< "$COVER")" "1"
+SETUP_PAGE="$(grep -o 'صفحة[^0-9]*[0-9]\+' <<< "$COVER" | grep -o '[0-9]\+$')"
+SETUP_AT="$(for p in $(seq 3 "$PAGES"); do pdftotext -f "$p" -l "$p" "$WORK/manual.pdf" - | grep -q 'تثبيت التطبيق على الهاتف' && { echo $((p - 2)); break; }; done)"
+chk "and the page the phone steps start on" "$SETUP_PAGE" "$SETUP_AT"
+chk "the shared manual's cover points at hostname.local" "$(pdftotext -f 1 -l 1 "$WORK/manual.pdf" - | grep -c 'http://hostname.local')" "1"
+chk "and names the same page" "$(pdftotext -f 1 -l 1 "$WORK/manual.pdf" - | grep -o 'صفحة[^0-9]*[0-9]\+' | grep -o '[0-9]\+$')" "$SETUP_AT"
+chk "a build written elsewhere leaves the markdown's cover image alone" "$(md5sum < "$COVER_PNG" 2> /dev/null)" "$COVER_BEFORE"
+chk "the markdown's cover image has no white edge" "$(convert "$COVER_PNG" -gravity south -crop x1+0+0 -format '%[fx:mean < 0.2]' info: 2> /dev/null)" "1"
+bash "$REPO_ROOT/tools/build_manual_pdf.sh" --device 'bad name' "$WORK/bad.pdf" > /dev/null 2>&1
+chk "a device name that is not a host name is refused" "$?" "1"
+
 echo "render_manual.py"
 VENV_PY="$REPO_ROOT/tools/manual_pdf/.venv/bin/python"
 printf '# الفهرس\n\n- [لا يوجد](#لا-يوجد)\n\n---\n\n# عنوان\n' > "$WORK/bad.md"
@@ -72,5 +91,10 @@ chk "and names the link" "$(grep -c 'لا-يوجد' "$WORK/bad.log")" "1"
 printf '# عنوان\n\nنص\n' > "$WORK/no-index.md"
 "$VENV_PY" "$REPO_ROOT/tools/manual_pdf/render_manual.py" "$WORK/no-index.md" "$WORK/no-index.html" > /dev/null 2>&1
 chk "a manual without an index is refused" "$?" "1"
+printf '# عنوان\n\n> [!WARNING]\n> **مهم**\n>\n> نص\n\n# الفهرس\n\n- [عنوان](#عنوان)\n\n---\n' > "$WORK/warning.md"
+"$VENV_PY" "$REPO_ROOT/tools/manual_pdf/render_manual.py" "$WORK/warning.md" "$WORK/warning.html" > /dev/null 2>&1
+chk "a [!WARNING] note becomes the yellow box" "$(grep -c '<blockquote class="warning">' "$WORK/warning.html")" "1"
+chk "and its marker is not printed" "$(grep -c '\[!WARNING\]' "$WORK/warning.html")" "0"
+chk "the manual's first page has the wifi note" "$(pdftotext -f 3 -l 3 "$WORK/manual.pdf" - | grep -c 'وسماعة البلوتوث')" "1"
 
 [ "$fail" -eq 0 ] && echo "all passed" || { echo "FAILED"; exit 1; }

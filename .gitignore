@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 tools/manual_pdf/.venv/
 
+# A device owner's own copy of the user manual, with a QR code for their device -
+# tools/build_manual_pdf.sh --device. Handed to them, never committed.
+DR_LOUAY_USER_MANUAL_AR.pdf

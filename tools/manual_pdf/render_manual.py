@@ -1,6 +1,10 @@
 """Turn USER_MANUAL_AR.md into the HTML Chrome prints as the body of the PDF.
 
     render_manual.py <manual.md> <out.html> [pages.json]
+    render_manual.py --section-id <manual.md> <slug>
+
+The second form prints the short id of the heading the index links to as #<slug>, so the
+build can look its page up in pages.json.
 
 The index (# الفهرس) is lifted out of the flow onto a page of its own, ahead of the title.
 Headings get short ids (s1, s2, ...) because Chrome turns every id into a named PDF
@@ -44,9 +48,13 @@ blockquote, pre, p[align=center] { break-before: avoid; }
 p:has(+ blockquote), p:has(+ p[align=center]), p:has(+ table), p:has(+ ul), p:has(+ ol), p:has(+ pre) { break-after: avoid; }
 li { break-inside: avoid; }
 .keep { break-inside: avoid; }
+blockquote.warning { border: 1px solid #d4a72c; border-right-width: 5px; background: #fff8c5; color: #1f2328; padding: 8px 14px; border-radius: 6px; margin: 10px 0 14px; }
+blockquote.warning img { display: block; width: 78%; margin: 6px auto 2px; border-radius: 4px; }
+blockquote.warning ol { margin-bottom: 4px; }
 img[src*="assets/manual/app-"] { width: 60%; height: auto; }
 img[src*="assets/manual/settings-"] { width: 56%; height: auto; }
-img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"] { width: 160px; height: auto; }
+img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"], img[src*="assets/manual/phone-"] { width: 160px; height: auto; }
+img[src*="assets/manual/phone-home-"] { width: 250px; height: auto; }
 p { orphans: 3; widows: 3; }
 .toc { break-after: page; font-size: 12pt; line-height: 1.45; }
 .toc h1 { margin-top: 0; }
@@ -73,7 +81,7 @@ def github_slug(text: str) -> str:
 
 
 def keep_together(body: str) -> str:
-    body = re.sub(r"(<p>(?:(?!<p\b).)*?:</p>)\s*(<(ul|ol)>.*?</\3>(?:\s*<blockquote>.*?</blockquote>)?)",
+    body = re.sub(r"(<p>(?:(?!<p\b).)*?:</p>)\s*(<(ul|ol|table)>.*?</\3>(?:\s*<blockquote>.*?</blockquote>)?)",
                   r'<div class="keep">\1\n\2</div>', body, flags=re.S)
     return re.sub(r"(<(p|table|pre|ul|ol)\b(?:(?!<\2\b).)*?</\2>)\s*(<blockquote>.*?</blockquote>)",
                   r'<div class="keep">\1\n\3</div>', body, flags=re.S)
@@ -115,12 +123,19 @@ def lift_toc(body: str, short: dict[str, str], pages: dict[str, int]) -> str:
     return f'<section class="toc">{toc}</section>' + body.replace(m.group(0), "", 1)
 
 
-def render(md_path: Path, pages: dict[str, int]) -> str:
+def html_with_ids(md_path: Path) -> tuple[str, dict[str, str]]:
     src = md_path.read_text(encoding="utf-8")
     src = re.sub(r'^<div dir="rtl">\s*', "", src)
+    # The cover image the markdown opens with is the PDF's own cover page.
+    src = re.sub(r'^<p align="center"><img src="assets/manual/cover\.png"[^>]*></p>\s*', "", src)
     src = re.sub(r"\s*</div>\s*$", "\n", src)
     body = keep_together(markdown.markdown(src, extensions=["tables", "fenced_code"]))
-    body, short = assign_ids(body)
+    body = re.sub(r"<blockquote>\s*<p>\[!WARNING\]\s*", '<blockquote class="warning">\n<p>', body)
+    return assign_ids(body)
+
+
+def render(md_path: Path, pages: dict[str, int]) -> str:
+    body, short = html_with_ids(md_path)
     body = lift_toc(body, short, pages)
     base = md_path.resolve().parent.as_uri() + "/"
     return (f'<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8">'
@@ -128,6 +143,12 @@ def render(md_path: Path, pages: dict[str, int]) -> str:
 
 
 def main() -> None:
+    if len(sys.argv) == 4 and sys.argv[1] == "--section-id":
+        short = html_with_ids(Path(sys.argv[2]))[1]
+        if sys.argv[3] not in short:
+            raise SystemExit(f"render_manual: no heading #{sys.argv[3]}")
+        print(short[sys.argv[3]])
+        return
     if len(sys.argv) not in (3, 4):
         raise SystemExit(__doc__)
     md_path, out = Path(sys.argv[1]), Path(sys.argv[2])
