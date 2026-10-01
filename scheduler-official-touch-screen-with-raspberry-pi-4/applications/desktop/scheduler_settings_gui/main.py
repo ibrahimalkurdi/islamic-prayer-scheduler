@@ -56,6 +56,9 @@ DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Desktop")
 MAIN_DIR = os.path.join(DESKTOP_DIR, "scheduler")
 
 SETTINGS_INI_FILE = os.path.join(MAIN_DIR, "config", "config.ini")
+# What a new device starts with and what «إعادة ضبط الإعدادات» puts back. Shipped with
+# every release, unlike config.ini, which is the owner's and never travels.
+DEFAULT_SETTINGS_FILE = os.path.join(MAIN_DIR, "config", "default-config.ini")
 QURAN_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "quran")
 APPLY_SETTINGS_SCRIPT_FILE = os.path.join(MAIN_DIR, "config", "scripts", "apply_settings.sh")
 APPLY_SETTINGS_LOG_FILE = os.path.join(MAIN_DIR, "logs", "apply_settings.log")
@@ -82,6 +85,10 @@ from shared.settings_rules import (
     EXPECTED_CSV_HEADER, csv_is_valid_prayer_format, detect_csv_format, version_key,
     duha_time_is_makrooh as duha_rule,
     athkar_elsabah_conflicts_with_dhuhr as athkar_rule,
+    athkar_elsabah_clock_outside_fajr_dhuhr as athkar_clock_rule,
+    athkar_elsabah_mode as athkar_mode_of,
+    ATHKAR_ELSABAH_MODE_CLOCK, ATHKAR_ELSABAH_MODE_AFTER_FAJR,
+    DEFAULT_ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_CLOCK,
     time_to_minutes as minutes_of,
 )
 
@@ -221,6 +228,8 @@ TAHAJJUD_TIME = "tahajjud_time"
 
 ATHKAR_ELSABAH_ENABLE = "enable_athkar_elsabah"
 ATHKAR_ELSABAH_TIME = "athkar_elsabah_time"
+ATHKAR_ELSABAH_MODE = "athkar_elsabah_mode"
+ATHKAR_ELSABAH_CLOCK = "athkar_elsabah_clock"
 
 ATHKAR_ELMASA_ENABLE = "enable_athkar_elmasa"
 ATHKAR_ELMASA_TIME = "athkar_elmasa_time"
@@ -229,7 +238,7 @@ DUHA_ENABLE = "enable_duha_prayer"
 DUHA_TIME = "duha_time"
 
 QURAN_ENABLE = "enable_listen_to_quran"
-DEFAULT_CRON = "06:30"
+DEFAULT_CRON = "07:00"
 
 FRIDAY_QURAN_ENABLE = "enable_friday_quran"
 FRIDAY_QURAN_TIME = "friday_quran_time"
@@ -249,7 +258,7 @@ DAYLIGHT_SAVING_TIMEZONE = "daylight_saving_timezone"
 DEFAULTS_INT = {
     TAHAJJUD_TIME: 20,
     DUHA_TIME: 60,
-    ATHKAR_ELSABAH_TIME: 240,
+    ATHKAR_ELSABAH_TIME: 210,
     ATHKAR_ELMASA_TIME: 20,
     FRIDAY_QURAN_TIME: 60,
 }
@@ -271,6 +280,18 @@ DEFAULTS_BOOL = {
 ATHKAR_ELSABAH_MAX_MINUTES = 1439  # minutes in a day - 1
 
 PRAYER_PREFIX = "enable_prayer_"
+
+
+def read_default_settings():
+    """The [Settings] of DEFAULT_SETTINGS_FILE, or {} when it is missing or unreadable -
+    then the constants above are the defaults, as they were before the file shipped."""
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(DEFAULT_SETTINGS_FILE, encoding="utf-8")
+    except configparser.Error as error:
+        print("Failed to read the default settings:", error)
+        return {}
+    return dict(parser["Settings"]) if parser.has_section("Settings") else {}
 
 # Every time this app puts on screen is a 12-hour clock, matching the daily prayer page
 # on the wall display. Only the display: the values written into config.ini stay 24-hour,
@@ -856,6 +877,34 @@ class ControlApp(QMainWindow):
             max_val=ATHKAR_ELSABAH_MAX_MINUTES
         )
 
+        # A fixed time or minutes after Fajr, chosen above the value it qualifies, the
+        # same way Surat Al-Kahf's before/after sits above its minutes.
+        self.athkar_elsabah_mode_combo = QComboBox()
+        self.athkar_elsabah_mode_combo.setLayoutDirection(Qt.RightToLeft)
+        self.athkar_elsabah_mode_combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        self.athkar_elsabah_mode_combo.setFixedHeight(45)
+        # As wide as its longest choice, not the row: stretched, the choice it shows lands
+        # at the far end of the box, away from the label it answers.
+        self.athkar_elsabah_mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.athkar_elsabah_mode_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.athkar_elsabah_mode_combo.addItem("وقت محدد يوميًا", ATHKAR_ELSABAH_MODE_CLOCK)
+        self.athkar_elsabah_mode_combo.addItem("بعد صلاة الفجر", ATHKAR_ELSABAH_MODE_AFTER_FAJR)
+        athkar_elsabah_form.insertRow(0, "موعد الأذكار", self.athkar_elsabah_mode_combo)
+
+        clock_hour, clock_minute = self.athkar_elsabah_clock_parts(
+            self.config["Settings"].get(ATHKAR_ELSABAH_CLOCK, DEFAULT_ATHKAR_ELSABAH_CLOCK))
+        self.athkar_elsabah_hour_spin = self.create_spinbox(clock_hour, 0, 23)
+        self.athkar_elsabah_min_spin = self.create_spinbox(clock_minute, 0, 59)
+        self.add_spinbox_row(athkar_elsabah_form, "الساعة", self.athkar_elsabah_hour_spin)
+        self.add_spinbox_row(athkar_elsabah_form, "الدقيقة", self.athkar_elsabah_min_spin)
+
+        self.select_athkar_elsabah_mode(
+            self.config["Settings"].get(ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_MODE))
+        self.athkar_elsabah_form = athkar_elsabah_form
+        self.athkar_elsabah_mode_combo.currentIndexChanged.connect(
+            self.show_athkar_elsabah_mode)
+        self.show_athkar_elsabah_mode()
+
         main_layout.addWidget(self.athkar_elsabah_frame)
 
 
@@ -899,7 +948,7 @@ class ControlApp(QMainWindow):
             hour_val = int(hour)
             minute_val = int(minute)
         except (ValueError, AttributeError):
-            hour_val, minute_val = 6, 30
+            hour_val, minute_val = (int(part) for part in DEFAULT_CRON.split(":"))
 
 
         self.cron_hour_spin = self.create_spinbox(hour_val, 0, 23)
@@ -969,6 +1018,10 @@ class ControlApp(QMainWindow):
         self.friday_quran_position_combo.setLayoutDirection(Qt.RightToLeft)
         self.friday_quran_position_combo.setStyleSheet("font-size: 18px; padding: 5px;")
         self.friday_quran_position_combo.setFixedHeight(45)
+        # As wide as its longest choice, not the row: stretched, the choice it shows lands
+        # at the far end of the box, away from the label it answers.
+        self.friday_quran_position_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.friday_quran_position_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.friday_quran_position_combo.addItem("بعد صلاة الجمعة", FRIDAY_QURAN_AFTER)
         self.friday_quran_position_combo.addItem("قبل صلاة الجمعة", FRIDAY_QURAN_BEFORE)
         self.select_friday_quran_position(
@@ -1048,6 +1101,9 @@ class ControlApp(QMainWindow):
         self.setup_checkbox_link(self.tahajjud_chk, self.tahajjud_spin)
         self.setup_checkbox_link(self.duha_chk, self.duha_spin)
         self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_spin)
+        self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_mode_combo)
+        self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_hour_spin)
+        self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_min_spin)
         self.setup_checkbox_link(self.athkar_elmasa_chk, self.athkar_elmasa_spin)
         self.setup_checkbox_link(self.cron_chk, self.cron_hour_spin)
         self.setup_checkbox_link(self.cron_chk, self.cron_min_spin)
@@ -1062,6 +1118,9 @@ class ControlApp(QMainWindow):
         self.duha_spin.valueChanged.connect(self.update_all_time_labels)
         self.tahajjud_spin.valueChanged.connect(self.update_all_time_labels)
         self.athkar_elsabah_spin.valueChanged.connect(self.update_all_time_labels)
+        self.athkar_elsabah_mode_combo.currentIndexChanged.connect(self.update_all_time_labels)
+        self.athkar_elsabah_hour_spin.valueChanged.connect(self.update_all_time_labels)
+        self.athkar_elsabah_min_spin.valueChanged.connect(self.update_all_time_labels)
         self.athkar_elmasa_spin.valueChanged.connect(self.update_all_time_labels)
         self.friday_quran_spin.valueChanged.connect(self.update_all_time_labels)
         self.friday_quran_position_combo.currentIndexChanged.connect(self.update_all_time_labels)
@@ -1127,14 +1186,62 @@ class ControlApp(QMainWindow):
         dhuhr = self.time_to_minutes(row["Dhuhr"])
         return sunrise, dhuhr
 
+    def selected_athkar_elsabah_mode(self):
+        return athkar_mode_of(self.athkar_elsabah_mode_combo.currentData())
+
+    def select_athkar_elsabah_mode(self, value):
+        index = self.athkar_elsabah_mode_combo.findData(athkar_mode_of(value))
+        self.athkar_elsabah_mode_combo.setCurrentIndex(max(index, 0))
+
+    def athkar_elsabah_clock_parts(self, value):
+        """(hour, minute) of a saved HH:MM, or of the default when it is not one."""
+        try:
+            hour, minute = (int(part) for part in str(value).split(":"))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return hour, minute
+        except ValueError:
+            pass
+        hour, minute = DEFAULT_ATHKAR_ELSABAH_CLOCK.split(":")
+        return int(hour), int(minute)
+
+    def athkar_elsabah_clock_minutes(self):
+        return self.athkar_elsabah_hour_spin.value() * 60 + self.athkar_elsabah_min_spin.value()
+
+    def show_athkar_elsabah_mode(self):
+        """Only the half of the choice in use is shown. The other keeps its value, so
+        switching back finds it where it was left."""
+        fixed = self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK
+        for widget, visible in ((self.athkar_elsabah_spin, not fixed),
+                                (self.athkar_elsabah_hour_spin, fixed),
+                                (self.athkar_elsabah_min_spin, fixed)):
+            widget.setVisible(visible)
+            label = self.athkar_elsabah_form.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+
+    def athkar_elsabah_minutes_today(self, times):
+        """When Athkar Elsabah plays today, as 01_add_fields.py will place it: a fixed
+        time is moved inside Fajr..Dhuhr on a day it would not fit. Returns
+        (minutes, moved)."""
+        if self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK:
+            wanted = self.athkar_elsabah_clock_minutes()
+            when = min(max(wanted, times["fajr"] + 1), times["dhuhr"] - 1)
+            return when, when != wanted
+        return times["fajr"] + self.athkar_elsabah_spin.value(), False
+
     def athkar_elsabah_conflicts_with_dhuhr(self):
-        """Athkar Elsabah must land strictly before Dhuhr. Checked against today's
-        actual Fajr/Dhuhr - the same times shown in the label under the spinbox.
-        Shows the warning and returns True when the current value is invalid."""
+        """Athkar Elsabah must land strictly before Dhuhr - and, as a fixed time, after
+        Fajr. Checked against today's actual Fajr/Dhuhr, the same times shown in the label
+        under the section. Shows the warning and returns True when the value is invalid."""
         times = self.get_today_prayer_times()
-        conflicts, message = athkar_rule(self.athkar_elsabah_spin.value(),
-                                         times["fajr"], times["dhuhr"],
-                                         self.minutes_to_clock)
+        if self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK:
+            conflicts, message = athkar_clock_rule(self.athkar_elsabah_clock_minutes(),
+                                                   times["fajr"], times["dhuhr"],
+                                                   self.minutes_to_clock)
+        else:
+            conflicts, message = athkar_rule(self.athkar_elsabah_spin.value(),
+                                             times["fajr"], times["dhuhr"],
+                                             self.minutes_to_clock)
         if conflicts:
             arabic_warning(self, "تنبيه", message)
         return conflicts
@@ -1191,8 +1298,11 @@ class ControlApp(QMainWindow):
             tahajjud_time = fajr - self.tahajjud_spin.value()
             self.tahajjud_time_label.setText(f"وقت صلاة التهجد: {self.minutes_to_clock(tahajjud_time)}")
             # Athkar Sabh
-            athkar_sabah_time = fajr + self.athkar_elsabah_spin.value()
-            self.athkar_elsabah_time_label.setText(f"وقت أذكار الصباح: {self.minutes_to_clock(athkar_sabah_time)}")
+            athkar_sabah_time, moved = self.athkar_elsabah_minutes_today(times)
+            athkar_sabah_text = f"وقت أذكار الصباح: {self.minutes_to_clock(athkar_sabah_time)}"
+            if moved:
+                athkar_sabah_text += " (تم تعديله ليقع بين الفجر والظهر)"
+            self.athkar_elsabah_time_label.setText(athkar_sabah_text)
             # Athkar Masa
             maghrib = times["maghrib"]
             athkar_masa_time = maghrib + self.athkar_elmasa_spin.value()
@@ -1316,7 +1426,8 @@ class ControlApp(QMainWindow):
             times['tahajjud'] = f"{tahajjud_minutes//60:02d}:{tahajjud_minutes%60:02d}"
 
             # Athkar Elsabah: fajr + athkar_elsabah_spin
-            athkar_sabah_minutes = fajr + self.athkar_elsabah_spin.value()
+            athkar_sabah_minutes, _ = self.athkar_elsabah_minutes_today(
+                {"fajr": fajr, "dhuhr": dhuhr})
             times['athkar_elsabah'] = f"{athkar_sabah_minutes//60:02d}:{athkar_sabah_minutes%60:02d}"
 
             # Athkar Elmasa: maghrib + athkar_elmasa_spin
@@ -1367,6 +1478,20 @@ class ControlApp(QMainWindow):
                 Qt.Checked if item.text() in checked_set else Qt.Unchecked
             )
 
+
+    def reset_audio_list(self, list_widget, config_key):
+        """Tick the files the defaults name, among those this device has. A device with
+        none of them gets every file in the folder ticked, so a reset never leaves an
+        event with nothing to play."""
+        wanted = audio_lists.checked_from_config(self.config["Settings"].get(config_key, ""))
+        names = {list_widget.item(i).text() for i in range(list_widget.count())}
+        if not wanted & names:
+            wanted = names
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(Qt.Checked if item.text() in wanted else Qt.Unchecked)
+        self.save_audio_checked_state(list_widget, config_key)
 
     def save_audio_checked_state(self, list_widget, config_key):
         checked_files = []
@@ -2326,6 +2451,11 @@ class ControlApp(QMainWindow):
         self.tahajjud_spin.setValue(int(s[TAHAJJUD_TIME]))
         self.duha_spin.setValue(int(s[DUHA_TIME]))
         self.athkar_elsabah_spin.setValue(int(s[ATHKAR_ELSABAH_TIME]))
+        self.select_athkar_elsabah_mode(s.get(ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_MODE))
+        clock_hour, clock_minute = self.athkar_elsabah_clock_parts(
+            s.get(ATHKAR_ELSABAH_CLOCK, DEFAULT_ATHKAR_ELSABAH_CLOCK))
+        self.athkar_elsabah_hour_spin.setValue(clock_hour)
+        self.athkar_elsabah_min_spin.setValue(clock_minute)
         self.athkar_elmasa_spin.setValue(int(s[ATHKAR_ELMASA_TIME]))
         self.friday_quran_spin.setValue(int(s[FRIDAY_QURAN_TIME]))
         self.select_friday_quran_position(
@@ -2335,14 +2465,19 @@ class ControlApp(QMainWindow):
         for key, chk in self.prayer_checkboxes.items():
             chk.setChecked(s.getboolean(key))
 
+        # Daylight saving
+        self.dst_chk.setChecked(s.getboolean(DAYLIGHT_SAVING_ENABLE, fallback=False))
+        self.select_saved_timezone()
+
         # Cron time
         try:
             hour, minute = s["listen_to_quran"].split(":")
             self.cron_hour_spin.setValue(int(hour))
             self.cron_min_spin.setValue(int(minute))
         except Exception:
-            self.cron_hour_spin.setValue(6)
-            self.cron_min_spin.setValue(30)
+            hour, minute = DEFAULT_CRON.split(":")
+            self.cron_hour_spin.setValue(int(hour))
+            self.cron_min_spin.setValue(int(minute))
 
         # Quran audio list
         for i in range(self.quran_audio_list.count()):
@@ -2363,6 +2498,14 @@ class ControlApp(QMainWindow):
 
         s = self.config["Settings"]
 
+        # ---------------- The shipped defaults, for any key this file lacks ----------------
+        # Not the audio lists: those name files a device may not have, and a list naming
+        # none of its files would leave the event silent. They fall through to "every file
+        # in the folder" below, as they always have.
+        for key, value in read_default_settings().items():
+            if not key.endswith("_audio_checked"):
+                s.setdefault(key, value)
+
         # ---------------- Integer defaults ----------------
         for key, value in DEFAULTS_INT.items():
             s.setdefault(key, str(value))
@@ -2373,6 +2516,10 @@ class ControlApp(QMainWindow):
 
         # ---------------- Quran cron time ----------------
         s.setdefault("listen_to_quran", DEFAULT_CRON)
+
+        # ---------------- Athkar Elsabah: a fixed time unless chosen otherwise ----------------
+        s.setdefault(ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_MODE)
+        s.setdefault(ATHKAR_ELSABAH_CLOCK, DEFAULT_ATHKAR_ELSABAH_CLOCK)
 
         # ---------------- Surat Al-Kahf position ----------------
         s.setdefault(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION)
@@ -2434,6 +2581,9 @@ class ControlApp(QMainWindow):
         s[DUHA_TIME] = str(self.duha_spin.value())
         s[ATHKAR_ELSABAH_ENABLE] = str(self.athkar_elsabah_chk.isChecked())
         s[ATHKAR_ELSABAH_TIME] = str(self.athkar_elsabah_spin.value())
+        s[ATHKAR_ELSABAH_MODE] = self.selected_athkar_elsabah_mode()
+        s[ATHKAR_ELSABAH_CLOCK] = (f"{self.athkar_elsabah_hour_spin.value():02d}:"
+                                   f"{self.athkar_elsabah_min_spin.value():02d}")
         s[ATHKAR_ELMASA_ENABLE] = str(self.athkar_elmasa_chk.isChecked())
         s[ATHKAR_ELMASA_TIME] = str(self.athkar_elmasa_spin.value())
         s[QURAN_ENABLE] = str(self.cron_chk.isChecked())
@@ -2483,57 +2633,43 @@ class ControlApp(QMainWindow):
 
 
         try:
-            # Create fresh config with defaults
-            self.config = configparser.ConfigParser(interpolation=None)
-            self.config["Settings"] = {}
+            fresh = configparser.ConfigParser(interpolation=None)
+            fresh["Settings"] = {}
+            settings = fresh["Settings"]
 
             for k, v in DEFAULTS_INT.items():
-                self.config["Settings"][k] = str(v)
-
+                settings[k] = str(v)
             for k, v in DEFAULTS_BOOL.items():
-                self.config["Settings"][k] = str(v)
+                settings[k] = str(v)
+            settings["listen_to_quran"] = DEFAULT_CRON
+            settings[ATHKAR_ELSABAH_MODE] = DEFAULT_ATHKAR_ELSABAH_MODE
+            settings[ATHKAR_ELSABAH_CLOCK] = DEFAULT_ATHKAR_ELSABAH_CLOCK
+            settings[FRIDAY_QURAN_POSITION] = DEFAULT_FRIDAY_QURAN_POSITION
+            settings[DAYLIGHT_SAVING_ENABLE] = "False"
+            settings[DAYLIGHT_SAVING_TIMEZONE] = DEFAULT_TIMEZONE
+            settings.update(read_default_settings())
 
-            self.config["Settings"]["listen_to_quran"] = DEFAULT_CRON
-            self.config["Settings"]["quran_audio_checked"] = ""
-            self.config["Settings"][FRIDAY_QURAN_POSITION] = DEFAULT_FRIDAY_QURAN_POSITION
-            self.config["Settings"]["friday_quran_audio_checked"] = ""
+            # The prayer-times file is not a setting this button resets: the file on the
+            # Desktop stays as it is, and so does the record of where it came from.
+            for key in (PRAYER_SOURCE_LABEL_KEY, PRAYER_CSV_HASH_CONFIG_KEY):
+                value = self.config["Settings"].get(key, "")
+                if value:
+                    settings[key] = value
 
-            # --- NEW: Check all section checkboxes ---
-            self.tahajjud_chk.setChecked(True)
-            self.duha_chk.setChecked(True)
-            self.athkar_elsabah_chk.setChecked(True)
-            self.athkar_elmasa_chk.setChecked(True)
-            self.cron_chk.setChecked(True)
-            self.friday_quran_chk.setChecked(True)
+            self.config = fresh
 
-            # --- NEW: Check all prayer checkboxes ---
-            for chk in self.prayer_checkboxes.values():
-                chk.setChecked(True)
-
-            # --- NEW: Check all items in all audio lists ---
-            def check_all_items(lst):
-                for i in range(lst.count()):
-                    item = lst.item(i)
-                    if item.flags() & Qt.ItemIsUserCheckable:
-                        item.setCheckState(Qt.Checked)
-
-            check_all_items(self.quran_audio_list)
-            check_all_items(self.tahajjud_audio_list)
-            check_all_items(self.duha_audio_list)
-            check_all_items(self.athkar_elsabah_audio_list)
-            check_all_items(self.athkar_elmasa_audio_list)
-            check_all_items(self.friday_quran_audio_list)
-
-            for lst in self.prayer_audio_lists.values():
-                check_all_items(lst)
-                # Ensure items are enabled now that checkbox is checked
-                for i in range(lst.count()):
-                    item = lst.item(i)
-                    flags = item.flags()
-                    item.setFlags(flags | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-
-            # --- NEW: Update config with all checked Quran items ---
-            self.save_quran_audio_checked_state()
+            audio_lists_by_key = {
+                "quran_audio_checked": self.quran_audio_list,
+                "tahajjud_audio_checked": self.tahajjud_audio_list,
+                "duha_audio_checked": self.duha_audio_list,
+                "athkar_elsabah_audio_checked": self.athkar_elsabah_audio_list,
+                "athkar_elmasa_audio_checked": self.athkar_elmasa_audio_list,
+                "friday_quran_audio_checked": self.friday_quran_audio_list,
+            }
+            for prayer_key, list_widget in self.prayer_audio_lists.items():
+                audio_lists_by_key[f"{prayer_key}_audio_checked"] = list_widget
+            for config_key, list_widget in audio_lists_by_key.items():
+                self.reset_audio_list(list_widget, config_key)
 
             # Ensure config directory exists
             os.makedirs(os.path.dirname(SETTINGS_INI_FILE), exist_ok=True)

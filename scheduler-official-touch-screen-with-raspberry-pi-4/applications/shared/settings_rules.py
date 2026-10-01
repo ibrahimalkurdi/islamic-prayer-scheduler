@@ -55,6 +55,37 @@ def athkar_elsabah_conflicts_with_dhuhr(minutes_after_fajr, fajr_minutes, dhuhr_
                   "الرجاء اختيار عدد دقائق أقل.")
 
 
+# Athkar Elsabah is either a fixed clock time every day or a number of minutes after Fajr.
+# A fixed time is the default: it is what people mean by "after the morning Quran", and
+# it does not wander by hours across the year the way Fajr does.
+ATHKAR_ELSABAH_MODE_CLOCK = "clock"
+ATHKAR_ELSABAH_MODE_AFTER_FAJR = "after_fajr"
+ATHKAR_ELSABAH_MODES = (ATHKAR_ELSABAH_MODE_CLOCK, ATHKAR_ELSABAH_MODE_AFTER_FAJR)
+DEFAULT_ATHKAR_ELSABAH_MODE = ATHKAR_ELSABAH_MODE_CLOCK
+DEFAULT_ATHKAR_ELSABAH_CLOCK = "09:45"
+
+
+def athkar_elsabah_mode(value):
+    """The mode a config value names, or the default for anything else - a device that
+    has never saved one, or a hand-edited file."""
+    value = str(value or "").strip().lower()
+    return value if value in ATHKAR_ELSABAH_MODES else DEFAULT_ATHKAR_ELSABAH_MODE
+
+
+def athkar_elsabah_clock_outside_fajr_dhuhr(clock_minutes, fajr_minutes, dhuhr_minutes,
+                                            clock):
+    """A fixed Athkar Elsabah time must land strictly after Fajr and strictly before
+    Dhuhr. Checked against today's times, like the minutes-after-Fajr rule above; on the
+    days of the year it would not fit, 01_add_fields.py moves it inside. Returns
+    (outside, message)."""
+    if fajr_minutes < clock_minutes < dhuhr_minutes:
+        return False, ""
+
+    return True, (f"وقت أذكار الصباح ({clock(clock_minutes)}) يجب أن يكون بعد "
+                  f"صلاة الفجر ({clock(fajr_minutes)}) وقبل "
+                  f"صلاة الظهر ({clock(dhuhr_minutes)}).")
+
+
 def csv_is_valid_prayer_format(path):
     """Header matches EXPECTED_CSV_HEADER and there's at least one data row."""
     if not os.path.isfile(path):

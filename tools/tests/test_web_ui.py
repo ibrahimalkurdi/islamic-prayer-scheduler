@@ -408,6 +408,11 @@ check("an empty folder lists nothing",
       settings["audio"]["duha_audio_checked"]["available"], [])
 check_true("today's times are offered for the rules",
            settings["times"]["dhuhr"] == 12 * 60)
+# The fixture's config.ini predates the choice, which is every device on its first boot
+# of this release: it is offered as a fixed 9:45.
+check("Athkar Elsabah defaults to a fixed time",
+      (settings["values"]["athkar_elsabah_mode"], settings["values"]["athkar_elsabah_clock"]),
+      ("clock", "09:45"))
 
 print("10. a save writes exactly the keys it was given, and nothing else")
 before = open(INI, encoding="utf-8").read()
@@ -441,7 +446,8 @@ status, reply = post("/api/settings", {"duha_time": 350}, origin=BASE)
 check("Duha too close to sunrise is refused", status, 400)
 check_true("with the sunrise wording", "بعد طلوع الشمس" in reply["error"])
 
-status, reply = post("/api/settings", {"athkar_elsabah_time": 500}, origin=BASE)
+status, reply = post("/api/settings", {"athkar_elsabah_mode": "after_fajr",
+                                      "athkar_elsabah_time": 500}, origin=BASE)
 check("Athkar Elsabah past Dhuhr is refused", status, 400)
 check_true("naming both times", "وقت أذكار الصباح" in reply["error"])
 # Both times sit inside an Arabic sentence. Without the isolates the bidi algorithm lays
@@ -452,6 +458,22 @@ check("and each one is popped again", reply["error"].count("\u2069"), 2)
 check_true("the isolate opens immediately before the digits",
            "\u20661" in reply["error"] or "\u20662" in reply["error"]
            or any(f"\u2066{d}" in reply["error"] for d in "0123456789"))
+
+status, reply = post("/api/settings", {"athkar_elsabah_clock": "12:30"}, origin=BASE)
+check("a fixed Athkar Elsabah past Dhuhr is refused", status, 400)
+check_true("naming Fajr and Dhuhr", "صلاة الفجر" in reply["error"]
+           and "صلاة الظهر" in reply["error"])
+status, reply = post("/api/settings", {"athkar_elsabah_clock": "04:30"}, origin=BASE)
+check("and so is one before Fajr", status, 400)
+status, reply = post("/api/settings", {"athkar_elsabah_mode": "clock",
+                                      "athkar_elsabah_time": 500}, origin=BASE)
+check("minutes past Dhuhr are not checked while a fixed time is chosen", status, 200)
+status, reply = post("/api/settings", {"athkar_elsabah_time": 240}, origin=BASE)
+check("put back", status, 200)
+check("and only the mode it was sent was added",
+      [line for line in lines(open(INI, encoding="utf-8").read()) if line not in lines(after)],
+      ["athkar_elsabah_mode = clock"])
+after = open(INI, encoding="utf-8").read()
 
 print("12b. the countdown page carries the mute control inside the counter")
 _, body, _ = get("/countdown/")
@@ -545,6 +567,12 @@ status, _ = post("/api/settings", {"friday_quran_position": "sideways"}, origin=
 check("a bad position is refused", status, 400)
 status, _ = post("/api/settings", {"listen_to_quran": "25:99"}, origin=BASE)
 check("a bad clock is refused", status, 400)
+status, _ = post("/api/settings", {"athkar_elsabah_mode": "whenever"}, origin=BASE)
+check("a bad Athkar Elsabah mode is refused", status, 400)
+status, _ = post("/api/settings", {"athkar_elsabah_clock": "9.45"}, origin=BASE)
+check("and a bad Athkar Elsabah clock", status, 400)
+status, _ = post("/api/settings", {"athkar_elsabah_clock": ""}, origin=BASE)
+check("and an empty one - a fixed time always has one", status, 400)
 status, _ = post("/api/settings", {"duha_time": "-5"}, origin=BASE)
 check("a negative number is refused", status, 400)
 check("still nothing written", open(INI, encoding="utf-8").read(), after)
@@ -561,6 +589,22 @@ check("none ticked", status, 200)
 _, body, _ = get("/api/settings")
 check("and read back empty",
       json.loads(body)["audio"]["quran_audio_checked"]["checked"], [])
+
+print("14b. the Athkar Elsabah choice really round-trips")
+status, _ = post("/api/settings", {"athkar_elsabah_mode": "clock",
+                                  "athkar_elsabah_clock": "10:15"}, origin=BASE)
+check("a fixed 10:15 is accepted", status, 200)
+_, body, _ = get("/api/settings")
+values = json.loads(body)["values"]
+check("and read back", (values["athkar_elsabah_mode"], values["athkar_elsabah_clock"]),
+      ("clock", "10:15"))
+status, _ = post("/api/settings", {"athkar_elsabah_mode": "after_fajr"}, origin=BASE)
+check("minutes after Fajr are accepted", status, 200)
+_, body, _ = get("/api/settings")
+values = json.loads(body)["values"]
+check("and read back, keeping the fixed time for when it is chosen again",
+      (values["athkar_elsabah_mode"], values["athkar_elsabah_clock"]),
+      ("after_fajr", "10:15"))
 
 print("15. a save runs apply_settings.sh, off the request")
 deadline = datetime.now() + timedelta(seconds=20)

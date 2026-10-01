@@ -194,7 +194,8 @@ BOOL_KEYS = ("enable_tahajjud_prayer", "enable_duha_prayer", "enable_listen_to_q
              "enable_prayer_fajr", "enable_prayer_sunrise", "enable_prayer_dhuhr",
              "enable_prayer_asr", "enable_prayer_maghrib", "enable_prayer_isha",
              "enable_daylight_saving")
-TEXT_KEYS = ("listen_to_quran", "friday_quran_position", "daylight_saving_timezone")
+TEXT_KEYS = ("listen_to_quran", "friday_quran_position", "daylight_saving_timezone",
+             "athkar_elsabah_mode", "athkar_elsabah_clock")
 # Each audio list is a comma-separated set of file names from one event folder.
 AUDIO_KEYS = {
     "quran_audio_checked": "quran",
@@ -240,6 +241,9 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
         values[key] = section.getboolean(key, fallback=False)
     for key in TEXT_KEYS:
         values[key] = section.get(key, "")
+    values["athkar_elsabah_mode"] = settings_rules.athkar_elsabah_mode(
+        values["athkar_elsabah_mode"])
+    values["athkar_elsabah_clock"] = athkar_elsabah_clock(section)
 
     audio = {}
     for key, event in AUDIO_KEYS.items():
@@ -353,6 +357,10 @@ def apply_submission(ini_path, scheduler_dir, desktop_dir, submitted):
             raise Invalid("موضع سورة الكهف غير صالح")
         if key == "listen_to_quran" and value:
             _check_clock(value)
+        if key == "athkar_elsabah_mode" and value not in settings_rules.ATHKAR_ELSABAH_MODES:
+            raise Invalid("موعد أذكار الصباح غير صالح")
+        if key == "athkar_elsabah_clock":
+            _check_clock(value)
         staged[key] = value
 
     for key, event in AUDIO_KEYS.items():
@@ -384,6 +392,18 @@ def _as_bool(value):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("1", "true", "yes", "on", "checked")
+
+
+def athkar_elsabah_clock(section):
+    """The fixed Athkar Elsabah time this device has, or the default when it has none or
+    the file holds something that is not a time - the same fallback 01_add_fields.py
+    makes when it builds the schedule."""
+    value = section.get("athkar_elsabah_clock", "")
+    try:
+        _check_clock(value)
+    except Invalid:
+        return settings_rules.DEFAULT_ATHKAR_ELSABAH_CLOCK
+    return value
 
 
 def _check_clock(value):
@@ -421,7 +441,15 @@ def _check_rules(section, staged, scheduler_dir, desktop_dir):
     if makrooh:
         raise Invalid(message)
 
-    conflicts, message = settings_rules.athkar_elsabah_conflicts_with_dhuhr(
-        merged("athkar_elsabah_time"), times["fajr"], times["dhuhr"], minutes_to_clock)
+    mode = settings_rules.athkar_elsabah_mode(
+        staged.get("athkar_elsabah_mode", section.get("athkar_elsabah_mode", "")))
+    if mode == settings_rules.ATHKAR_ELSABAH_MODE_CLOCK:
+        clock_value = staged.get("athkar_elsabah_clock") or athkar_elsabah_clock(section)
+        hour, minute = clock_value.split(":")
+        conflicts, message = settings_rules.athkar_elsabah_clock_outside_fajr_dhuhr(
+            int(hour) * 60 + int(minute), times["fajr"], times["dhuhr"], minutes_to_clock)
+    else:
+        conflicts, message = settings_rules.athkar_elsabah_conflicts_with_dhuhr(
+            merged("athkar_elsabah_time"), times["fajr"], times["dhuhr"], minutes_to_clock)
     if conflicts:
         raise Invalid(message)

@@ -17,6 +17,11 @@ PRAYER_OUTPUT_CSV_FILE = os.path.join(CONFIG_DIR, "prayer_times.csv")
 DEFAULT_TAHAJJUD = 20
 DEFAULT_DUHA = 60
 DEFAULT_ATHKAR_ELSABAH = 60
+# Mirrors ATHKAR_ELSABAH_* in applications/shared/settings_rules.py.
+ATHKAR_ELSABAH_MODE_CLOCK = "clock"
+ATHKAR_ELSABAH_MODE_AFTER_FAJR = "after_fajr"
+DEFAULT_ATHKAR_ELSABAH_MODE = ATHKAR_ELSABAH_MODE_CLOCK
+DEFAULT_ATHKAR_ELSABAH_CLOCK = "09:45"
 DEFAULT_ATHKAR_ELMASA = 20
 
 # Read the config
@@ -27,12 +32,25 @@ if os.path.exists(SETTINGS_INI_FILE):
     duha_time = int(config.get('Settings', 'duha_time', fallback=DEFAULT_DUHA))
     athkar_elsabah_time = int(config.get('Settings', 'athkar_elsabah_time', fallback=DEFAULT_ATHKAR_ELSABAH))
     athkar_elmasa_time = int(config.get('Settings', 'athkar_elmasa_time', fallback=DEFAULT_ATHKAR_ELMASA))
+    athkar_elsabah_mode = config.get('Settings', 'athkar_elsabah_mode',
+                                     fallback=DEFAULT_ATHKAR_ELSABAH_MODE).strip().lower()
+    athkar_elsabah_clock = config.get('Settings', 'athkar_elsabah_clock',
+                                      fallback=DEFAULT_ATHKAR_ELSABAH_CLOCK).strip()
 else:
     print(f"Config file not found at {SETTINGS_INI_FILE}. Using default values.")
     tahajjud_time = DEFAULT_TAHAJJUD
     duha_time = DEFAULT_DUHA
     athkar_elsabah_time = DEFAULT_ATHKAR_ELSABAH
     athkar_elmasa_time = DEFAULT_ATHKAR_ELMASA
+    athkar_elsabah_mode = DEFAULT_ATHKAR_ELSABAH_MODE
+    athkar_elsabah_clock = DEFAULT_ATHKAR_ELSABAH_CLOCK
+
+if athkar_elsabah_mode not in (ATHKAR_ELSABAH_MODE_CLOCK, ATHKAR_ELSABAH_MODE_AFTER_FAJR):
+    athkar_elsabah_mode = DEFAULT_ATHKAR_ELSABAH_MODE
+try:
+    athkar_elsabah_clock_dt = datetime.strptime(athkar_elsabah_clock, '%H:%M')
+except ValueError:
+    athkar_elsabah_clock_dt = datetime.strptime(DEFAULT_ATHKAR_ELSABAH_CLOCK, '%H:%M')
 
 # ===== LOAD CSV =====
 if os.path.exists(PRAYER_INPUT_CSV_FILE):
@@ -46,12 +64,16 @@ def calculate_tahajjud(fajr_time):
     return (fajr_dt - timedelta(minutes=tahajjud_time)).strftime('%H:%M')
 
 def calculate_athkar_elsabah(row):
-    """Athkar Elsabah must land strictly between Fajr and Dhuhr. The configured value
-    is a single number applied to every day, but the Fajr->Dhuhr duration varies
-    across the year, so clamp per-day: a value that fits today can't push Athkar past
-    Dhuhr on a day whose duration is shorter."""
+    """Athkar Elsabah must land strictly between Fajr and Dhuhr. Either setting is a
+    single value applied to every day, but Fajr and Dhuhr move across the year, so clamp
+    per-day: a value that fits today can't push Athkar past Dhuhr, or a fixed time ahead
+    of Fajr, on a day where it would not fit."""
     fajr_dt = datetime.strptime(row['Fajr'], '%H:%M')
     dhuhr_dt = datetime.strptime(row['Dhuhr'], '%H:%M')
+    if athkar_elsabah_mode == ATHKAR_ELSABAH_MODE_CLOCK:
+        earliest = fajr_dt + timedelta(minutes=1)
+        latest = dhuhr_dt - timedelta(minutes=1)
+        return min(max(athkar_elsabah_clock_dt, earliest), latest).strftime('%H:%M')
     day_max = int((dhuhr_dt - fajr_dt).total_seconds() // 60) - 1
     minutes = min(athkar_elsabah_time, max(1, day_max))
     return (fajr_dt + timedelta(minutes=minutes)).strftime('%H:%M')

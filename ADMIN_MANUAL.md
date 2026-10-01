@@ -116,6 +116,7 @@ customer's settings and prayer times, and re-download 858 MB of audio.
 |---|---|
 | `audio/` (858 MB), `var/`, `logs/` | never touched by a release. A release can put a *new* file in `audio/` through `default-audio/` (§3.7), and `VERSIONS.json` can claim one of these paths outright (§8b) — both are deliberate acts, and neither is something a release can do on its own |
 | `config/config.ini` | never overwritten — the owner's settings |
+| `config/default-config.ini` | replaced — the shipped defaults: what a new device starts from (`config/config.ini` in the repo is a copy of it) and what the Settings app's **إعادة ضبط الإعدادات** writes back. Taken from ihms-lr's settings on 2026-10-01, minus its `prayer_csv_source_label`. The reset keeps the device's prayer-file keys, and ticks a default audio file only where the device has it, every file in the folder otherwise |
 | `config/*.csv`, `config/executed-events.json` | never overwritten — generated per device |
 | `config/prayer_times_map.py`, `applications/**/prayer_times_map.py` | never overwritten — generated, and one of them sits *inside* a directory that is replaced |
 | `config/update.conf` | never overwritten |

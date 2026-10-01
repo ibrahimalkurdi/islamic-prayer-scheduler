@@ -49,7 +49,8 @@ const SECTIONS = [
             { enable: "enable_duha_prayer", time: "duha_time",
               audio: "duha_audio_checked", label: "صلاة الضحى",
               hint: "عدد الدقائق قبل صلاة الظهر" },
-            { enable: "enable_athkar_elsabah", time: "athkar_elsabah_time",
+            { enable: "enable_athkar_elsabah", mode: "athkar_elsabah_mode",
+              clock: "athkar_elsabah_clock", time: "athkar_elsabah_time",
               audio: "athkar_elsabah_audio_checked", label: "أذكار الصباح",
               hint: "عدد الدقائق بعد صلاة الفجر" },
             { enable: "enable_athkar_elmasa", time: "athkar_elmasa_time",
@@ -119,20 +120,54 @@ function buildField(field) {
     wrap.appendChild(el("label", {}, [toggle,
         el("strong", { textContent: field.label })]));
 
+    /* The app's copy of this page is on the public site, so it can be newer than the
+       device it talks to. A device from before the Athkar Elsabah choice does not report
+       it and refuses it if sent, so it is offered only where the device has it. */
+    const hasMode = !!field.mode && field.mode in state.values;
+
+    let modeSelect = null;
+    if (hasMode) {
+        modeSelect = el("select", { id: field.mode });
+        modeSelect.dataset.text = field.mode;
+        for (const [value, label] of [["clock", "وقت محدد يوميًا"],
+                                      ["after_fajr", "بعد صلاة الفجر"]]) {
+            const option = el("option", { value, textContent: label });
+            if (state.values[field.mode] === value) option.selected = true;
+            modeSelect.appendChild(option);
+        }
+        wrap.appendChild(el("label", {}, [
+            document.createTextNode("الموعد: "), modeSelect]));
+    }
+
+    let clockRow = null;
+    if (field.clock && (!field.mode || hasMode)) {
+        const input = el("input", { type: "time", id: field.clock,
+                                    value: state.values[field.clock] || "" });
+        input.dataset.text = field.clock;
+        clockRow = el("label", {}, [document.createTextNode("الوقت: "), input]);
+        wrap.appendChild(clockRow);
+    }
+
+    let timeRow = null;
     if (field.time) {
         const input = el("input", { type: "number", min: "0", id: field.time,
                                     value: state.values[field.time] });
         input.dataset.int = field.time;
-        wrap.appendChild(el("label", {}, [
-            document.createTextNode((field.hint || "الدقائق") + ": "), input]));
+        timeRow = el("label", {}, [
+            document.createTextNode((field.hint || "الدقائق") + ": "), input]);
+        wrap.appendChild(timeRow);
     }
 
-    if (field.clock) {
-        const input = el("input", { type: "time", id: field.clock,
-                                    value: state.values[field.clock] || "" });
-        input.dataset.text = field.clock;
-        wrap.appendChild(el("label", {}, [
-            document.createTextNode("الوقت: "), input]));
+    /* Only the half of the choice that is in use is shown; the other keeps its value, so
+       switching back finds it where it was left. */
+    if (modeSelect) {
+        const showMode = () => {
+            const fixed = modeSelect.value === "clock";
+            clockRow.classList.toggle("hidden", !fixed);
+            timeRow.classList.toggle("hidden", fixed);
+        };
+        modeSelect.addEventListener("change", showMode);
+        showMode();
     }
 
     if (field.position) {

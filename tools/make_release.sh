@@ -127,6 +127,9 @@ INCLUDE=(
     "config/pipewire-pulse.conf"
     "config/crontab.txt"
     "config/update.conf.example"
+    # The settings a new device starts with and the Settings app's reset puts back. Not
+    # config.ini: that is the owner's, and this file is never written on a device.
+    "config/default-config.ini"
     # The helper reads this from the live tree to decide what to install, so a release
     # that adds a package has to be able to put the new list on the device. It shipped
     # inside the tarball from the first day and was never on this list, which meant the
