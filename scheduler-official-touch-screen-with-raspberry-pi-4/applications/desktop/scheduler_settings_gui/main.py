@@ -32,7 +32,10 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QComboBox,
     QDialog,
-    QProgressBar
+    QProgressBar,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
 )
 from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QFontMetrics, QIcon
@@ -413,6 +416,25 @@ class FetchingComboBox(QComboBox):
     def showPopup(self):
         if self.before_popup(self):
             super().showPopup()
+
+
+class RightAlignedComboBox(QComboBox):
+    """A list whose chosen entry sits at the right edge of the box, against the label it
+    answers. Qt draws it beside the arrow, which in a box wider than the entry - one
+    sized for the longest of ~175 country names - leaves it at the far left."""
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        text = option.currentText
+        option.currentText = ""
+        painter.drawComplexControl(QStyle.CC_ComboBox, option)
+        field = self.style().subControlRect(QStyle.CC_ComboBox, option,
+                                            QStyle.SC_ComboBoxEditField, self)
+        self.style().drawItemText(painter, field.adjusted(0, 0, -6, 0),
+                                  Qt.AlignRight | Qt.AlignVCenter, option.palette,
+                                  self.isEnabled(), text, self.foregroundRole())
 
 
 class StartupAborted(Exception):
@@ -2063,19 +2085,23 @@ class ControlApp(QMainWindow):
 
         self.dst_country_label = self.create_bold_label("الدولة:")
         layout.addWidget(self.dst_country_label)
-        self.dst_country_combo = QComboBox()
+        self.dst_country_combo = RightAlignedComboBox()
         self.dst_country_combo.setLayoutDirection(Qt.RightToLeft)
         self.dst_country_combo.setStyleSheet("font-size: 18px; padding: 5px;")
         self.dst_country_combo.setFixedHeight(45)
-        layout.addWidget(self.dst_country_combo)
+        self.dst_country_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.dst_country_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        layout.addWidget(self.dst_country_combo, alignment=Qt.AlignLeading)
 
         self.dst_city_label = self.create_bold_label("المدينة:")
         layout.addWidget(self.dst_city_label)
-        self.dst_city_combo = QComboBox()
+        self.dst_city_combo = RightAlignedComboBox()
         self.dst_city_combo.setLayoutDirection(Qt.RightToLeft)
         self.dst_city_combo.setStyleSheet("font-size: 18px; padding: 5px;")
         self.dst_city_combo.setFixedHeight(45)
-        layout.addWidget(self.dst_city_combo)
+        self.dst_city_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.dst_city_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        layout.addWidget(self.dst_city_combo, alignment=Qt.AlignLeading)
 
         for arabic_name, _code, cities in TIMEZONE_COUNTRIES:
             self.dst_country_combo.addItem(arabic_name, cities)
