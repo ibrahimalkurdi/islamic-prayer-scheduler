@@ -82,7 +82,7 @@ def png_size(path):
 print("1. every year gets its own clock changes")
 OUT = os.path.join(ROOT, "berlin")
 result = build(OUT, "--timezone", "Europe/Berlin", "--place", "برلين",
-               "--icons-dir", SAKINA_ICONS, "--app-name", "سكينة - برلين",
+               "--icons-dir", SAKINA_ICONS, "--app-name", "السكينة - برلين",
                "--year", "2026", "--year", "2027")
 check("the build runs", result.returncode, 0)
 if result.returncode:
@@ -187,14 +187,14 @@ check("without --icons-dir the device's icon is used",
 manifest = json.load(open(os.path.join(OUT, "static", "manifest.webmanifest"),
                           encoding="utf-8"))
 check("Android's home-screen name", (manifest["name"], manifest["short_name"]),
-      ("سكينة - برلين", "سكينة - برلين"))
+      ("السكينة - برلين", "السكينة - برلين"))
 check_true("iOS's home-screen name",
-           '<meta name="apple-mobile-web-app-title" content="سكينة - برلين">' in page)
+           '<meta name="apple-mobile-web-app-title" content="السكينة - برلين">' in page)
 check("the manifest keeps its icons", [i["src"] for i in manifest["icons"]],
       ["icon-128.png", "icon-256.png"])
 plain = json.load(open(os.path.join(DAMASCUS, "static", "manifest.webmanifest"),
                        encoding="utf-8"))
-check("without --app-name it is Sakina", plain["name"], "سكينة")
+check("without --app-name it is Sakina", plain["name"], "السكينة")
 check("a device's map cannot be baked for two years",
       subprocess.run([sys.executable, BUILDER, "--scheduler-dir", ROOT, "--out",
                       os.path.join(ROOT, "x"), "--year", "2026", "--year", "2027"],

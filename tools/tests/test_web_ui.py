@@ -902,14 +902,14 @@ owner_manifest = json.load(open(os.path.join(OWNER, "manifest.webmanifest"),
 # own /d/<name>/.
 check("it starts where it was installed from",
       (owner_manifest["start_url"], owner_manifest["scope"]), ("./", "./"))
-check("and has its own name", owner_manifest["name"], "سكينة - جهازي")
+check("and has its own name", owner_manifest["name"], "السكينة - جهازي")
 check_true("iOS is given the same name",
-           'apple-mobile-web-app-title" content="سكينة - جهازي"' in owner_home)
+           'apple-mobile-web-app-title" content="السكينة - جهازي"' in owner_home)
 for icon in owner_manifest["icons"]:
     check_true(f"device manifest icon {icon['src']} resolves",
                os.path.isfile(os.path.join(OWNER, icon["src"])))
 check_true("the public app keeps the public name",
-           'apple-mobile-web-app-title" content="سكينة"'
+           'apple-mobile-web-app-title" content="السكينة"'
            in open(os.path.join(OUT, "index.html"), encoding="utf-8").read())
 # Chrome's install dialog only installs the page it is called from, so the page the
 # device's button opens is the one that carries the install button.

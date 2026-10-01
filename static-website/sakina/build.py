@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 BUILDER = os.path.join(REPO, "tools", "build_static_site.py")
 ICONS = os.path.join(HERE, "icons")
-BRAND = "سكينة"
+BRAND = "السكينة"
 # Read by the device's web server, to offer each device the app from its own city's site.
 PUBLIC_SITES = os.path.join(REPO, "scheduler-official-touch-screen-with-raspberry-pi-4",
                             "applications", "services", "web_ui", "public_sites.json")

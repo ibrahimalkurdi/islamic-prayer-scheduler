@@ -1864,7 +1864,7 @@ device only hands out its address:
   pages. Said on the app's own list instead, it read as a warning about
   the list.
 - Icon: the device's own prayer-app icon (`config/icons/athan-app-icon-*.png`), not the
-  public site's Sakina icon; name «سكينة - جهازي». Installing it is the user's step: the
+  public site's Sakina icon; name «السكينة - جهازي». Installing it is the user's step: the
   button only opens the page, and the text under it says how to add it to the home screen.
 
 Nothing to set up on Cloudflare for this: `_redirects` is a file in `public/`.
@@ -1873,7 +1873,7 @@ Nothing to set up on Cloudflare for this: `_redirects` is a file in `public/`.
 
 One site per city - the daily list, the countdown, and the app devices hand out - served by
 Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`static-website/sakina/icons/`) and the name
-«سكينة - <place>», e.g. «سكينة - برلين»:
+«السكينة - <place>», e.g. «السكينة - برلين»:
 
 | city | address |
 |---|---|
