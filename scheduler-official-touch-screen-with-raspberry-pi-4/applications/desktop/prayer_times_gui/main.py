@@ -30,6 +30,13 @@ from shared.prayer_logic import (
     MAKROOH_LABEL, MAKROOH_NAFL_NOTICE, MAKROOH_AT_PERIOD_END, MAKROOH_KEEPS_RED,
 )
 from shared import device_info
+from shared.internet_status import InternetMonitor, OFFLINE_BG, SHORT_OFFLINE_MESSAGE
+from shared.wifi import WifiMonitor
+# The picker sits beside this file. Found from here rather than from the script's own
+# directory on sys.path, because the tests and the update's offscreen check load this file
+# by path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from wifi_dialog import WifiDialog
 from shared.mute import (
     SCHEDULER_DIR, MUTE_FLAG_FILE, PLAYER_SCRIPT_FILE, MUTE_DURATION_MINUTES,
     AUDIO_SINK, AUDIO_MUTE_CMD, AUDIO_STATE_CMD, AUDIO_CMD_TIMEOUT,
@@ -181,6 +188,25 @@ MUTED_COLOR = "#dc3545"
 # the button cannot claim sound is on while the speaker is silent. Every second would
 # fork a process a second for the life of the kiosk; two is far below noticing.
 AUDIO_STATE_POLL_SECONDS = 2
+
+# The no-internet banner. On the countdown it takes the strip right of the window buttons
+# that the makrooh notice uses, and gives way to that notice while it is up: the notice
+# lasts twenty minutes and is about the prayer in front of you. On the daily list it takes
+# the corner right of the date, in shorter words: below the cards there is no room once
+# the time-remaining badge is up, and the cards reach the bottom of the screen.
+INTERNET_BANNER_TOP = 6
+INTERNET_BANNER_COUNTER_HEIGHT = 68
+INTERNET_BANNER_DAILY_HEIGHT = 62
+INTERNET_BANNER_MARGIN = 10
+INTERNET_BANNER_FONT = "Amiri"
+INTERNET_BANNER_COUNTER_PX = 21
+INTERNET_BANNER_DAILY_PX = 15
+INTERNET_CLOSE_SIZE = 34
+INTERNET_CLOSE_SIZE_DAILY = 26
+# The warning's orange is lost on the red before an athan and on the makrooh orange, so
+# on those two backgrounds it is dark blue instead.
+INTERNET_BANNER_ON_WARM_BG = "#1E3A8A"
+WARM_COUNTER_BACKGROUNDS = (COUNTDOWN_BG_RED, COUNTDOWN_BG_MAKROOH)
 
 
 def window_button_box(index, icon_y):
@@ -955,6 +981,22 @@ class AdhanCounter(QWidget):
             icon_font.setStyleStrategy(QFont.PreferAntialias | QFont.NoSubpixelAntialias)
             button.setFont(icon_font)
 
+        self.internet = InternetMonitor(
+            os.path.join(SCHEDULER_DIR, "config", "config.ini"))
+        self.internet_banner = QLabel("", self)
+        self.internet_banner.setAlignment(Qt.AlignCenter)
+        self.internet_banner.setWordWrap(True)
+        self.internet_banner.hide()
+        # Closes the warning for the rest of this outage. The green "back" message has none:
+        # it goes by itself in ten seconds.
+        self.internet_close = QPushButton("✕", self)
+        self.internet_close.setFocusPolicy(Qt.NoFocus)
+        self.internet_close.clicked.connect(self.close_internet_banner)
+        self.internet_close.hide()
+        # Opened after a while with no network at all, under the same switch as the banner.
+        self.wifi = WifiMonitor()
+        self.wifi_dialog = None
+
         # Timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick)
@@ -1081,6 +1123,80 @@ class AdhanCounter(QWidget):
             self.paint_window_buttons("black")
             self.update_countdown()
 
+    def show_internet_banner(self, message):
+        """message is InternetMonitor.poll()'s answer: (text, background) or None."""
+        on_counter = self.stack.currentWidget() is self.counter_page
+        picker_open = self.wifi_dialog is not None and self.wifi_dialog.isVisible()
+        if message is None or picker_open or (on_counter and self.title.isVisible()):
+            self.internet_banner.hide()
+            self.internet_close.hide()
+            return
+        text, background = message
+        width = self.width() or 800
+        height = self.height() or 480
+        closable = background == OFFLINE_BG
+        if on_counter:
+            left = WINDOW_BUTTONS_RIGHT_EDGE + INTERNET_BANNER_MARGIN
+            geometry = (left, INTERNET_BANNER_TOP, width - left - INTERNET_BANNER_MARGIN,
+                        INTERNET_BANNER_COUNTER_HEIGHT)
+            size = INTERNET_BANNER_COUNTER_PX
+            button = INTERNET_CLOSE_SIZE
+        else:
+            calendar = self.daily_page.calendar_btn
+            left = calendar.mapTo(self, calendar.rect().topRight()).x() + INTERNET_BANNER_MARGIN
+            geometry = (left, INTERNET_BANNER_TOP, width - left - INTERNET_BANNER_MARGIN,
+                        INTERNET_BANNER_DAILY_HEIGHT)
+            size = INTERNET_BANNER_DAILY_PX
+            button = INTERNET_CLOSE_SIZE_DAILY
+            if closable:
+                text = SHORT_OFFLINE_MESSAGE
+        warm_page = getattr(self, "counter_bg", None) in WARM_COUNTER_BACKGROUNDS
+        if closable and on_counter and warm_page:
+            background = INTERNET_BANNER_ON_WARM_BG
+        self.internet_banner.setText(text)
+        self.internet_banner.setGeometry(*geometry)
+        self.internet_banner.setStyleSheet(
+            f"QLabel {{ background: {background}; color: white; border-radius: 8px;"
+            " border: 2px solid rgba(255, 255, 255, 0.55);"
+            # Room for the close button on both sides: a left-only padding is mirrored to
+            # the right in this right-to-left window, and the text ran under the button.
+            f" padding: 0px {button + 10 if closable else 8}px;"
+            f" font-family: '{INTERNET_BANNER_FONT}';"
+            f" font-size: {size}px; font-weight: bold; }}")
+        self.internet_banner.show()
+        self.internet_banner.raise_()
+        if closable:
+            left, top, _, banner_height = geometry
+            self.internet_close.setGeometry(left + 6, top + (banner_height - button) // 2,
+                                            button, button)
+            self.internet_close.setStyleSheet(
+                "QPushButton { background: rgba(0, 0, 0, 0.25); color: white; border: none;"
+                f" border-radius: {button // 2}px; font-size: {button // 2 + 2}px;"
+                " font-weight: bold; } QPushButton:pressed { background: rgba(0, 0, 0, 0.45); }")
+            self.internet_close.show()
+            self.internet_close.raise_()
+        else:
+            self.internet_close.hide()
+
+    def close_internet_banner(self):
+        self.internet.dismiss()
+        self.internet_banner.hide()
+        self.internet_close.hide()
+
+    def show_wifi_picker(self, prompt):
+        """Open the picker over the whole screen when prompt says to, and take it away
+        once the device is back on a network - whatever page it was left on."""
+        visible = self.wifi_dialog is not None and self.wifi_dialog.isVisible()
+        if prompt and not visible:
+            if self.wifi_dialog is None:
+                self.wifi_dialog = WifiDialog(self, on_later=self.wifi.snooze)
+            self.wifi_dialog.setGeometry(self.rect())
+            self.wifi_dialog.show()
+            self.wifi_dialog.raise_()
+            self.wifi_dialog.open_list()
+        elif visible and self.wifi.watch.connected():
+            self.wifi_dialog.hide()
+
     def tick(self):
         self.sync_mute_state()
         # Nothing downstream caches the times - daily_times reads prayersByDate on
@@ -1092,6 +1208,8 @@ class AdhanCounter(QWidget):
             self.daily_page.refresh()
         else:
             self.update_countdown()
+        self.show_internet_banner(self.internet.poll())
+        self.show_wifi_picker(self.wifi.poll() and self.internet.enabled())
 
     # -------------------------
     # Countdown logic
@@ -1252,6 +1370,7 @@ class AdhanCounter(QWidget):
 
     def paint_counter_page(self, bg):
         """Scoped to the countdown page so the daily table keeps its own light theme."""
+        self.counter_bg = bg
         self.counter_page.setStyleSheet(
             f"#counterPage {{ background: {bg}; }}"
             "#counterPage QLabel { color: white; }"
@@ -1267,6 +1386,8 @@ class AdhanCounter(QWidget):
         Re-fitting here puts the right sizes up on the frame the window actually reaches
         its size, and keeps them right across the fullscreen/maximised toggle."""
         super().resizeEvent(event)
+        if getattr(self, "wifi_dialog", None) is not None:
+            self.wifi_dialog.setGeometry(self.rect())
         if not getattr(self, "_ready", False) or getattr(self, "_refitting", False):
             return
         self._refitting = True

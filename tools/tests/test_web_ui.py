@@ -606,6 +606,17 @@ check("and read back, keeping the fixed time for when it is chosen again",
       (values["athkar_elsabah_mode"], values["athkar_elsabah_clock"]),
       ("after_fajr", "10:15"))
 
+print("14c. the no-internet warning is on unless switched off")
+_, body, _ = get("/api/settings")
+check("a device that never chose reads as on",
+      json.loads(body)["values"]["enable_internet_warning"], True)
+status, _ = post("/api/settings", {"enable_internet_warning": False}, origin=BASE)
+check("switching it off is accepted", status, 200)
+_, body, _ = get("/api/settings")
+check("and read back off", json.loads(body)["values"]["enable_internet_warning"], False)
+status, _ = post("/api/settings", {"enable_internet_warning": True}, origin=BASE)
+check("and on again", status, 200)
+
 print("15. a save runs apply_settings.sh, off the request")
 deadline = datetime.now() + timedelta(seconds=20)
 state = None

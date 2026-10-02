@@ -193,7 +193,9 @@ BOOL_KEYS = ("enable_tahajjud_prayer", "enable_duha_prayer", "enable_listen_to_q
              "enable_friday_quran", "enable_athkar_elsabah", "enable_athkar_elmasa",
              "enable_prayer_fajr", "enable_prayer_sunrise", "enable_prayer_dhuhr",
              "enable_prayer_asr", "enable_prayer_maghrib", "enable_prayer_isha",
-             "enable_daylight_saving")
+             "enable_daylight_saving", "enable_internet_warning")
+# On unless the owner turned it off, so a device that has never saved it reads as on.
+BOOL_DEFAULT_ON = ("enable_internet_warning",)
 TEXT_KEYS = ("listen_to_quran", "friday_quran_position", "daylight_saving_timezone",
              "athkar_elsabah_mode", "athkar_elsabah_clock")
 # Each audio list is a comma-separated set of file names from one event folder.
@@ -238,7 +240,7 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
         except ValueError:
             values[key] = 0
     for key in BOOL_KEYS:
-        values[key] = section.getboolean(key, fallback=False)
+        values[key] = section.getboolean(key, fallback=key in BOOL_DEFAULT_ON)
     for key in TEXT_KEYS:
         values[key] = section.get(key, "")
     values["athkar_elsabah_mode"] = settings_rules.athkar_elsabah_mode(

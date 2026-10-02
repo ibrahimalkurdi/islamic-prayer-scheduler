@@ -84,6 +84,7 @@ SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from shared import audio_lists
+from shared import internet_status
 from shared.settings_rules import (
     EXPECTED_CSV_HEADER, csv_is_valid_prayer_format, detect_csv_format, version_key,
     duha_time_is_makrooh as duha_rule,
@@ -273,6 +274,7 @@ DEFAULTS_BOOL = {
     ATHKAR_ELSABAH_ENABLE: True,
     ATHKAR_ELMASA_ENABLE: True,
     FRIDAY_QURAN_ENABLE: True,
+    internet_status.ENABLE_KEY: internet_status.DEFAULT_ENABLED,
 }
 
 # QSpinBox requires *some* upper bound (its default is 99), so this is a widget bound
@@ -757,6 +759,7 @@ class ControlApp(QMainWindow):
 
         # ---------------- Daylight Saving Section ----------------
         main_layout.addWidget(self.build_daylight_saving_section())
+        main_layout.addWidget(self.build_internet_warning_section())
 
         # ---------------- Updates Section ----------------
         # Empty until a version list is first opened: what has been published is not
@@ -1105,7 +1108,41 @@ class ControlApp(QMainWindow):
             btn_layout.addWidget(b)
 
         main_layout.addLayout(btn_layout)
-        self.setCentralWidget(scroll)
+
+        # The no-internet banner sits above the scroll area rather than in it, so it is on
+        # screen whichever section is scrolled into view.
+        self.internet = internet_status.InternetMonitor(SETTINGS_INI_FILE)
+        self.internet_bar = QFrame()
+        self.internet_bar.setObjectName("internetBar")
+        self.internet_bar.setLayoutDirection(Qt.RightToLeft)
+        bar_layout = QHBoxLayout(self.internet_bar)
+        bar_layout.setContentsMargins(8, 4, 8, 4)
+        self.internet_banner = QLabel("")
+        self.internet_banner.setAlignment(Qt.AlignCenter)
+        self.internet_banner.setWordWrap(True)
+        bar_layout.addWidget(self.internet_banner, 1)
+        # Closes the warning for the rest of this outage; the green "back" message goes
+        # by itself.
+        self.internet_close = QPushButton("✕")
+        self.internet_close.setFocusPolicy(Qt.NoFocus)
+        self.internet_close.setFixedSize(40, 40)
+        self.internet_close.setStyleSheet(
+            "QPushButton { background: rgba(0, 0, 0, 0.25); color: white; border: none;"
+            " border-radius: 20px; font-size: 20px; font-weight: bold; }"
+            " QPushButton:pressed { background: rgba(0, 0, 0, 0.45); }")
+        self.internet_close.clicked.connect(self.close_internet_banner)
+        bar_layout.addWidget(self.internet_close)
+        self.internet_bar.hide()
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(self.internet_bar)
+        central_layout.addWidget(scroll)
+        self.setCentralWidget(central)
+        self.internet_timer = QTimer(self)
+        self.internet_timer.timeout.connect(self.refresh_internet_banner)
+        self.internet_timer.start(1000)
 
         # ---------------- Increase form label fonts ----------------
         label_font = QFont()
@@ -2061,6 +2098,54 @@ class ControlApp(QMainWindow):
                          "لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.\n\n"
                          + (tail or "راجع سجل logs/check_updates.log على الجهاز."))
 
+    def build_internet_warning_section(self):
+        frame = self.create_section_frame(
+            "تنبيه انقطاع الإنترنت", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
+
+        self.internet_warning_chk = QCheckBox("إظهار تنبيه عند انقطاع الإنترنت")
+        self.internet_warning_chk.setChecked(self.config["Settings"].getboolean(
+            internet_status.ENABLE_KEY, fallback=internet_status.DEFAULT_ENABLED))
+        self.internet_warning_chk.setStyleSheet(
+            "font-size: 20px; padding: 5px; font-weight: bold;")
+        self.internet_warning_chk.setLayoutDirection(Qt.RightToLeft)
+        layout.addWidget(self.internet_warning_chk)
+
+        hint = QLabel(
+            "يأخذ الجهاز الوقت من الإنترنت، فإذا انقطع قد تصبح مواقيت الأذان غير دقيقة، "
+            "خاصةً إذا انقطعت الكهرباء أثناء ذلك.\nيظهر التنبيه على شاشة مواقيت الصلاة "
+            "وفي تطبيق الإعدادات فور فتحهما إذا كان الجهاز غير متصل، أو بعد ٥ دقائق من "
+            "انقطاع الاتصال، ويختفي عند عودته أو عند إغلاقه بالزر ✕.\n"
+            "وإذا انقطع الواي فاي نفسه دقيقتين، تظهر نافذة لاختيار شبكة المنزل وكتابة "
+            "كلمة مرورها."
+        )
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        # Its own height and no more: a wrapped label leaves Qt reserving room for more
+        # lines than it ends up needing, and the title box took the slack.
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def refresh_internet_banner(self):
+        message = self.internet.poll()
+        if message is None:
+            self.internet_bar.hide()
+            return
+        text, background = message
+        self.internet_banner.setText(text)
+        self.internet_bar.setStyleSheet(
+            f"#internetBar {{ background: {background}; }}"
+            " QLabel { color: white; padding: 4px; font-family: 'Amiri'; font-size: 20px;"
+            " font-weight: bold; }")
+        self.internet_close.setVisible(background == internet_status.OFFLINE_BG)
+        self.internet_bar.show()
+
+    def close_internet_banner(self):
+        self.internet.dismiss()
+        self.internet_bar.hide()
+
     def build_daylight_saving_section(self):
         frame = self.create_section_frame(
             "التوقيت الصيفي", font_family="Amiri", font_size=22, bold=True
@@ -2491,6 +2576,9 @@ class ControlApp(QMainWindow):
         for key, chk in self.prayer_checkboxes.items():
             chk.setChecked(s.getboolean(key))
 
+        self.internet_warning_chk.setChecked(s.getboolean(
+            internet_status.ENABLE_KEY, fallback=internet_status.DEFAULT_ENABLED))
+
         # Daylight saving
         self.dst_chk.setChecked(s.getboolean(DAYLIGHT_SAVING_ENABLE, fallback=False))
         self.select_saved_timezone()
@@ -2617,6 +2705,7 @@ class ControlApp(QMainWindow):
         s[FRIDAY_QURAN_TIME] = str(self.friday_quran_spin.value())
         s[FRIDAY_QURAN_POSITION] = self.selected_friday_quran_position()
         s[DAYLIGHT_SAVING_ENABLE] = str(self.dst_chk.isChecked())
+        s[internet_status.ENABLE_KEY] = str(self.internet_warning_chk.isChecked())
         s[DAYLIGHT_SAVING_TIMEZONE] = self.selected_timezone()
 
         for key, chk in self.prayer_checkboxes.items():

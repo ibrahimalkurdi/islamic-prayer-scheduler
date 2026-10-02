@@ -56,7 +56,7 @@ img[src*="assets/manual/settings-"] { width: 56%; height: auto; }
 img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"], img[src*="assets/manual/phone-"] { width: 160px; height: auto; }
 img[src*="assets/manual/phone-home-"] { width: 250px; height: auto; }
 p { orphans: 3; widows: 3; }
-.toc { break-after: page; font-size: 12pt; line-height: 1.45; }
+.toc { break-after: page; font-size: 11.5pt; line-height: 1.32; }
 .toc h1 { margin-top: 0; }
 .toc ul { list-style: none; padding: 0; margin: 0; }
 .toc > ul > li { margin-top: 6px; font-weight: 700; }
