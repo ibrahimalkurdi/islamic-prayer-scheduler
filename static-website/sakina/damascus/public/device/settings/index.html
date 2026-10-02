@@ -207,6 +207,16 @@ function buildForm() {
     extra.appendChild(el("label", {}, [dst,
         document.createTextNode("تفعيل التوقيت الصيفي")]));
 
+    /* Offered only where the device reports it: a device from before the warning
+       refuses a key it does not know, and this copy of the page can be newer than it. */
+    if ("enable_internet_warning" in state.values) {
+        const warn = el("input", { type: "checkbox", id: "enable_internet_warning",
+                                   checked: !!state.values.enable_internet_warning });
+        warn.dataset.bool = "enable_internet_warning";
+        extra.appendChild(el("label", {}, [warn,
+            document.createTextNode("تنبيه على شاشة الجهاز عند انقطاع الإنترنت")]));
+    }
+
     const csv = state.csv;
     const name = csv.current ? csv.current.split("/").pop() : "غير محدد";
     extra.appendChild(el("p", { className: "sub",
