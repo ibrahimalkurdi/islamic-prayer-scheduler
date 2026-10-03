@@ -44,7 +44,7 @@ chk("Settings, kept for the app menu, is «إعدادات السكينة»",
     entry_name("scheduler_settings_gui.desktop"), "إعدادات السكينة")
 needs = [l.strip() for l in open(os.path.join(SCHEDULER, "config/needs_init"), encoding="utf-8")
          if l.strip() and not l.lstrip().startswith("#")]
-chk("the release asks for setup, so the desktop changes on update", needs[:1], ["1.4.13"])
+chk("the release asks for setup, so the desktop changes on update", needs[:1], ["1.5.0"])
 
 from PyQt5.QtWidgets import QApplication
 app = QApplication(sys.argv)
