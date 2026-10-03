@@ -559,8 +559,26 @@ touch "$SCH/var/setup_done/settings_applied"
 rm -f "$SCH/var/init_ran_for"
 point 1.1.0
 echo "1.0.0" > "$SCH/var/installed_version"
+# A device from before «السكينة» was one app: a Settings shortcut of its own, and the time
+# app's under its old name. In a second desktop the owner's own file of the same name,
+# which is theirs and must survive.
+DESK="$(dirname "$SCH")"
+rm -f "$DESK/prayer_times_gui.desktop" "$DESK/scheduler_settings_gui.desktop"
+ln -s "$SCH/config/scheduler_settings_gui.desktop" "$DESK/scheduler_settings_gui.desktop"
+ln -s "$SCH/config/prayer_times_gui.desktop" "$DESK/prayer_times_gui.desktop"
 out="$(run_stubbed --now)"
 LOG="$SCH/logs/check_updates.log"
+if [[ -e "$DESK/scheduler_settings_gui.desktop" || -L "$DESK/scheduler_settings_gui.desktop" ]]; then
+    echo "  ✗ the old Settings shortcut is still on the desktop"; fail=1
+else
+    echo "  ✓ the Settings shortcut is gone from the desktop - it opens from ⚙ now"
+fi
+if [[ "$(readlink "$DESK/prayer_times_gui.desktop")" == "$SCH/config/prayer_times_gui.desktop" ]] \
+   && grep -qx 'Name=السكينة' "$DESK/prayer_times_gui.desktop"; then
+    echo "  ✓ and the app's shortcut is there, named «السكينة»"
+else
+    echo "  ✗ the app's shortcut is missing or not «السكينة»"; fail=1
+fi
 
 expect "it says the release asked for setup" "$out" "This release asks for setup to be run"
 expect "and setup really ran" "$(cat "$LOG")" "Scheduler setup started"
@@ -587,6 +605,19 @@ if grep -q "This release asks for setup to be run" <<< "$out"; then
 else
     echo "  ✓ a release that already had its setup run does not get it twice"
 fi
+
+# An owner's own file under the old shortcut's name is not ours to remove.
+echo "the owner's own" > "$DESK/scheduler_settings_gui.desktop"
+rm -f "$SCH/var/init_ran_for"
+echo "1.0.0" > "$SCH/var/installed_version"
+point 1.1.0
+run_stubbed --now > /dev/null
+if [[ "$(cat "$DESK/scheduler_settings_gui.desktop" 2>/dev/null)" == "the owner's own" ]]; then
+    echo "  ✓ a file the owner put there under that name is left alone"
+else
+    echo "  ✗ setup removed a file that was not its own shortcut"; fail=1
+fi
+rm -f "$DESK/scheduler_settings_gui.desktop"
 
 rm -f "$SCH/var/init_ran_for"
 rm -rf "$STUB"

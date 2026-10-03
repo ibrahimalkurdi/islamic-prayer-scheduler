@@ -957,9 +957,9 @@ owner_manifest = json.load(open(os.path.join(OWNER, "manifest.webmanifest"),
 # own /d/<name>/.
 check("it starts where it was installed from",
       (owner_manifest["start_url"], owner_manifest["scope"]), ("./", "./"))
-check("and has its own name", owner_manifest["name"], "السكينة - جهازي")
+check("and is named «السكينة»", owner_manifest["name"], "السكينة")
 check_true("iOS is given the same name",
-           'apple-mobile-web-app-title" content="السكينة - جهازي"' in owner_home)
+           'apple-mobile-web-app-title" content="السكينة"' in owner_home)
 for icon in owner_manifest["icons"]:
     check_true(f"device manifest icon {icon['src']} resolves",
                os.path.isfile(os.path.join(OWNER, icon["src"])))

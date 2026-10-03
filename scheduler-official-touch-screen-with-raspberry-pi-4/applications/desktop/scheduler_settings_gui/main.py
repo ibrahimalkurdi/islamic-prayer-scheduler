@@ -9,6 +9,8 @@ import subprocess
 import csv
 import json
 import re
+import signal
+import threading
 from datetime import datetime, timedelta
 
 
@@ -437,6 +439,29 @@ class RightAlignedComboBox(QComboBox):
         self.style().drawItemText(painter, field.adjusted(0, 0, -6, 0),
                                   Qt.AlignRight | Qt.AlignVCenter, option.palette,
                                   self.isEnabled(), text, self.foregroundRole())
+
+
+# The time app, which this one is opened from with its ⚙ button. Found beside this file,
+# as it is on a device and in a staging copy alike.
+COUNTDOWN_APP = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "prayer_times_gui", "main.py")
+
+
+def countdown_running():
+    try:
+        return subprocess.run(["pgrep", "-f", "prayer_times_gui/main\\.py"],
+                              capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        # Not knowing is not a reason to start a second countdown over the first.
+        return True
+
+
+def launch_countdown():
+    """Start the time app the way its desktop entry does."""
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY", ":0"), QT_QPA_PLATFORM="xcb")
+    subprocess.Popen(["python3", COUNTDOWN_APP], env=env, start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class StartupAborted(Exception):
@@ -1133,10 +1158,27 @@ class ControlApp(QMainWindow):
         self.internet_close.clicked.connect(self.close_internet_banner)
         bar_layout.addWidget(self.internet_close)
         self.internet_bar.hide()
+        # Full screen, like a page of the app it is opened from, so the way back is at the
+        # top where it can be seen without scrolling to «إغلاق».
+        back_bar = QWidget()
+        back_bar.setLayoutDirection(Qt.RightToLeft)
+        back_layout = QHBoxLayout(back_bar)
+        back_layout.setContentsMargins(10, 6, 10, 6)
+        self.back_btn = QPushButton("→ رجوع")
+        self.back_btn.setFocusPolicy(Qt.NoFocus)
+        self.back_btn.setFixedHeight(44)
+        self.back_btn.setStyleSheet(
+            "QPushButton { font-size: 20px; padding: 0 18px; border: 1px solid #ccc;"
+            " border-radius: 8px; background: #f3f4f6; }"
+            " QPushButton:pressed { background: #e5e7eb; }")
+        self.back_btn.clicked.connect(self.close)
+        back_layout.addWidget(self.back_btn)
+        back_layout.addStretch()
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
+        central_layout.addWidget(back_bar)
         central_layout.addWidget(self.internet_bar)
         central_layout.addWidget(scroll)
         self.setCentralWidget(central)
@@ -2882,6 +2924,32 @@ class ControlApp(QMainWindow):
         except Exception:
             self.unlock_button()
 
+    def closeEvent(self, event):
+        """Closing Settings goes back to the time screen, as closing a phone app's settings
+        page does - bringing it back if it is not running, which it is not after an update
+        installed from here. Not while an update is still installing: the updater stops
+        and restarts the time app itself and checks it, and a copy started now would run
+        the old code in the middle of that."""
+        if getattr(self, "background", False):
+            # Kept, hidden, for the next ⚙ - see BackgroundSettings.
+            event.ignore()
+            self.hide()
+            self.internet_timer.stop()
+        else:
+            super().closeEvent(event)
+            if not event.isAccepted():
+                return
+        if not self.busy() and not countdown_running():
+            launch_countdown()
+        if getattr(self, "on_hidden", None):
+            self.on_hidden()
+
+    def busy(self):
+        """An update or an apply still running in this window."""
+        return any(worker is not None and worker.isRunning()
+                   for worker in (getattr(self, "update_worker", None),
+                                  getattr(self, "apply_worker", None)))
+
     def unlock_button(self):
         """Cleanly resets the button state"""
         self.is_processing = False
@@ -2889,6 +2957,99 @@ class ControlApp(QMainWindow):
         for btn in self.findChildren(QPushButton):
             if "حفظ" in btn.text():
                 btn.setEnabled(True)
+
+# ---------------- Kept ready for the time app's ⚙ ----------------
+# Starting this app takes over a second on a Pi before its window appears, too slow for a
+# button. So the time app starts it once with --background: the window is built hidden,
+# SIGUSR1 shows it, and closing hides it again. It is rebuilt before it is shown if what it
+# reads changed meanwhile - a save from the phone, a new audio file - and restarted if an
+# update replaced its code, so what it shows is never older than what is on disk.
+APPLICATIONS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CODE_FILES = [os.path.abspath(__file__)] + glob.glob(os.path.join(APPLICATIONS_DIR, "shared", "*.py"))
+DATA_PATHS = [SETTINGS_INI_FILE, PRAYER_CSV_FILE, DEFAULT_SETTINGS_FILE] + [
+    os.path.join(MAIN_DIR, "audio", event) for event in audio_lists.EVENT_DIRS]
+
+
+def _mtimes(paths):
+    stamps = []
+    for path in paths:
+        try:
+            stamps.append(os.path.getmtime(path))
+        except OSError:
+            stamps.append(None)
+    return tuple(stamps)
+
+
+def code_stamp():
+    return _mtimes(CODE_FILES)
+
+
+def data_stamp():
+    return _mtimes(DATA_PATHS)
+
+
+class BackgroundSettings:
+    def __init__(self, app, present_now):
+        self.app = app
+        self.code = code_stamp()
+        self.window = None
+        self.data = None
+        # Built ahead only when it can be built without asking anything: with no valid
+        # prayer-times file the window opens a picker, which belongs on screen.
+        if present_now or csv_is_valid_prayer_format(PRAYER_CSV_FILE):
+            self.build()
+        if present_now:
+            self.present()
+
+    def build(self):
+        if self.window is not None:
+            if self.window.isVisible() or self.window.busy():
+                return
+            self.window.deleteLater()
+        window = ControlApp()
+        window.background = True
+        window.on_hidden = self.hidden
+        window.internet_timer.stop()
+        self.window = window
+        self.data = data_stamp()
+
+    def present(self):
+        if code_stamp() != self.code:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "--background",
+                              "--present"], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.app.quit()
+            return
+        if self.window is None or (not self.window.isVisible() and data_stamp() != self.data):
+            self.build()
+        window = self.window
+        window.showFullScreen()
+        window.raise_()
+        window.activateWindow()
+        window.internet_timer.start(1000)
+        QTimer.singleShot(0, window.refresh_update_status)
+
+    def hidden(self):
+        # Rebuilt from what is on disk now, so the next ⚙ shows it at once.
+        QTimer.singleShot(1500, self.build)
+
+
+def on_show_request(handler):
+    """Calls handler on the Qt thread each time SIGUSR1 arrives. A Python signal handler
+    only runs between bytecodes, so the event loop is kept turning by a short timer."""
+    asked = threading.Event()
+    signal.signal(signal.SIGUSR1, lambda *_: asked.set())
+    timer = QTimer()
+
+    def check():
+        if asked.is_set():
+            asked.clear()
+            handler()
+
+    timer.timeout.connect(check)
+    timer.start(100)
+    return timer
+
 
 # ---------------- Run ----------------
 if __name__ == "__main__":
@@ -2903,11 +3064,27 @@ if __name__ == "__main__":
     app.setApplicationName("scheduler_settings_gui")
     app.setDesktopFileName("scheduler_settings_gui")
 
+    if "--background" in sys.argv:
+        try:
+            background = BackgroundSettings(app, present_now="--present" in sys.argv)
+        except StartupAborted:
+            sys.exit(1)
+        show_timer = on_show_request(background.present)
+        sys.exit(app.exec_())
+
     try:
         window = ControlApp()
     except StartupAborted:
         sys.exit(1)
 
-    window.showMaximized()  # Must call setWindowIcon before show()
+    def show_window():
+        window.showFullScreen()
+        window.raise_()
+        window.activateWindow()
+
+    # The time app's ⚙ signals whatever Settings is running; one opened from the menu
+    # just comes to the front rather than being ended by a signal it does not handle.
+    show_timer = on_show_request(show_window)
+    show_window()  # Must call setWindowIcon before show()
     sys.exit(app.exec_())
 

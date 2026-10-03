@@ -69,7 +69,7 @@ import prayer_dst  # noqa: E402
 
 # A copy given no --app-name / --device-app-name is named these.
 DEFAULT_APP_NAME = "السكينة"
-DEFAULT_DEVICE_APP_NAME = "السكينة - جهازي"
+DEFAULT_DEVICE_APP_NAME = "السكينة"
 # Where the pages of the app a device hands out are written; _redirects serves them at
 # /d/<name>/.
 OWNER_DIR = "device"

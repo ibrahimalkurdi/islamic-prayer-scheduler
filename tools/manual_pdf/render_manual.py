@@ -24,9 +24,9 @@ import markdown
 
 CSS = """
 @page { size: A4; margin: 10mm 13mm 13mm; }
-body { direction: rtl; font-family: "Noto Naskh Arabic", "Noto Sans Arabic UI", sans-serif; font-size: 12.5pt; line-height: 1.55; color: #1f2328; }
-h1 { font-size: 22pt; border-bottom: 1px solid #d0d7de; padding-bottom: 4px; }
-h2 { font-size: 17pt; border-bottom: 1px solid #eaeef2; padding-bottom: 3px; }
+body { direction: rtl; font-family: "Noto Naskh Arabic", "Noto Sans Arabic UI", sans-serif; font-size: 11.5pt; line-height: 1.45; color: #1f2328; }
+h1 { font-size: 19pt; border-bottom: 1px solid #d0d7de; padding-bottom: 4px; }
+h2 { font-size: 15pt; border-bottom: 1px solid #eaeef2; padding-bottom: 3px; }
 h3 { font-size: 14pt; }
 table { border-collapse: collapse; width: 100%; margin: 8px 0; }
 th, td { border: 1px solid #d0d7de; padding: 2px 10px; line-height: 1.4; vertical-align: middle; }
@@ -43,17 +43,22 @@ p, ul, ol { margin: 0 0 8px; }
 li { margin: 1px 0; }
 h1 { margin: 16px 0 8px; } h2 { margin: 14px 0 6px; } h3 { margin: 12px 0 4px; }
 h1, h2, h3, h4 { break-after: avoid; break-inside: avoid; }
-blockquote, table, pre, p[align=center] { break-inside: avoid; }
+blockquote, pre, p[align=center] { break-inside: avoid; }
+/* A long table may continue on the next page, a row never splits: kept whole, the
+   settings table left half a page empty above it. */
+tr { break-inside: avoid; }
+thead { display: table-header-group; }
 blockquote, pre, p[align=center] { break-before: avoid; }
 p:has(+ blockquote), p:has(+ p[align=center]), p:has(+ table), p:has(+ ul), p:has(+ ol), p:has(+ pre) { break-after: avoid; }
 li { break-inside: avoid; }
 .keep { break-inside: avoid; }
 blockquote.warning { border: 1px solid #d4a72c; border-right-width: 5px; background: #fff8c5; color: #1f2328; padding: 8px 14px; border-radius: 6px; margin: 10px 0 14px; }
-blockquote.warning img { display: block; width: 78%; margin: 6px auto 2px; border-radius: 4px; }
+blockquote.warning img { display: block; width: 46%; margin: 6px auto 2px; border-radius: 4px; }
 blockquote.warning ol { margin-bottom: 4px; }
-img[src*="assets/manual/app-"] { width: 60%; height: auto; }
-img[src*="assets/manual/settings-"] { width: 56%; height: auto; }
-img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"], img[src*="assets/manual/phone-"] { width: 160px; height: auto; }
+img[src*="assets/manual/app-"] { width: 44%; height: auto; }
+img[src*="assets/manual/settings-"] { width: 44%; height: auto; }
+img[src*="assets/manual/filezilla-"] { width: 70%; height: auto; }
+img[src*="assets/manual/web-countdown"], img[src*="assets/manual/web-daily"], img[src*="assets/manual/web-settings"], img[src*="assets/manual/phone-"] { width: 118px; height: auto; }
 img[src*="assets/manual/phone-home-"] { width: 250px; height: auto; }
 p { orphans: 3; widows: 3; }
 .toc { break-after: page; font-size: 11.5pt; line-height: 1.32; }

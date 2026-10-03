@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import sys
 from datetime import date as date_cls, datetime, timedelta
@@ -158,14 +159,14 @@ COUNTDOWN_BG_RED = "#990000"      # the 20 minutes before the next athan
 COUNTDOWN_BG_MAKROOH = "#BF360C"
 
 # --- Window buttons ----------------------------------------------------------
-# A row of four in the top-left corner: close, fullscreen, view, mute. Centred
+# A row of five in the top-left corner: close, fullscreen, view, mute, settings. Centred
 # text on the notice line is shrunk until it clears them.
 WINDOW_BUTTON_LEFT = 10               # x of the first button
 WINDOW_BUTTON_PITCH = 48              # x step between buttons
 WINDOW_BUTTON_WIDTH = 48
 WINDOW_BUTTON_HEIGHT = 50
 WINDOW_BUTTON_FONT_PX = 20
-WINDOW_BUTTONS_RIGHT_EDGE = 210       # what the notice has to stay clear of
+WINDOW_BUTTONS_RIGHT_EDGE = 258       # what the notice has to stay clear of
 # Each glyph sits at a different height inside its own line box, so the four are
 # nudged individually to put their ink on one line. Measured, not guessed: the
 # centres were 35.5 / 35.0 / 37.5 / 36.0 before these offsets.
@@ -177,6 +178,7 @@ VIEW_ICON_Y_DAILY = 8      # ◷
 # The speaker glyphs draw larger and higher than the rest at a shared size, so
 # they carry their own size and drop.
 MUTE_ICON_Y = 14
+SETTINGS_ICON_Y = 10       # ⚙
 MUTE_ICON_SIZE = 16
 # The muted glyph is a ring around mostly empty space, so at the size that
 # matches the others by ink box it reads lighter. It is drawn larger to make up.
@@ -207,6 +209,33 @@ INTERNET_CLOSE_SIZE_DAILY = 26
 # on those two backgrounds it is dark blue instead.
 INTERNET_BANNER_ON_WARM_BG = "#1E3A8A"
 WARM_COUNTER_BACKGROUNDS = (COUNTDOWN_BG_RED, COUNTDOWN_BG_MAKROOH)
+
+
+SETTINGS_APP = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "scheduler_settings_gui", "main.py")
+
+
+# Seconds after this app starts before Settings is started, hidden, ready for ⚙ - late
+# enough not to slow this app's own start.
+SETTINGS_PREWARM_SECONDS = 8
+
+
+def settings_app_pids():
+    try:
+        done = subprocess.run(["pgrep", "-f", "scheduler_settings_gui/main\\.py"],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [int(pid) for pid in done.stdout.split()]
+
+
+def start_settings(*flags):
+    """Settings on X like this app, so the two stack as one app's pages do."""
+    env = dict(os.environ, QT_QPA_PLATFORM="xcb", DISPLAY=os.environ.get("DISPLAY", ":0"))
+    subprocess.Popen([sys.executable, SETTINGS_APP, "--background", *flags], env=env,
+                     start_new_session=True, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
 
 
 def window_button_box(index, icon_y):
@@ -943,6 +972,15 @@ class AdhanCounter(QWidget):
         self.mute_btn.setGeometry(*window_button_box(3, MUTE_ICON_Y))
         self.mute_btn.clicked.connect(self.toggle_mute)
         self.mute_btn.show()
+
+        # Settings is its own program, opened from here the way a phone app opens its
+        # settings page, so the device has one icon. Not a page inside this window: an
+        # update run from Settings closes and restarts this app, and would take the
+        # window running the update down with it.
+        self.settings_btn = QPushButton("⚙", self)
+        self.settings_btn.setGeometry(*window_button_box(4, SETTINGS_ICON_Y))
+        self.settings_btn.clicked.connect(self.open_settings)
+        self.settings_btn.show()
         # Counts down to the next reading of the device; zero forces one on the next
         # tick. None means the device has not been read yet, or cannot be read at all.
         self.audio_poll_due = 0
@@ -972,7 +1010,7 @@ class AdhanCounter(QWidget):
         self.paint_window_buttons("black")
 
         for button in (self.exit_btn, self.fullscreen_btn, self.view_btn,
-                       self.mute_btn):
+                       self.mute_btn, self.settings_btn):
             button.raise_()
             # Subpixel antialiasing tints thin strokes orange on one edge and blue on
             # the other. On the speaker's sound waves that is strong enough to read as
@@ -1011,6 +1049,7 @@ class AdhanCounter(QWidget):
             self.resize(screen.geometry().size())
 
         self._ready = True
+        QTimer.singleShot(SETTINGS_PREWARM_SECONDS * 1000, self.prewarm_settings)
         self.showFullScreen()
         self.update_countdown()
 
@@ -1019,7 +1058,8 @@ class AdhanCounter(QWidget):
     # -------------------------
     def paint_window_buttons(self, color):
         style = self.btn_style.replace("color: black !important;", f"color: {color};")
-        for button in (self.exit_btn, self.fullscreen_btn, self.view_btn):
+        for button in (self.exit_btn, self.fullscreen_btn, self.view_btn,
+                       self.settings_btn):
             button.setStyleSheet(style)
         self.page_button_color = color
         self.paint_mute_button()
@@ -1122,6 +1162,26 @@ class AdhanCounter(QWidget):
             self.view_btn.setGeometry(*window_button_box(2, VIEW_ICON_Y_COUNTER))
             self.paint_window_buttons("black")
             self.update_countdown()
+
+    def prewarm_settings(self):
+        """Start Settings hidden, so ⚙ only has to show it. Not off screen - the update's
+        check and the tests run this app there, with nobody to tap anything."""
+        if QApplication.platformName() == "offscreen" or settings_app_pids():
+            return
+        start_settings()
+
+    def open_settings(self):
+        """Show Settings over this window: the copy kept ready if there is one, which
+        appears at once, otherwise a new one, which takes a second or two."""
+        pids = settings_app_pids()
+        if not pids:
+            start_settings("--present")
+            return
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGUSR1)
+            except OSError:
+                pass
 
     def show_internet_banner(self, message):
         """message is InternetMonitor.poll()'s answer: (text, background) or None."""

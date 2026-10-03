@@ -369,19 +369,51 @@ fi
 #######################################
 cd "$HOME/Desktop"
 
+# One app on the desktop, «السكينة», with Settings opened from its ⚙ button. The Settings
+# shortcut older releases put here goes - only when it is our own link, never a file the
+# owner made.
+OLD_SETTINGS_LINK="scheduler_settings_gui.desktop"
+if [[ -L "$OLD_SETTINGS_LINK" && "$(readlink "$OLD_SETTINGS_LINK")" == "$BASE_DIR/config/$OLD_SETTINGS_LINK" ]]; then
+    rm -f "$OLD_SETTINGS_LINK"
+    echo "Removed shortcut: $OLD_SETTINGS_LINK (Settings opens from the app's ⚙ button)"
+fi
+
+# Made afresh every run, not only when missing: the desktop reads a shortcut's name when
+# the link appears, so a release that renames an app only shows the new name once the
+# link is new.
 for desktop_file in \
     "$BASE_DIR/config/prayer_times_gui.desktop" \
-    "$BASE_DIR/config/scheduler_settings_gui.desktop" \
     "$BASE_DIR/config/scheduler_setup.desktop"
 do
     link_name="$(basename "$desktop_file")"
-    if [[ ! -L "$link_name" ]]; then
-        ln -s "$desktop_file"
-        echo "Created shortcut: $link_name"
-    else
-        echo "Shortcut already exists: $link_name"
-    fi
+    ln -sfn "$desktop_file" "$link_name"
+    echo "Shortcut: $link_name"
 done
+
+# The desktop reads an icon's name once, when it starts, and keeps it: a new link or a
+# touched file does not change the label (tried on a device). So the desktop is restarted
+# to show a renamed app - only where lwrespawn runs it, which starts it straight back; a
+# desktop nothing would bring back is left alone, and the new name shows at next login.
+DESKTOP_PID="$(pgrep -u "$(id -u)" -f '^pcmanfm --desktop' | head -n 1)"
+if [[ -n "$DESKTOP_PID" ]]; then
+    DESKTOP_PARENT="$(ps -o ppid= -p "$DESKTOP_PID" | tr -d ' ')"
+    DESKTOP_SUPERVISOR="$(ps -o ppid= -p "$DESKTOP_PARENT" 2>/dev/null | tr -d ' ')"
+    if ps -o args= -p "$DESKTOP_SUPERVISOR" 2>/dev/null | grep -q lwrespawn; then
+        kill "$DESKTOP_PID" 2> /dev/null || true
+        for _ in $(seq 1 20); do
+            sleep 0.5
+            NEW_DESKTOP_PID="$(pgrep -u "$(id -u)" -f '^pcmanfm --desktop' | head -n 1)"
+            [[ -n "$NEW_DESKTOP_PID" && "$NEW_DESKTOP_PID" != "$DESKTOP_PID" ]] && break
+        done
+        if [[ -n "$NEW_DESKTOP_PID" && "$NEW_DESKTOP_PID" != "$DESKTOP_PID" ]]; then
+            echo "Desktop restarted to show the shortcuts' names"
+        else
+            echo "WARNING: the desktop did not come back after a restart - it returns at next login"
+        fi
+    else
+        echo "Desktop not restarted (not supervised) - shortcut names update at next login"
+    fi
+fi
 
 # The same entries again, in the place the desktop environment looks for applications
 # rather than the place the user clicks them. The panel identifies a running window by its
