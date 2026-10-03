@@ -546,6 +546,29 @@ else
 fi
 
 #######################################
+# Desktop clock in 12-hour time
+#######################################
+# The apps show 12-hour times, and a taskbar clock reading 21:30 beside them looks like a
+# different time. wf-panel-pi reads [panel] clock_time_format from the user's own ini,
+# which overrides /etc/xdg, and picks up a change without a restart. The rest of that
+# file is the owner's, so only this one key is set.
+PANEL_INI="$HOME/.config/wf-panel-pi/wf-panel-pi.ini"
+CLOCK_FORMAT="%-I:%M %p"
+mkdir -p "$(dirname "$PANEL_INI")"
+touch "$PANEL_INI"
+if grep -qxF "clock_time_format=$CLOCK_FORMAT" "$PANEL_INI"; then
+    echo "Desktop clock already 12-hour"
+else
+    sed -i '/^clock_time_format=/d' "$PANEL_INI"
+    if grep -qx '\[panel\]' "$PANEL_INI"; then
+        sed -i "/^\[panel\]\$/a clock_time_format=$CLOCK_FORMAT" "$PANEL_INI"
+    else
+        printf '[panel]\nclock_time_format=%s\n' "$CLOCK_FORMAT" >> "$PANEL_INI"
+    fi
+    echo "Desktop clock set to 12-hour"
+fi
+
+#######################################
 # First update check
 #######################################
 # A device is only as current as the last time somebody copied files onto it. Ending setup

@@ -171,6 +171,29 @@ try:
     from PyQt5.QtWidgets import QApplication
     app = QApplication(sys.argv)
 
+    print("7b. started just after a reboot, it waits for the wifi to join")
+    def offline_monitor(uptime):
+        clock = Clock()
+        m = net.InternetMonitor(SETTINGS_INI_FILE, probe=lambda: False, clock=clock,
+                                uptime=lambda: uptime)
+        m.poll(); settle(m)
+        clock.now += 1
+        return m, clock
+    m, clock = offline_monitor(net.BOOT_GRACE_SECONDS + 60)
+    chk("long after boot: offline at launch warns at once", m.poll()[0], net.OFFLINE_MESSAGE)
+    m, clock = offline_monitor(40)
+    chk("40 seconds after boot: nothing yet", m.poll(), None)
+    for _ in range(net.WARN_AFTER_SECONDS // net.CHECK_EVERY_SECONDS - 1):
+        clock.now += net.CHECK_EVERY_SECONDS
+        m.poll(); settle(m)
+    clock.now += 1
+    chk("still nothing a check short of five minutes", m.poll(), None)
+    clock.now += 2 * net.CHECK_EVERY_SECONDS
+    m.poll(); settle(m)
+    clock.now += 1
+    chk("five minutes offline after boot warns", m.poll()[0], net.OFFLINE_MESSAGE)
+    chk("the uptime comes from the system", net.seconds_since_boot() > 0, True)
+
     print("8. the time app: top strip on the countdown, the corner by the date on the list")
     # Real times for every day, so the daily list is as full as it gets - with the
     # time-remaining badge up, its cards reach the bottom of the screen. The fixture's own

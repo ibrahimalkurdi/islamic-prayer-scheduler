@@ -24,6 +24,9 @@ CHECK_EVERY_SECONDS = 30
 # A router restart or a wifi blip is not worth a warning that flashes on and off.
 WARN_AFTER_SECONDS = 5 * 60
 BACK_SHOWN_SECONDS = 10
+# Right after a reboot the wifi is still joining; an app started then has not found an
+# outage, it is waiting for the network. It waits WARN_AFTER_SECONDS like any drop.
+BOOT_GRACE_SECONDS = 5 * 60
 
 ENABLE_KEY = "enable_internet_warning"
 DEFAULT_ENABLED = True
@@ -54,6 +57,14 @@ def reachable(probes=PROBES, timeout=PROBE_TIMEOUT_SECONDS):
     return False
 
 
+def seconds_since_boot():
+    try:
+        with open("/proc/uptime", encoding="ascii") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return float("inf")
+
+
 def warning_enabled(ini_path):
     """The owner's choice in config.ini, on unless they turned it off."""
     parser = configparser.ConfigParser(interpolation=None)
@@ -68,7 +79,8 @@ class InternetWatch:
     """Turns a series of reachable/unreachable results into what the screen shows.
 
     An app that starts offline warns at once: whoever just opened it is at the screen, and
-    the outage did not start with the app. A drop while it runs waits WARN_AFTER_SECONDS.
+    the outage did not start with the app - unless the device has just booted. A drop while
+    it runs, or one met in the first BOOT_GRACE_SECONDS after boot, waits WARN_AFTER_SECONDS.
     Closing the warning lasts for this run of the app only, so opening it again while still
     offline warns again.
 
@@ -125,11 +137,13 @@ class InternetMonitor:
     is due and returns the message to show now, or None - never waiting on the network,
     so the screen keeps ticking while a check is out."""
 
-    def __init__(self, ini_path, probe=reachable, clock=time.monotonic):
+    def __init__(self, ini_path, probe=reachable, clock=time.monotonic,
+                 uptime=seconds_since_boot):
         self.ini_path = ini_path
         self.probe = probe
         self.clock = clock
         self.watch = InternetWatch()
+        self.watch.launching = uptime() >= BOOT_GRACE_SECONDS
         self._result = None
         self._running = False
         self._next_check = 0
