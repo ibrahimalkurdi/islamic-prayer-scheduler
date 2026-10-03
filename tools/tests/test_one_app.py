@@ -40,11 +40,15 @@ def entry_name(file_name):
 
 print("1. the desktop entries")
 chk("the app is «السكينة»", entry_name("prayer_times_gui.desktop"), "السكينة")
-chk("Settings, kept for the app menu, is «إعدادات السكينة»",
+chk("Settings, on the desktop too, is «إعدادات السكينة»",
     entry_name("scheduler_settings_gui.desktop"), "إعدادات السكينة")
+with open(os.path.join(SCHEDULER, "config/scheduler_settings_gui.desktop"), encoding="utf-8") as f:
+    settings_exec = next(line.strip() for line in f if line.startswith("Exec="))
+chk("its icon asks for the copy ⚙ keeps ready, on X as ⚙ starts it",
+    (settings_exec.endswith("main.py --open"), "QT_QPA_PLATFORM=xcb" in settings_exec), (True, True))
 needs = [l.strip() for l in open(os.path.join(SCHEDULER, "config/needs_init"), encoding="utf-8")
          if l.strip() and not l.lstrip().startswith("#")]
-chk("the release asks for setup, so the desktop changes on update", needs[:1], ["1.5.0"])
+chk("the release asks for setup, so the desktop changes on update", needs[:1], ["1.5.1"])
 
 from PyQt5.QtWidgets import QApplication
 app = QApplication(sys.argv)
@@ -106,6 +110,15 @@ settings.close()
 chk("not while an update is installing - the updater restarts it", started, [])
 chk("the time app it starts is there", os.path.isfile(gui.COUNTDOWN_APP), True)
 
+settings.update_worker = None
+settings.set_opened_from_desktop(True)
+settings.show(); started.clear()
+settings.close()
+chk("opened from the desktop it is closed with «إغلاق», back to the desktop",
+    (settings.back_btn.text(), started), ("✖ إغلاق", []))
+settings.set_opened_from_desktop(False)
+chk("opened from ⚙ it is «رجوع»", settings.back_btn.text(), "→ رجوع")
+
 print("4. Settings kept ready: shown at once, hidden on close, never stale")
 import time
 def pump(seconds):
@@ -132,6 +145,11 @@ chk("and a fresh copy is built for next time", kept.window is not first, True)
 second = kept.window
 kept.present(); pump(0.2)
 chk("which is the one shown next, with nothing changed", kept.window is second, True)
+chk("from ⚙, its way out is «رجوع»", second.back_btn.text(), "→ رجوع")
+second.close(); pump(0.2)
+kept.present(from_desktop=True); pump(0.2)
+chk("from the desktop icon, the same copy shows «إغلاق»",
+    (kept.window is second, second.back_btn.text()), (True, "✖ إغلاق"))
 second.close(); pump(2.0)
 third = kept.window
 os.utime(gui.SETTINGS_INI_FILE)
@@ -147,11 +165,34 @@ kept.present()
 gui.subprocess.Popen = real_popen
 chk("restarted when an update replaced its code", (spawned[0][-2:], FakeApp.quit_called),
     (["--background", "--present"], True))
+gui.subprocess.Popen = lambda args, **kw: spawned.append(args)
+kept.present(from_desktop=True)
+gui.subprocess.Popen = real_popen
+chk("and still opened as from the desktop when that is where it was asked from",
+    spawned[1][-3:], ["--background", "--present", "--desktop"])
 
 shown = []
-timer = gui.on_show_request(lambda: shown.append(1))
+timer = gui.on_show_request(shown.append)
 os.kill(os.getpid(), gui.signal.SIGUSR1); pump(0.5)
-chk("the signal from ⚙ shows it", shown, [1])
+chk("the signal from ⚙ shows it as the time app's page", shown, [False])
+os.kill(os.getpid(), gui.signal.SIGUSR2); pump(0.5)
+chk("the one from the desktop icon shows it as an app of its own", shown, [False, True])
+
+print("5. the desktop's Settings icon")
+import subprocess
+handles = subprocess.Popen([sys.executable, "-c",
+    "import signal, time; signal.signal(signal.SIGUSR2, lambda *a: None); time.sleep(30)"])
+old_copy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+time.sleep(0.5)
+gui.other_settings_pids = lambda: [handles.pid]
+chk("with Settings kept ready, the icon shows it - no second copy", gui.show_running_copy(), True)
+chk("asking with the desktop's signal, which leaves it running", handles.poll(), None)
+gui.other_settings_pids = lambda: [old_copy.pid]
+chk("a copy from before 1.5.1 is ended by that signal, so the icon starts a new one",
+    gui.show_running_copy(), False)
+handles.kill(); handles.wait(); old_copy.wait()
+gui.other_settings_pids = lambda: []
+chk("with none, the icon starts the copy that is kept from then on", gui.show_running_copy(), False)
 
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

@@ -11,6 +11,7 @@ import json
 import re
 import signal
 import threading
+import time
 from datetime import datetime, timedelta
 
 
@@ -1172,6 +1173,7 @@ class ControlApp(QMainWindow):
             " border-radius: 8px; background: #f3f4f6; }"
             " QPushButton:pressed { background: #e5e7eb; }")
         self.back_btn.clicked.connect(self.close)
+        self.from_desktop = False
         back_layout.addWidget(self.back_btn)
         back_layout.addStretch()
         central = QWidget()
@@ -2939,10 +2941,17 @@ class ControlApp(QMainWindow):
             super().closeEvent(event)
             if not event.isAccepted():
                 return
-        if not self.busy() and not countdown_running():
+        if not self.from_desktop and not self.busy() and not countdown_running():
             launch_countdown()
         if getattr(self, "on_hidden", None):
             self.on_hidden()
+
+    def set_opened_from_desktop(self, from_desktop):
+        """Opened by the desktop's Settings icon it is an app of its own: closed with
+        «إغلاق», back to the desktop. Opened by the time screen's ⚙ it is that app's page:
+        «رجوع» leads back to the time screen."""
+        self.from_desktop = from_desktop
+        self.back_btn.setText("✖ إغلاق" if from_desktop else "→ رجوع")
 
     def busy(self):
         """An update or an apply still running in this window."""
@@ -2989,7 +2998,7 @@ def data_stamp():
 
 
 class BackgroundSettings:
-    def __init__(self, app, present_now):
+    def __init__(self, app, present_now, from_desktop=False):
         self.app = app
         self.code = code_stamp()
         self.window = None
@@ -2999,7 +3008,7 @@ class BackgroundSettings:
         if present_now or csv_is_valid_prayer_format(PRAYER_CSV_FILE):
             self.build()
         if present_now:
-            self.present()
+            self.present(from_desktop)
 
     def build(self):
         if self.window is not None:
@@ -3013,16 +3022,18 @@ class BackgroundSettings:
         self.window = window
         self.data = data_stamp()
 
-    def present(self):
+    def present(self, from_desktop=False):
         if code_stamp() != self.code:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "--background",
-                              "--present"], start_new_session=True,
+                              "--present", *(["--desktop"] if from_desktop else [])],
+                             start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.app.quit()
             return
         if self.window is None or (not self.window.isVisible() and data_stamp() != self.data):
             self.build()
         window = self.window
+        window.set_opened_from_desktop(from_desktop)
         window.showFullScreen()
         window.raise_()
         window.activateWindow()
@@ -3034,25 +3045,75 @@ class BackgroundSettings:
         QTimer.singleShot(1500, self.build)
 
 
+FROM_APP_SIGNAL = signal.SIGUSR1
+FROM_DESKTOP_SIGNAL = signal.SIGUSR2
+
+
 def on_show_request(handler):
-    """Calls handler on the Qt thread each time SIGUSR1 arrives. A Python signal handler
-    only runs between bytecodes, so the event loop is kept turning by a short timer."""
-    asked = threading.Event()
-    signal.signal(signal.SIGUSR1, lambda *_: asked.set())
+    """Calls handler(from_desktop) on the Qt thread each time the time screen's ⚙
+    (SIGUSR1) or the desktop's Settings icon (SIGUSR2) asks. A Python signal handler only
+    runs between bytecodes, so the event loop is kept turning by a short timer."""
+    asked = {FROM_APP_SIGNAL: threading.Event(), FROM_DESKTOP_SIGNAL: threading.Event()}
+    for signum, event in asked.items():
+        signal.signal(signum, lambda *_, event=event: event.set())
     timer = QTimer()
 
     def check():
-        if asked.is_set():
-            asked.clear()
-            handler()
+        for signum, event in asked.items():
+            if event.is_set():
+                event.clear()
+                handler(signum == FROM_DESKTOP_SIGNAL)
 
     timer.timeout.connect(check)
     timer.start(100)
     return timer
 
 
+def other_settings_pids():
+    try:
+        done = subprocess.run(["pgrep", "-f", "^[^ ]*python3 .*scheduler_settings_gui/main\\.py"],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [int(pid) for pid in done.stdout.split() if int(pid) != os.getpid()]
+
+
+def show_running_copy():
+    """The desktop's Settings icon (--open): show the copy the time app keeps ready, as
+    its ⚙ does, rather than build a second one. False when there is none to show.
+
+    A copy from before 1.5.1 has no handler for this signal and is ended by it - one an
+    update left running until the next restart - so each is checked to have lived
+    through it."""
+    signalled = []
+    for pid in other_settings_pids():
+        try:
+            os.kill(pid, FROM_DESKTOP_SIGNAL)
+            signalled.append(pid)
+        except OSError:
+            pass
+    if not signalled:
+        return False
+    time.sleep(0.3)
+    return any(process_alive(pid) for pid in signalled)
+
+
+def process_alive(pid):
+    """Not ended, and not a zombie its parent - the time app - has yet to reap."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
+
+
 # ---------------- Run ----------------
 if __name__ == "__main__":
+    if "--open" in sys.argv:
+        if show_running_copy():
+            sys.exit(0)
+        sys.argv += ["--background", "--present", "--desktop"]
+
     app = QApplication(sys.argv)
     app.setFont(QFont("Amiri"))
     # The task list on the panel does not read the window icon set above: on Wayland it is
@@ -3066,7 +3127,8 @@ if __name__ == "__main__":
 
     if "--background" in sys.argv:
         try:
-            background = BackgroundSettings(app, present_now="--present" in sys.argv)
+            background = BackgroundSettings(app, present_now="--present" in sys.argv,
+                                            from_desktop="--desktop" in sys.argv)
         except StartupAborted:
             sys.exit(1)
         show_timer = on_show_request(background.present)
@@ -3077,7 +3139,8 @@ if __name__ == "__main__":
     except StartupAborted:
         sys.exit(1)
 
-    def show_window():
+    def show_window(from_desktop=False):
+        window.set_opened_from_desktop(from_desktop)
         window.showFullScreen()
         window.raise_()
         window.activateWindow()

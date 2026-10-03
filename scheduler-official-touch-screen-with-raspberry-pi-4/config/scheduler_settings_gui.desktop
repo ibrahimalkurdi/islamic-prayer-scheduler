@@ -3,7 +3,7 @@ Version=1.0
 Type=Application
 Name=إعدادات السكينة
 Comment=Touchscreen Application
-Exec=python3 /home/ihms/Desktop/scheduler/applications/desktop/scheduler_settings_gui/main.py
+Exec=env DISPLAY=:0 QT_QPA_PLATFORM=xcb python3 /home/ihms/Desktop/scheduler/applications/desktop/scheduler_settings_gui/main.py --open
 Icon=athan-settings-app
 Terminal=false
 StartupWMClass=scheduler_settings_gui

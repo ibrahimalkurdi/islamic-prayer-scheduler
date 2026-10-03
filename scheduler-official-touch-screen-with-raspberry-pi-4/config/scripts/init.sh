@@ -369,20 +369,13 @@ fi
 #######################################
 cd "$HOME/Desktop"
 
-# One app on the desktop, «السكينة», with Settings opened from its ⚙ button. The Settings
-# shortcut older releases put here goes - only when it is our own link, never a file the
-# owner made.
-OLD_SETTINGS_LINK="scheduler_settings_gui.desktop"
-if [[ -L "$OLD_SETTINGS_LINK" && "$(readlink "$OLD_SETTINGS_LINK")" == "$BASE_DIR/config/$OLD_SETTINGS_LINK" ]]; then
-    rm -f "$OLD_SETTINGS_LINK"
-    echo "Removed shortcut: $OLD_SETTINGS_LINK (Settings opens from the app's ⚙ button)"
-fi
-
+# «السكينة» and its Settings, which also opens from the app's ⚙ button.
 # Made afresh every run, not only when missing: the desktop reads a shortcut's name when
 # the link appears, so a release that renames an app only shows the new name once the
 # link is new.
 for desktop_file in \
     "$BASE_DIR/config/prayer_times_gui.desktop" \
+    "$BASE_DIR/config/scheduler_settings_gui.desktop" \
     "$BASE_DIR/config/scheduler_setup.desktop"
 do
     link_name="$(basename "$desktop_file")"
