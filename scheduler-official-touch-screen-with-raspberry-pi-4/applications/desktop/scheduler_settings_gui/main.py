@@ -88,6 +88,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from shared import audio_lists
 from shared import internet_status
+from shared import settings_rules
 from shared.settings_rules import (
     EXPECTED_CSV_HEADER, csv_is_valid_prayer_format, detect_csv_format, version_key,
     duha_time_is_makrooh as duha_rule,
@@ -196,12 +197,9 @@ INIT_SCRIPT_FILE = os.path.join(
 # =====================================================
 
 def scan_desktop_prayer_candidates():
-    """Al Awail exports (*-YYYY.csv) take precedence, followed by the manual file
-    itself (re-selecting it is a no-op - it's already the reference)."""
-    candidates = sorted(glob.glob(AL_AWAIL_GLOB_PATTERN))
-    if os.path.isfile(PRAYER_CSV_FILE):
-        candidates.append(PRAYER_CSV_FILE)
-    return candidates
+    """Al Awail exports (*-YYYY.csv) copied to the Desktop. The reference file itself is
+    not one: it is where every choice is copied to, so picking it would change nothing."""
+    return sorted(glob.glob(AL_AWAIL_GLOB_PATTERN))
 
 
 def compute_file_hash(path):
@@ -224,9 +222,30 @@ def scan_prayers_config_candidates():
     return candidates
 
 
+def scan_prayer_sources():
+    """What the picker offers: the city presets first, then any Al Awail exports."""
+    return scan_prayers_config_candidates() + scan_desktop_prayer_candidates()
 
 
+def current_prayer_source(recorded):
+    """The file the reference file was last copied from, as it exists on this device.
+    A preset recorded under another device's home (settings copied from louay to ihms-lr)
+    is the same preset here, found by its name. None when nothing can be restored from."""
+    if not recorded:
+        return None
+    if os.path.isfile(recorded):
+        return recorded
+    if os.path.basename(os.path.dirname(recorded)) == os.path.basename(PRAYERS_CONFIG_DIR):
+        here = os.path.join(PRAYERS_CONFIG_DIR, os.path.basename(recorded))
+        if os.path.isfile(here):
+            return here
+    return None
 
+
+def isolated(name):
+    """A file name kept whole inside Arabic text: without the isolate marks the bidi
+    algorithm moves its «.csv» to the far end of the sentence."""
+    return f"\u2068{name}\u2069"
 
 
 # ---------------- Defaults ----------------
@@ -475,47 +494,54 @@ class StartupAborted(Exception):
 # =====================================================
 
 class PrayerSourceDialog(QDialog):
-    """Lets the user pick a prayer-times source. Defaults to Desktop candidates,
-    with a toggle to browse the ready-made presets in PRAYERS_CONFIG_DIR instead.
+    """Picks the prayer times the device runs on. Whatever is picked is copied into
+    PRAYER_CSV_FILE, the one file the schedule is built from, and the yellow note says
+    so. «استعادة مواقيت المدينة» copies the current source in again, undoing hand edits.
     When mandatory=True the dialog cannot be closed/cancelled without a valid pick."""
 
-    def __init__(self, parent, mandatory=False):
+    def __init__(self, parent, mandatory=False, current_source=None):
         super().__init__(parent)
         self.mandatory = mandatory
+        self.current_source = current_source
         self.selected_path = None
-        self.browsing_config = False
+        self.restore = False
         self.user_quit = False
 
         self.setWindowTitle("اختيار ملف مواقيت الصلاة")
         self.setLayoutDirection(Qt.RightToLeft)
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
 
         info_text = (
-            "لم يتم العثور على ملف مواقيت صلاة صالح.\nالرجاء اختيار أحد الملفات التالية للمتابعة:"
+            "لم يتم العثور على ملف مواقيت صلاة صالح.\nالرجاء اختيار مواقيت الصلاة للمتابعة:"
             if mandatory else
-            "اختر ملف مواقيت الصلاة الذي سيتم اعتماده:"
+            "مواقيت الصلاة التي سيعمل بها الجهاز:"
         )
         info = QLabel(info_text)
         apply_arabic_font(info, size=16, bold=True)
         info.setWordWrap(True)
         layout.addWidget(info)
 
-        self.source_label = QLabel()
-        self.source_label.setStyleSheet("font-size: 14px; color: #555;")
-        layout.addWidget(self.source_label)
-
-        self.combo = QComboBox()
+        self.combo = RightAlignedComboBox()
         self.combo.setLayoutDirection(Qt.RightToLeft)
         self.combo.setStyleSheet("font-size: 18px; padding: 5px;")
         self.combo.setFixedHeight(45)
         layout.addWidget(self.combo)
 
-        self.toggle_btn = QPushButton()
-        self.toggle_btn.setFixedHeight(40)
-        self.toggle_btn.clicked.connect(self.toggle_source_dir)
-        layout.addWidget(self.toggle_btn)
+        reference = os.path.basename(PRAYER_CSV_FILE)
+        self.note = QLabel(
+            f"سيتم نسخ المواقيت التي تختارها إلى الملف «{isolated(reference)}» على سطح "
+            "المكتب، ويمكنك تعديله إن لزم. بعد الاختيار أو التعديل اضغط "
+            "«حفظ وتفعيل الإعدادات»."
+        )
+        self.note.setObjectName("prayerSourceNote")
+        self.note.setWordWrap(True)
+        self.note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.note.setStyleSheet(
+            "QLabel#prayerSourceNote { background: #FFF8C5; border: 1px solid #D4A72C;"
+            " border-radius: 6px; padding: 8px 10px; font-size: 15px; color: #1f2328; }")
+        layout.addWidget(self.note)
 
         btn_row = QHBoxLayout()
         self.ok_btn = QPushButton("اختيار")
@@ -524,11 +550,6 @@ class PrayerSourceDialog(QDialog):
         self.ok_btn.clicked.connect(self.accept_selection)
         btn_row.addWidget(self.ok_btn)
 
-        rescan_btn = QPushButton("تحديث قائمة الملفات")
-        rescan_btn.setFixedHeight(50)
-        rescan_btn.clicked.connect(self.rescan)
-        btn_row.addWidget(rescan_btn)
-
         if not mandatory:
             cancel_btn = QPushButton("إلغاء")
             cancel_btn.setFixedHeight(50)
@@ -536,6 +557,25 @@ class PrayerSourceDialog(QDialog):
             btn_row.addWidget(cancel_btn)
 
         layout.addLayout(btn_row)
+
+        restore_row = QHBoxLayout()
+        self.restore_btn = QPushButton("استعادة مواقيت المدينة")
+        self.restore_btn.setFixedHeight(44)
+        self.restore_btn.clicked.connect(self.accept_restore)
+        restore_row.addWidget(self.restore_btn)
+        self.restore_note = QLabel()
+        self.restore_note.setWordWrap(True)
+        self.restore_note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.restore_note.setStyleSheet("font-size: 14px; color: #555;")
+        restore_row.addWidget(self.restore_note, 1)
+        layout.addLayout(restore_row)
+        if current_source:
+            self.restore_note.setText(
+                f"يعيد نسخ «{isolated(os.path.basename(current_source))}» إلى "
+                f"«{isolated(reference)}»، فتُلغى أي تعديلات عليه.")
+        else:
+            self.restore_btn.setEnabled(False)
+            self.restore_note.setText("لا يوجد ملف معروف تمت منه آخر عملية نسخ.")
 
         # Safety valve: even in mandatory mode (no window-close button), the user must
         # always have a way out instead of being trapped by an unexpectedly empty list.
@@ -546,41 +586,22 @@ class PrayerSourceDialog(QDialog):
             quit_btn.clicked.connect(self.quit_app)
             layout.addWidget(quit_btn)
 
-        self.populate_desktop()
+        self.populate()
 
-    def populate_desktop(self):
-        self.browsing_config = False
-        self.source_label.setText(f"الملفات الموجودة على سطح المكتب:\n(المسار: {DESKTOP_DIR})")
-        self.toggle_btn.setText("تصفح مجلد الإعدادات (config) بدلاً من ذلك")
-        self._populate(scan_desktop_prayer_candidates(), "لا توجد ملفات في هذا المسار")
-
-    def populate_config_dir(self):
-        self.browsing_config = True
-        self.source_label.setText(f"الملفات الجاهزة في مجلد الإعدادات:\n(المسار: {PRAYERS_CONFIG_DIR})")
-        self.toggle_btn.setText("العودة إلى ملفات سطح المكتب")
-        self._populate(scan_prayers_config_candidates(), "لا توجد ملفات في هذا المسار")
-
-    def _populate(self, candidates, empty_text):
+    def populate(self):
         self.combo.clear()
+        candidates = scan_prayer_sources()
         if not candidates:
-            self.combo.addItem(empty_text, None)
+            self.combo.addItem("لا توجد ملفات مواقيت", None)
             self.ok_btn.setEnabled(False)
-        else:
-            for path in candidates:
-                self.combo.addItem(os.path.basename(path), path)
-            self.ok_btn.setEnabled(True)
-
-    def toggle_source_dir(self):
-        if self.browsing_config:
-            self.populate_desktop()
-        else:
-            self.populate_config_dir()
-
-    def rescan(self):
-        if self.browsing_config:
-            self.populate_config_dir()
-        else:
-            self.populate_desktop()
+            return
+        for path in candidates:
+            self.combo.addItem(os.path.basename(path), path)
+        self.ok_btn.setEnabled(True)
+        if self.current_source:
+            index = self.combo.findData(self.current_source)
+            if index >= 0:
+                self.combo.setCurrentIndex(index)
 
     def quit_app(self):
         # Can't use QApplication.quit() here: this dialog runs from ControlApp.__init__,
@@ -598,19 +619,18 @@ class PrayerSourceDialog(QDialog):
         self.selected_path = path
         self.accept()
 
-    def reject(self):
-        if self.mandatory:
+    def accept_restore(self):
+        if not self.current_source:
             return
-        super().reject()
-
-    def closeEvent(self, event):
-        # In mandatory mode the window-manager X behaves exactly like the explicit
-        # "close the app" button, rather than being a control that silently does
-        # nothing (the WM draws it regardless of WindowCloseButtonHint).
-        if self.mandatory:
-            self.user_quit = True
-            self.mandatory = False
-        super().closeEvent(event)
+        if not arabic_confirm(
+                self, "استعادة مواقيت المدينة",
+                f"سيتم استبدال محتوى «{isolated(os.path.basename(PRAYER_CSV_FILE))}» بمواقيت "
+                f"«{isolated(os.path.basename(self.current_source))}»، وتُلغى أي تعديلات عليه.\n\n"
+                "هل أنت متأكد من المتابعة؟"):
+            return
+        self.selected_path = self.current_source
+        self.restore = True
+        self.accept()
 
 
 # =====================================================
@@ -1349,6 +1369,27 @@ class ControlApp(QMainWindow):
             arabic_warning(self, "تنبيه", message)
         return conflicts
 
+    def year_moves_message(self):
+        """The question to ask before saving an Athkar Elsabah or Surat Al-Kahf time that
+        does not fit every day of the year, or "" when it does."""
+        rows = settings_rules.prayer_year_rows(self.effective_prayer_csv())
+        athkar = []
+        if self.athkar_elsabah_chk.isChecked():
+            athkar = settings_rules.athkar_elsabah_moves(
+                rows, self.selected_athkar_elsabah_mode(),
+                self.athkar_elsabah_clock_minutes(), self.athkar_elsabah_spin.value())
+        friday = []
+        if self.friday_quran_chk.isChecked():
+            friday = settings_rules.friday_quran_moves(
+                rows, datetime.now().year, self.selected_friday_quran_position(),
+                self.friday_quran_spin.value())
+        return settings_rules.year_moves_message(athkar, friday, self.minutes_to_clock)
+
+    def confirm_year_moves(self):
+        """Asks, when a time has to move on some days; False when the answer is no."""
+        message = self.year_moves_message()
+        return not message or arabic_confirm(self, "تنبيه", message)
+
     def validate_athkar_elsabah_time(self):
         try:
             if self.athkar_elsabah_conflicts_with_dhuhr():
@@ -1595,6 +1636,29 @@ class ControlApp(QMainWindow):
             if item.flags() & Qt.ItemIsUserCheckable:
                 item.setCheckState(Qt.Checked if item.text() in wanted else Qt.Unchecked)
         self.save_audio_checked_state(list_widget, config_key)
+
+    def event_switches(self):
+        """Each event's checkbox with the list of files it plays."""
+        pairs = [
+            (self.tahajjud_chk, self.tahajjud_audio_list),
+            (self.duha_chk, self.duha_audio_list),
+            (self.athkar_elsabah_chk, self.athkar_elsabah_audio_list),
+            (self.athkar_elmasa_chk, self.athkar_elmasa_audio_list),
+            (self.cron_chk, self.quran_audio_list),
+            (self.friday_quran_chk, self.friday_quran_audio_list),
+        ]
+        for prayer_key, list_widget in self.prayer_audio_lists.items():
+            pairs.append((self.prayer_checkboxes[f"{PRAYER_PREFIX}{prayer_key}"], list_widget))
+        return pairs
+
+    def untick_events_without_audio(self):
+        """An event plays only the files ticked for it, so one left on with none ticked
+        is switched off - on the screen too, so what is shown is what will happen."""
+        for chk, list_widget in self.event_switches():
+            ticked = any(list_widget.item(i).checkState() == Qt.Checked
+                         for i in range(list_widget.count()))
+            if chk.isChecked() and not ticked:
+                chk.setChecked(False)
 
     def save_audio_checked_state(self, list_widget, config_key):
         checked_files = []
@@ -2280,7 +2344,8 @@ class ControlApp(QMainWindow):
         else:
             lines.append("الملف غير موجود حاليًا")
 
-        chosen_source = self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "").strip()
+        recorded = self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "").strip()
+        chosen_source = current_prayer_source(recorded) or recorded
         if chosen_source:
             lines.append(f"تم اختياره من: {chosen_source}")
         else:
@@ -2300,19 +2365,22 @@ class ControlApp(QMainWindow):
         """Returns True on a successful pick, False if cancelled, or None if the user
         chose to quit the application from the mandatory dialog."""
         while True:
-            dialog = PrayerSourceDialog(self, mandatory=mandatory)
+            recorded = self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "").strip()
+            dialog = PrayerSourceDialog(self, mandatory=mandatory,
+                                        current_source=current_prayer_source(recorded))
             result = dialog.exec_()
             if dialog.user_quit:
                 return None
             if result != QDialog.Accepted:
                 return False  # only reachable when not mandatory (user cancelled)
-            if self.resolve_and_apply_prayer_source(dialog.selected_path):
+            if self.resolve_and_apply_prayer_source(dialog.selected_path,
+                                                    confirmed=dialog.restore):
                 return True
             if not mandatory:
                 return False
             # mandatory + the chosen file failed validation/was declined -> pick again
 
-    def resolve_and_apply_prayer_source(self, source_path):
+    def resolve_and_apply_prayer_source(self, source_path, confirmed=False):
         same_file = os.path.abspath(source_path) == os.path.abspath(PRAYER_CSV_FILE)
 
         # Warn before clobbering hand edits made to PRAYER_CSV_FILE since we last wrote it.
@@ -2320,7 +2388,7 @@ class ControlApp(QMainWindow):
         # file (fresh upgrade, first-ever pick, or a file typed by hand per README
         # Step 6) - treat that as "possibly hand-written" and warn, rather than
         # silently overwriting it.
-        if not same_file and os.path.isfile(PRAYER_CSV_FILE):
+        if not same_file and not confirmed and os.path.isfile(PRAYER_CSV_FILE):
             stored_hash = self.config["Settings"].get(PRAYER_CSV_HASH_CONFIG_KEY, "").strip()
             current_hash = compute_file_hash(PRAYER_CSV_FILE)
             if not stored_hash or not current_hash or stored_hash != current_hash:
@@ -2732,6 +2800,8 @@ class ControlApp(QMainWindow):
             )
             return False  # indicate save failed
 
+        self.untick_events_without_audio()
+
         s = self.config["Settings"]
         s[TAHAJJUD_ENABLE] = str(self.tahajjud_chk.isChecked())
         s[TAHAJJUD_TIME] = str(self.tahajjud_spin.value())
@@ -2911,6 +2981,10 @@ class ControlApp(QMainWindow):
                 return
 
             if self.athkar_elsabah_conflicts_with_dhuhr():
+                self.unlock_button()
+                return
+
+            if not self.confirm_year_moves():
                 self.unlock_button()
                 return
 

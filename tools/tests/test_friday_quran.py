@@ -174,7 +174,12 @@ app = QApplication(sys.argv)
 gui = load(APP, "settings_app")
 gui.arabic_info = lambda parent, title, text: None
 gui.arabic_error = lambda parent, title, text: None
+# Saved off when no recitation is ticked, so give it one to tick.
+kahf_file = os.path.join(AUDIO_DIR, "fixture-kahf.mp3")
+open(kahf_file, "w").close()
 w = gui.ControlApp()
+from PyQt5.QtCore import Qt
+w.friday_quran_audio_list.item(0).setCheckState(Qt.Checked)
 
 chk("the section defaults to an hour after", w.friday_quran_spin.value(), 60)
 chk("and to after rather than before", w.selected_friday_quran_position(), "after")
@@ -210,6 +215,7 @@ chk("with the hour on a 12-hour dial and no leading zero",
 
 # The suite leaves the device's own settings as it found them.
 open(SETTINGS_INI_FILE, "w", encoding="utf-8").write(saved_ini)
+os.remove(kahf_file)
 
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

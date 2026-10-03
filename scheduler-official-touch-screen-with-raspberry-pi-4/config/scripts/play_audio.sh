@@ -169,6 +169,8 @@ if [[ "$PRAYER_NAME_LOWER" == "isha" && "$CURRENT_HOUR" -ge 22 ]]; then
     FILES=("$AUDIO_DIR/fajr"/*.mp3)
     shopt -u nullglob
 else
+    # Only the files ticked in Settings. None ticked plays nothing: Settings switches
+    # such an event off on save, and an empty list here must not mean "the whole folder".
     if [[ -n "$AUDIO_MP3_LIST" ]]; then
         IFS=',' read -ra AUDIO_NAMES <<< "$AUDIO_MP3_LIST"
 
@@ -181,10 +183,6 @@ else
                 log "WARNING: Audio file not found: $file"
             fi
         done
-    else
-        shopt -s nullglob
-        FILES=("$PLAYER_DIR"/*.mp3)
-        shopt -u nullglob
     fi
 fi
 

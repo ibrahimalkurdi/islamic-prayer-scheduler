@@ -162,3 +162,103 @@ def prayer_minutes_for(csv_path, date):
         "maghrib": time_to_minutes(row["Maghrib"]),
         "isha": time_to_minutes(row["Isha"]),
     }
+
+
+# ---------------------------------------------------------------------------
+# Days of the year a chosen time does not fit
+# ---------------------------------------------------------------------------
+# Athkar Elsabah and Surat Al-Kahf are one setting applied to every day, but the prayers
+# they sit between move across the year. On a day the setting does not fit, the
+# scheduler moves it to a minute inside. Settings asks before saving such a value, and
+# these find the days and say what will happen on them.
+
+def prayer_year_rows(csv_path):
+    """Every row of a Month,Day,... CSV as minutes since midnight, with its month and day."""
+    rows = []
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            rows.append({
+                "month": int(row["Month"]), "day": int(row["Day"]),
+                "fajr": time_to_minutes(row["Fajr"]),
+                "sunrise": time_to_minutes(row["Sunrise"]),
+                "dhuhr": time_to_minutes(row["Dhuhr"]),
+                "asr": time_to_minutes(row["Asr"]),
+            })
+    return rows
+
+
+def _first(moves):
+    """The day the time moves most - the clearest example to show."""
+    return max(moves, key=lambda m: abs(m["moved_to"] - m["wanted"]))
+
+
+def athkar_elsabah_moves(rows, mode, clock_minutes, after_fajr_minutes):
+    """The days Athkar Elsabah would fall on or past Dhuhr, or on or before Fajr, each
+    with the time it would have been and the time it plays instead."""
+    moves = []
+    for r in rows:
+        if mode == ATHKAR_ELSABAH_MODE_CLOCK:
+            wanted = clock_minutes
+            moved_to = min(max(wanted, r["fajr"] + 1), r["dhuhr"] - 1)
+        else:
+            wanted = r["fajr"] + after_fajr_minutes
+            moved_to = r["fajr"] + min(after_fajr_minutes, max(1, r["dhuhr"] - r["fajr"] - 1))
+        if moved_to != wanted:
+            moves.append({**r, "wanted": wanted, "moved_to": moved_to,
+                          "late": wanted > moved_to})
+    return moves
+
+
+def friday_quran_moves(rows, year, position, minutes):
+    """The Fridays of `year` Surat Al-Kahf would fall on or past Asr, or on or before
+    Sunrise, each with the time it would have been and the time it plays instead."""
+    from datetime import date
+    moves = []
+    for r in rows:
+        try:
+            day = date(year, r["month"], r["day"])
+        except ValueError:
+            continue
+        if day.weekday() != 4:
+            continue
+        wanted = r["dhuhr"] - minutes if position == "before" else r["dhuhr"] + minutes
+        moved_to = wanted
+        if moved_to >= r["asr"]:
+            moved_to = r["asr"] - 1
+        if moved_to <= r["sunrise"]:
+            moved_to = r["sunrise"] + 1
+        if moved_to != wanted:
+            moves.append({**r, "wanted": wanted, "moved_to": moved_to,
+                          "late": wanted > moved_to})
+    return moves
+
+
+MONTHS_AR = ("يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس",
+             "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر")
+
+
+def _move_text(name, chosen, count, days_word, m, prayer, bound, clock):
+    where, side = ("بعد", "قبل") if m["late"] else ("قبل", "بعد")
+    return (f"{name} ({clock(chosen)}) تأتي {where} {prayer} في {count} {days_word}.\n"
+            f"مثال: يوم {m['day']} {MONTHS_AR[m['month'] - 1]}، {prayer} {clock(bound)}.\n"
+            f"في هذه الأيام ستُشغَّل {side} {prayer} بدقيقة،\n"
+            f"أي الساعة {clock(m['moved_to'])} في هذا المثال.")
+
+
+def year_moves_message(athkar_moves, friday_moves, clock):
+    """The question Settings asks before saving a time that does not fit every day, or ""
+    when it fits. `clock` renders minutes the way the caller shows times."""
+    parts = []
+    if athkar_moves:
+        m = _first(athkar_moves)
+        prayer, bound = ("الظهر", m["dhuhr"]) if m["late"] else ("الفجر", m["fajr"])
+        parts.append(_move_text("أذكار الصباح", m["wanted"], len(athkar_moves),
+                                "يومًا من السنة", m, f"صلاة {prayer}", bound, clock))
+    if friday_moves:
+        m = _first(friday_moves)
+        prayer, bound = ("صلاة العصر", m["asr"]) if m["late"] else ("الشروق", m["sunrise"])
+        parts.append(_move_text("سورة الكهف", m["wanted"], len(friday_moves),
+                                "يوم جمعة من السنة", m, prayer, bound, clock))
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\nهل تريد ذلك؟"

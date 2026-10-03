@@ -167,6 +167,75 @@ try:
     chk("mode", w2.selected_athkar_elsabah_mode(), "clock")
     chk("time", (w2.athkar_elsabah_hour_spin.value(), w2.athkar_elsabah_min_spin.value()),
         (10, 5))
+
+    print("9. a time that does not fit every day is asked about before saving")
+    rules = gui.settings_rules
+    days = [{"month": 6, "day": 1, "fajr": 180, "sunrise": 300, "dhuhr": 790, "asr": 1050},
+            {"month": 12, "day": 20, "fajr": 380, "sunrise": 490, "dhuhr": 725, "asr": 820}]
+    moves = rules.athkar_elsabah_moves(days, "clock", 12 * 60 + 10, 0)
+    chk("12:10 is after Dhuhr on the winter day only", [(m["month"], m["moved_to"]) for m in moves],
+        [(12, 724)])
+    moves = rules.athkar_elsabah_moves(days, "clock", 6 * 60, 0)
+    chk("6:00 is before Fajr in winter, moved a minute after it",
+        [(m["month"], m["moved_to"], m["late"]) for m in moves], [(12, 381, False)])
+    chk("minutes after Fajr that reach Dhuhr stop a minute before it",
+        [m["moved_to"] for m in rules.athkar_elsabah_moves(days, "after_fajr", 0, 400)], [724])
+    friday = [{"month": 12, "day": 18, "fajr": 380, "sunrise": 490, "dhuhr": 725, "asr": 820}]
+    moves = rules.friday_quran_moves(friday, 2026, "after", 120)
+    chk("Kahf two hours after Jumu'ah on 18/12/2026 is past Asr, moved before it",
+        [(m["moved_to"], m["late"]) for m in moves], [(819, True)])
+    chk("a day that is not a Friday is not looked at",
+        rules.friday_quran_moves(friday, 2027, "after", 120), [])
+    plain = lambda minutes: f"{minutes // 60}:{minutes % 60:02d}"
+    text = rules.year_moves_message(rules.athkar_elsabah_moves(days, "clock", 730, 0), [], plain)
+    chk("the question names the prayer, the example day and the time it will use",
+        all(part in text for part in ("بعد صلاة الظهر", "20 ديسمبر", "12:10", "12:04", "هل تريد ذلك؟")),
+        True)
+    chk("and there is no question when it fits", rules.year_moves_message([], [], plain), "")
+
+    asked = []
+    answer = [False]
+    gui.arabic_confirm = lambda parent, title, text: (asked.append(text), answer[0])[1]
+    w.athkar_elsabah_chk.setChecked(True)
+    w.select_athkar_elsabah_mode("clock")
+    w.athkar_elsabah_hour_spin.setValue(10)
+    w.athkar_elsabah_min_spin.setValue(5)
+    w.friday_quran_chk.setChecked(False)
+    chk("10:05 fits every day in Berlin: no question", (w.confirm_year_moves(), asked), (True, []))
+    w.athkar_elsabah_hour_spin.setValue(6)
+    w.athkar_elsabah_min_spin.setValue(0)
+    chk("6:00 does not: asked, and a no stops the save", w.confirm_year_moves(), False)
+    chk("the question is about Fajr", "قبل صلاة الفجر" in (asked[-1] if asked else ""), True)
+    answer[0] = True
+    chk("a yes lets it save", w.confirm_year_moves(), True)
+
+    print("10. the website asks the same question")
+    sys.path.insert(0, os.path.join(SCHEDULER, "applications/services/web_ui"))
+    spec = importlib.util.spec_from_file_location(
+        "web_api", os.path.join(SCHEDULER, "applications/services/web_ui/api.py"))
+    api = importlib.util.module_from_spec(spec); spec.loader.exec_module(api)
+    ini = os.path.join(tempfile.mkdtemp(), "config.ini")
+    shutil.copy(SETTINGS_INI_FILE, ini)
+    desktop = os.path.join(os.environ["HOME"], "Desktop")
+    # A recitation to tick: an event with none is switched off rather than asked about.
+    athkar_file = os.path.join(SCHEDULER, "audio/athkar_elsabah/fixture-athkar.mp3")
+    os.makedirs(os.path.dirname(athkar_file), exist_ok=True)
+    open(athkar_file, "w").close()
+    submission = {"enable_athkar_elsabah": True, "athkar_elsabah_mode": "clock",
+                  "athkar_elsabah_clock": "06:00",
+                  "athkar_elsabah_audio_checked": ["fixture-athkar.mp3"]}
+    try:
+        api.apply_submission(ini, SCHEDULER, desktop, submission)
+        question = ""
+    except api.NeedsConfirmation as asked_web:
+        question = str(asked_web)
+    chk("6:00 is asked about, not saved", ("قبل صلاة الفجر" in question,
+        "06:00" in open(ini, encoding="utf-8").read()), (True, False))
+    api.apply_submission(ini, SCHEDULER, desktop, {**submission, "confirmed": True})
+    chk("and saved once confirmed", "athkar_elsabah_clock = 06:00" in open(ini, encoding="utf-8").read(), True)
+    api.apply_submission(ini, SCHEDULER, desktop, {"duha_time": "50"})
+    chk("a save that does not touch it asks nothing", "duha_time = 50" in open(ini, encoding="utf-8").read(), True)
+    os.remove(athkar_file)
 finally:
     with open(SETTINGS_INI_FILE, "w", encoding="utf-8") as f:
         f.write(saved_ini)

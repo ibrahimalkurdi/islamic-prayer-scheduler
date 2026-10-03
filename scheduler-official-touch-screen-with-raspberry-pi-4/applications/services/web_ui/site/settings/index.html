@@ -226,7 +226,23 @@ function buildForm() {
     document.querySelector("#form").appendChild(extra);
 }
 
+/* An event plays only the files ticked for it, so one with none ticked is switched off -
+   here as well as on the device, so the page shows what was saved. */
+function untickEventsWithoutAudio() {
+    for (const field of SECTIONS.flatMap((section) => section.fields)) {
+        if (!field.enable || !field.audio) continue;
+        const ticked = [...document.querySelectorAll("[data-audio]")]
+            .some((node) => node.dataset.audio === field.audio && node.checked);
+        const toggle = document.querySelector(`[data-bool="${field.enable}"]`);
+        if (toggle && !ticked && toggle.checked) {
+            toggle.checked = false;
+            toggle.dispatchEvent(new Event("change"));
+        }
+    }
+}
+
 function collect() {
+    untickEventsWithoutAudio();
     const payload = {};
     for (const node of document.querySelectorAll("[data-bool]")) {
         payload[node.dataset.bool] = node.checked;
@@ -305,11 +321,24 @@ document.querySelector("#save").addEventListener("click", async () => {
     show(null);
     working(true);
     try {
-        await api("/api/settings", {
+        const payload = collect();
+        const post = () => api("/api/settings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(collect()),
+            body: JSON.stringify(payload),
         });
+        /* A time that does not fit every day of the year is asked about first, the same
+           question the Settings app asks; no keeps the page as it is, unsaved. */
+        let answer = await post();
+        if (answer.confirm) {
+            if (!window.confirm(answer.confirm)) {
+                working(false);
+                button.disabled = false;
+                return;
+            }
+            payload.confirmed = true;
+            answer = await post();
+        }
         await pollApply();
     } catch (e) {
         working(false);

@@ -39,6 +39,7 @@ def load(path, name):
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QFontMetrics, qGray
+from PyQt5.QtCore import Qt as _Qt
 app = QApplication(sys.argv)
 
 page = load(PRAYER_GUI, "prayer_times_gui")
@@ -152,7 +153,13 @@ print("8. config.ini still carries a 24-hour clock for the scheduler")
 saved_ini = open(SETTINGS_INI_FILE, encoding="utf-8").read()
 gui.arabic_info = lambda parent, title, text: None
 gui.arabic_error = lambda parent, title, text: None
+# The daily Quran is saved off when no recitation is ticked, so give it one to tick.
+quran_file = os.path.join(SCHEDULER, "audio/quran/fixture-quran.mp3")
+os.makedirs(os.path.dirname(quran_file), exist_ok=True)
+open(quran_file, "w").close()
 w = gui.ControlApp()
+w.cron_chk.setChecked(True)
+w.quran_audio_list.item(0).setCheckState(_Qt.Checked)
 
 w.cron_hour_spin.setValue(16)
 w.cron_min_spin.setValue(5)
@@ -195,6 +202,7 @@ chk("16:05 reads 4:05 PM", settings_clock(16 * 60 + 5), "4:05 PM")
 
 # The suite leaves the device's own settings as it found them.
 open(SETTINGS_INI_FILE, "w", encoding="utf-8").write(saved_ini)
+os.remove(quran_file)
 
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

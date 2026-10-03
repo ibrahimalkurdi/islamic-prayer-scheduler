@@ -12,7 +12,7 @@
 #   releases/               two published pi4 releases (1.0.0 and 1.1.0), an index.json,
 #                           and the VERSIONS.json pointer that decides what installs,
 #                           read over file:// - curl handles that, so no server is needed
-#   test_updater.sh         the eleven test scripts, copied in beside them - each finds
+#   test_updater.sh         the thirteen test scripts, copied in beside them - each finds
 #   test_state_survives.sh    the fixture from its own directory, so they run from here
 #   test_settings_updates.py
 #   test_friday_quran.py
@@ -22,6 +22,8 @@
 #   test_default_settings.py
 #   test_internet_warning.py
 #   test_one_app.py
+#   test_prayer_source.py
+#   test_audio_selection.py
 #   test_make_release.sh
 #
 # health_check.sh is replaced by a stub in both the device tree and the releases. It is
@@ -204,6 +206,8 @@ cp "$(dirname "${BASH_SOURCE[0]}")/test_updater.sh" \
    "$(dirname "${BASH_SOURCE[0]}")/test_default_settings.py" \
    "$(dirname "${BASH_SOURCE[0]}")/test_internet_warning.py" \
    "$(dirname "${BASH_SOURCE[0]}")/test_one_app.py" \
+   "$(dirname "${BASH_SOURCE[0]}")/test_prayer_source.py" \
+   "$(dirname "${BASH_SOURCE[0]}")/test_audio_selection.py" \
    "$(dirname "${BASH_SOURCE[0]}")/test_make_release.sh" "$FIXTURE/"
 chmod +x "$FIXTURE/test_updater.sh" "$FIXTURE/test_state_survives.sh" \
          "$FIXTURE/test_make_release.sh"
@@ -223,6 +227,8 @@ Fixture ready. Run the tests from inside it:
   python3 $FIXTURE/test_default_settings.py
   python3 $FIXTURE/test_internet_warning.py
   python3 $FIXTURE/test_one_app.py
+  python3 $FIXTURE/test_prayer_source.py
+  python3 $FIXTURE/test_audio_selection.py
 
 Poke at the device by hand the same way - HOME and the model file are all that make it
 a device:

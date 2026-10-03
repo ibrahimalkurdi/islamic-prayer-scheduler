@@ -38,6 +38,11 @@ blockquote { margin: 8px 0; padding: 2px 14px; border-right: 4px solid #d0d7de; 
 img { max-width: 100%; }
 p[align=center] { text-align: center; }
 p[align=center] img, table img { break-inside: avoid; }
+/* The icon floated beside a line as tall as itself: the name is centred in that line the
+   way the next cell's text is centred in the row. Aligned inline instead, the icon pulls
+   the name's baseline below the middle. */
+td img[align=absmiddle] { float: right; margin-left: 8px; }
+td:has(> img[align=absmiddle]) { line-height: 40px; }
 hr { border: 0; border-top: 1px solid #d0d7de; margin: 14px 0; }
 p, ul, ol { margin: 0 0 8px; }
 li { margin: 1px 0; }
@@ -47,6 +52,7 @@ blockquote, pre, p[align=center] { break-inside: avoid; }
 /* A long table may continue on the next page, a row never splits: kept whole, the
    settings table left half a page empty above it. */
 tr { break-inside: avoid; }
+table.short { break-inside: avoid; }
 thead { display: table-header-group; }
 blockquote, pre, p[align=center] { break-before: avoid; }
 p:has(+ blockquote), p:has(+ p[align=center]), p:has(+ table), p:has(+ ul), p:has(+ ol), p:has(+ pre) { break-after: avoid; }
@@ -83,6 +89,18 @@ def github_slug(text: str) -> str:
         if c in " -" or unicodedata.category(c)[0] in "LMN" or unicodedata.category(c) == "Pc"
     )
     return kept.replace(" ", "-")
+
+
+SHORT_TABLE_ROWS = 8
+
+
+def mark_short_tables(body: str) -> str:
+    """A short table moves to the next page whole rather than leave a few rows behind."""
+    def repl(m: re.Match[str]) -> str:
+        rows = m.group(0).count("<tr>")
+        return m.group(0).replace("<table>", '<table class="short">', 1) if rows <= SHORT_TABLE_ROWS else m.group(0)
+
+    return re.sub(r"<table>.*?</table>", repl, body, flags=re.S)
 
 
 def keep_together(body: str) -> str:
@@ -134,7 +152,7 @@ def html_with_ids(md_path: Path) -> tuple[str, dict[str, str]]:
     # The cover image the markdown opens with is the PDF's own cover page.
     src = re.sub(r'^<p align="center"><img src="assets/manual/cover\.png"[^>]*></p>\s*', "", src)
     src = re.sub(r"\s*</div>\s*$", "\n", src)
-    body = keep_together(markdown.markdown(src, extensions=["tables", "fenced_code"]))
+    body = keep_together(mark_short_tables(markdown.markdown(src, extensions=["tables", "fenced_code"])))
     body = re.sub(r"<blockquote>\s*<p>\[!WARNING\]\s*", '<blockquote class="warning">\n<p>', body)
     return assign_ids(body)
 

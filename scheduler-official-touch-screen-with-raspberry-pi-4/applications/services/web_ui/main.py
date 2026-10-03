@@ -437,6 +437,8 @@ class Handler(BaseHTTPRequestHandler):
                                  self.device.desktop_dir, submitted)
         except api.Invalid as refusal:
             return self.fail(400, str(refusal))
+        except api.NeedsConfirmation as question:
+            return self.send_json({"saved": False, "confirm": str(question)})
         finally:
             self.device.lock.release()
 

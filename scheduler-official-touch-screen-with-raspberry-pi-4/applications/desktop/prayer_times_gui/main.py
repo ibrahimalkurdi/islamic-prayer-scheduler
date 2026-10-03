@@ -184,6 +184,14 @@ MUTE_ICON_SIZE = 16
 # matches the others by ink box it reads lighter. It is drawn larger to make up.
 MUTE_ICON_SIZE_MUTED = 20
 MUTED_COLOR = "#dc3545"
+# Under the button row while muted, saying when the sound comes back - the line the
+# phone's countdown shows under its digits. Both pages leave this strip free: the
+# countdown's prayer name starts below it and the daily cards start right of it.
+MUTE_UNTIL_TOP = 58
+MUTE_UNTIL_HEIGHT = 26
+MUTE_UNTIL_PX = 15
+MUTE_UNTIL_TEXT = "الصوت مكتوم حتى"
+MUTED_TEXT = "الصوت مكتوم"
 
 
 # The device is asked how it stands rather than trusted to still be as it was left, so
@@ -981,6 +989,13 @@ class AdhanCounter(QWidget):
         self.settings_btn.setGeometry(*window_button_box(4, SETTINGS_ICON_Y))
         self.settings_btn.clicked.connect(self.open_settings)
         self.settings_btn.show()
+
+        self.mute_until = QLabel("", self)
+        self.mute_until.setGeometry(WINDOW_BUTTON_LEFT, MUTE_UNTIL_TOP,
+                                    WINDOW_BUTTONS_RIGHT_EDGE - WINDOW_BUTTON_LEFT,
+                                    MUTE_UNTIL_HEIGHT)
+        self.mute_until.setAlignment(Qt.AlignCenter)
+        self.mute_until.hide()
         # Counts down to the next reading of the device; zero forces one on the next
         # tick. None means the device has not been read yet, or cannot be read at all.
         self.audio_poll_due = 0
@@ -1071,6 +1086,7 @@ class AdhanCounter(QWidget):
         """Sized on its own because the speaker sits lighter than the other three icons
         at the size they share."""
         color = MUTED_COLOR if self.muted else self.page_button_color
+        self.paint_mute_until()
         self.mute_btn.setText(SPEAKER_OFF if self.muted else SPEAKER_ON)
         size = MUTE_ICON_SIZE_MUTED if self.muted else MUTE_ICON_SIZE
         self.mute_btn.setStyleSheet(
@@ -1079,6 +1095,28 @@ class AdhanCounter(QWidget):
         icon_font = QFont(SYMBOL_FONT)
         icon_font.setStyleStrategy(QFont.PreferAntialias | QFont.NoSubpixelAntialias)
         self.mute_btn.setFont(icon_font)
+
+    def paint_mute_until(self):
+        """When the sound comes back, under the buttons, in the buttons' own colour: the
+        muted red would vanish on the red before an athan."""
+        if not self.muted:
+            self.mute_until.hide()
+            return
+        expiry = mute_expiry()
+        if expiry is not None and expiry > datetime.now().timestamp():
+            when = clock_12h(datetime.fromtimestamp(expiry)).strip()
+            text = f"{MUTE_UNTIL_TEXT} \u2066{when}\u2069"
+        else:
+            text = MUTED_TEXT
+        style = (f"QLabel {{ background: transparent; color: {self.page_button_color};"
+                 f" font-size: {MUTE_UNTIL_PX}px; }}")
+        # Called every tick while muted, since the phone can mute it too; restyled only
+        # when something changed.
+        if (self.mute_until.text(), self.mute_until.styleSheet()) != (text, style):
+            self.mute_until.setText(text)
+            self.mute_until.setStyleSheet(style)
+        self.mute_until.show()
+        self.mute_until.raise_()
 
     def toggle_mute(self):
         """The flag governs athans still to come; the device governs the one playing now.
@@ -1147,6 +1185,8 @@ class AdhanCounter(QWidget):
         if muted != self.muted:
             self.muted = muted
             self.paint_mute_button()
+        elif self.muted:
+            self.paint_mute_until()
 
     def toggle_view(self):
         if self.stack.currentWidget() is self.counter_page:

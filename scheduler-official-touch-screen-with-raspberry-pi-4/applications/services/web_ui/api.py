@@ -322,6 +322,11 @@ class Invalid(Exception):
     """A submitted value the Settings app would also have refused."""
 
 
+class NeedsConfirmation(Exception):
+    """A time that does not fit every day of the year: asked about, as the Settings app
+    asks, and saved only when the submission comes back with "confirmed"."""
+
+
 def apply_submission(ini_path, scheduler_dir, desktop_dir, submitted):
     """Validate a form submission and write it into config.ini.
 
@@ -329,6 +334,8 @@ def apply_submission(ini_path, scheduler_dir, desktop_dir, submitted):
     unless every rule passes, so a refused save leaves the file exactly as it was."""
     config = read_config(ini_path)
     section = config["Settings"]
+    submitted = dict(submitted)
+    confirmed = bool(submitted.pop("confirmed", False))
 
     unknown = set(submitted) - set(INT_KEYS) - set(BOOL_KEYS) - set(TEXT_KEYS) - set(AUDIO_KEYS)
     if unknown:
@@ -379,7 +386,18 @@ def apply_submission(ini_path, scheduler_dir, desktop_dir, submitted):
             raise Invalid(f"ملف صوتي غير موجود: {', '.join(missing)}")
         staged[key] = audio_lists.checked_to_config(chosen)
 
+    # Only events this save touches: a save of one setting changes nothing else.
+    merged = {**dict(section), **staged}
+    for enable in audio_lists.enables_without_audio(merged):
+        audio = next(k for k, v in audio_lists.EVENT_ENABLE_KEYS.items() if v == enable)
+        if enable in submitted or audio in submitted:
+            staged[enable] = "False"
+
     _check_rules(section, staged, scheduler_dir, desktop_dir)
+    if not confirmed:
+        message = year_moves_message(section, staged, scheduler_dir, desktop_dir)
+        if message:
+            raise NeedsConfirmation(message)
 
     for key, value in staged.items():
         section[key] = value
@@ -415,6 +433,46 @@ def _check_clock(value):
             raise ValueError
     except (ValueError, AttributeError):
         raise Invalid("صيغة الوقت غير صالحة، استخدم HH:MM")
+
+
+def scheduled_prayer_csv(section, scheduler_dir, desktop_dir):
+    """The file whose times get scheduled, as the Settings app finds it: this year's
+    daylight-saving copy when that is on and generated, otherwise the reference file."""
+    if str(section.get("enable_daylight_saving", "False")).lower() == "true":
+        dst_dir = os.path.join(scheduler_dir, "config", "prayers-config", "dst")
+        year = datetime.now().year
+        if os.path.isdir(dst_dir):
+            for name in sorted(os.listdir(dst_dir)):
+                if name.endswith(f"_DST_{year}.csv"):
+                    return os.path.join(dst_dir, name)
+    return os.path.join(desktop_dir, "إدخال-مواقيت-الصلاة-للمستخدم.csv")
+
+
+def year_moves_message(section, staged, scheduler_dir, desktop_dir):
+    """The Settings app's question about days a chosen time does not fit, or "". Only
+    for the settings this save touches: a save of one setting asks about nothing else."""
+    value = lambda key, default="": staged.get(key, section.get(key, default))
+    try:
+        rows = settings_rules.prayer_year_rows(
+            scheduled_prayer_csv({**dict(section), **staged}, scheduler_dir, desktop_dir))
+    except (OSError, ValueError, KeyError):
+        return ""
+    touched = lambda *keys: any(k in staged for k in keys)
+    athkar = []
+    if touched("enable_athkar_elsabah", "athkar_elsabah_mode", "athkar_elsabah_clock",
+               "athkar_elsabah_time") and _as_bool(value("enable_athkar_elsabah", "False")):
+        clock_value = staged.get("athkar_elsabah_clock") or athkar_elsabah_clock(section)
+        hour, minute = clock_value.split(":")
+        athkar = settings_rules.athkar_elsabah_moves(
+            rows, settings_rules.athkar_elsabah_mode(value("athkar_elsabah_mode")),
+            int(hour) * 60 + int(minute), int(value("athkar_elsabah_time", "0") or 0))
+    friday = []
+    if touched("enable_friday_quran", "friday_quran_time", "friday_quran_position") \
+            and _as_bool(value("enable_friday_quran", "False")):
+        friday = settings_rules.friday_quran_moves(
+            rows, datetime.now().year, value("friday_quran_position", "after"),
+            int(value("friday_quran_time", "60") or 60))
+    return settings_rules.year_moves_message(athkar, friday, minutes_to_clock)
 
 
 def _check_rules(section, staged, scheduler_dir, desktop_dir):

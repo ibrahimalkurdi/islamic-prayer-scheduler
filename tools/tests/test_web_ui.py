@@ -281,8 +281,10 @@ check_true("with something that reads as working",
            'class="spinner"' in settings_html)
 # Every path that leaves the applying state must take the cover down. One that does not
 # leaves a spinner over a page nobody can touch, which is worse than no cover at all.
+# Four: a poll that fails, the apply finishing, a save refused, and a no to the question
+# about a time that does not fit every day.
 check("every exit from applying lowers the cover",
-      settings_html.count("working(false)"), 3)
+      settings_html.count("working(false)"), 4)
 check_true("and the cover is raised on the tap", "working(true)" in settings_html)
 # The overlay replaced an inline note; leaving the id behind in show()'s list would make
 # it throw on a page that no longer has that element.

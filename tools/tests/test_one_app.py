@@ -48,7 +48,9 @@ chk("its icon asks for the copy ⚙ keeps ready, on X as ⚙ starts it",
     (settings_exec.endswith("main.py --open"), "QT_QPA_PLATFORM=xcb" in settings_exec), (True, True))
 needs = [l.strip() for l in open(os.path.join(SCHEDULER, "config/needs_init"), encoding="utf-8")
          if l.strip() and not l.lstrip().startswith("#")]
-chk("the release asks for setup, so the desktop changes on update", needs[:1], ["1.5.1"])
+import re
+chk("the release asks for setup, so the desktop changes on update",
+    bool(needs and re.fullmatch(r"\d+\.\d+\.\d+", needs[0])), True)
 
 from PyQt5.QtWidgets import QApplication
 app = QApplication(sys.argv)
@@ -193,6 +195,34 @@ chk("a copy from before 1.5.1 is ended by that signal, so the icon starts a new 
 handles.kill(); handles.wait(); old_copy.wait()
 gui.other_settings_pids = lambda: []
 chk("with none, the icon starts the copy that is kept from then on", gui.show_running_copy(), False)
+
+print("6. muted, the time app says when the sound comes back, on both pages")
+from datetime import datetime as _datetime
+expiry = int(_datetime.now().timestamp()) + 3600
+page.mute_expiry = lambda: expiry
+page.is_muted = lambda: True
+page.audio_is_muted = lambda: True
+page.audio_set_mute = lambda muted: True
+counter.audio_poll_due = 0
+counter.sync_mute_state()
+line = counter.mute_until.text()
+chk("a muted device shows the line, naming the time it lapses",
+    (counter.mute_until.isHidden(), line.startswith("الصوت مكتوم حتى"),
+     page.clock_12h(_datetime.fromtimestamp(expiry)).strip() in line), (False, True, True))
+if counter.stack.currentWidget() is counter.counter_page:
+    counter.toggle_view()
+chk("the daily list shows it too", counter.mute_until.isHidden(), False)
+chk("in the buttons' colour, not the muted red",
+    counter.page_button_color in counter.mute_until.styleSheet(), True)
+page.mute_expiry = lambda: None
+counter.audio_poll_due = 0
+counter.sync_mute_state()
+chk("silenced with no deadline, it says only that", counter.mute_until.text(), "الصوت مكتوم")
+page.is_muted = lambda: False
+page.audio_is_muted = lambda: False
+counter.audio_poll_due = 0
+counter.sync_mute_state()
+chk("and it goes when the sound is back", counter.mute_until.isHidden(), True)
 
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)
