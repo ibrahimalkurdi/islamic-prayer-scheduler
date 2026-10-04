@@ -80,8 +80,10 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_static_website.py` | the public city sites: each year's clock changes, the pages and the device app, New Year in the browser, the city folders (§18) |
 | `static-website/sakina/` | the public city sites and their builder (§18) |
 | `.github/workflows/sakina-static-website.yml` | rebuilds and commits the city sites (§18) |
-| `tools/build_manual_pdf.sh` | builds `USER_MANUAL_AR.pdf` from the `.md`: cover, index with page numbers, then the manual numbered from 1. Run it after every edit to the manual |
+| `tools/build_manual_pdf.sh` | builds `USER_MANUAL_AR.pdf` from the `.md`: cover, index with page numbers, then the manual numbered from 1, and saves the cover's date and page to `applications/manual_cover/cover.json`. Run it after every edit to the manual and commit both. Each device then makes its own copy after the next update - `config/scripts/device_manual.sh` prints a cover with its own `<name>.local` and QR code in front of the shipped pages and writes `~/Desktop/دليل-المستخدم.pdf` - so `--device <name> <out.pdf>` is only needed for a device that is not updating |
 | `tools/tests/test_manual_pdf.sh` | builds the manual PDF into a temp file and checks the page numbering and that every index number matches the page its link opens |
+| `tools/tests/test_wallpaper.sh` | `set_wallpaper.sh` with a fake HOME and a stand-in pcmanfm: the desktop background becomes `config/wallpaper/sakina-wallpaper.jpg`, told to the running desktop over its socket or written to its config otherwise, once per picture so an owner's own choice stays until a release ships a new one |
+| `tools/tests/test_device_manual.sh` | `device_manual.sh` on a copy of the tree: the device's copy has its own address and QR code on the cover and the shipped pages behind it, is remade only when the manual, the cover or the name changes, takes Avahi's `host-name` over the hostname, and skips rather than fails without chromium, qpdf or segno |
 
 **On each device, under `~/Desktop/scheduler/`**
 

@@ -1,18 +1,30 @@
-"""Write the cover build_manual_pdf.sh prints ahead of the manual.
+"""Write the cover of the user manual as HTML, for Chrome or Chromium to print.
 
-    make_cover.py <cover.html> <out.html> <date> <repo root> <device> <page>
+    make_cover.py <out.html> <device> [<date> <page>]
 
 The cover carries a QR code for http://<device>.local - the page the phone app is
 installed from - and the page of the manual where those steps are. The shared manual is
 built for "hostname", the placeholder the manual itself uses; a device's own copy for its
 name.
+
+Two callers. tools/build_manual_pdf.sh, on the admin's machine, passes the date and page
+it has just worked out, and saves them to cover.json beside this file. A device, making
+its own copy of the shipped manual (config/scripts/device_manual.sh), passes only its
+name: the rest comes from that cover.json, so its cover matches the pages behind it.
 """
 
 import html
+import json
 import sys
 from pathlib import Path
 
 import segno
+
+HERE = Path(__file__).resolve().parent
+TEMPLATE = HERE / "cover.html"
+COVER_JSON = HERE / "cover.json"
+# The scheduler tree: cover.html names its images from here.
+BASE = HERE.parent.parent
 
 
 def setup_block(device: str, page: str) -> str:
@@ -27,11 +39,16 @@ def setup_block(device: str, page: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) != 7:
+    if len(sys.argv) == 3:
+        saved = json.loads(COVER_JSON.read_text(encoding="utf-8"))
+        date, page = saved["date"], str(saved["page"])
+    elif len(sys.argv) == 5:
+        date, page = sys.argv[3], sys.argv[4]
+    else:
         raise SystemExit(__doc__)
-    cover, out, date, repo, device, page = sys.argv[1:7]
-    text = Path(cover).read_text(encoding="utf-8")
-    text = text.replace("{{DATE}}", date).replace('src="../../', f'src="{repo}/')
+    out, device = sys.argv[1], sys.argv[2]
+    text = TEMPLATE.read_text(encoding="utf-8")
+    text = text.replace("{{BASE}}", str(BASE)).replace("{{DATE}}", html.escape(date))
     text = text.replace("{{SETUP}}", setup_block(device, page))
     Path(out).write_text(text, encoding="utf-8")
 

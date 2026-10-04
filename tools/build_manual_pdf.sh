@@ -9,7 +9,9 @@
 # from - with the page the phone steps start on. --device puts that device's own address
 # there instead; that copy is for one owner, so it is written where asked and never
 # committed. The shared build also refreshes assets/manual/cover.png, the cover the
-# markdown shows at its top.
+# markdown shows at its top, and applications/manual_cover/cover.json, from which each
+# device prints its own cover onto the shipped PDF after an update (device_manual.sh) -
+# so a --device copy is only needed for a device that is not updating.
 #
 # Runs on the admin's machine, never on a device. Needs google-chrome (or chromium),
 # qpdf, poppler-utils (pdfinfo, pdftocairo) and the Amiri and Noto Naskh Arabic fonts. The
@@ -38,6 +40,8 @@ fi
 OUT="${1:-${MANUAL%.md}.pdf}"
 [ -n "${1:-}" ] && SHARED=0
 COVER_PNG="$(dirname "$MANUAL")/assets/manual/cover.png"
+# In the device tree rather than here, because every device prints its own cover too.
+COVER_DIR="$(dirname "$MANUAL")/applications/manual_cover"
 VENV="$TOOL_DIR/.venv"
 
 die() { echo "build_manual_pdf: $*" >&2; exit 1; }
@@ -80,8 +84,12 @@ MONTHS=(يناير فبراير مارس أبريل مايو يونيو يولي
 DATE="${MONTHS[$(( 10#$(date +%m) - 1 ))]} $(date +%Y)"
 SETUP_ID="$("$VENV/bin/python" "$TOOL_DIR/render_manual.py" --section-id "$MANUAL" "$PHONE_SETUP")"
 SETUP_PAGE="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$WORK/pages.json" "$SETUP_ID")"
-"$VENV/bin/python" "$TOOL_DIR/make_cover.py" "$TOOL_DIR/cover.html" "$WORK/cover.html" "$DATE" "$REPO_ROOT" "$DEVICE" "$SETUP_PAGE"
+"$VENV/bin/python" "$COVER_DIR/make_cover.py" "$WORK/cover.html" "$DEVICE" "$DATE" "$SETUP_PAGE"
 print_pdf "$WORK/cover.html" "$WORK/cover.pdf"
+# What a device needs to make its own cover for this same manual: see device_manual.sh.
+if [ "$SHARED" -eq 1 ]; then
+    printf '{"date": "%s", "page": %d}\n' "$DATE" "$SETUP_PAGE" > "$COVER_DIR/cover.json"
+fi
 [ "$(qpdf --show-npages "$WORK/cover.pdf")" -eq 1 ] || die "the cover spilled onto a second page"
 # A4 at 600px wide is 848.5px tall; left to round up, the last row comes out half page,
 # half white.

@@ -3188,6 +3188,12 @@ if __name__ == "__main__":
             sys.exit(0)
         sys.argv += ["--background", "--present", "--desktop"]
 
+    # Started with the desktop session, the app runs under the qt5ct platform theme, which
+    # sets its own font - Nunito Sans, with no Arabic - on the whole app once the event
+    # loop starts, over the Amiri below. Every label and checkbox that does not name a
+    # family of its own then falls back to DejaVu Sans. Not desktop-settings-aware, qt5ct
+    # leaves fonts and palette alone and still supplies the style.
+    QApplication.setDesktopSettingsAware(False)
     app = QApplication(sys.argv)
     app.setFont(QFont("Amiri"))
     # The task list on the panel does not read the window icon set above: on Wayland it is

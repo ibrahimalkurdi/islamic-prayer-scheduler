@@ -1163,6 +1163,12 @@ if verify_healthy; then
     echo "$TARGET" > "$INSTALLED_VERSION_FILE"
     INSTALLED="$TARGET"
     rm -rf "$STAGING_DIR" "$ARCHIVE"
+    # After the health check, so a slow print never stands between a release and its
+    # verdict. Never fatal, see the script.
+    bash "$SCRIPTS_DIR/device_manual.sh" >> "$LOG_FILE" 2>&1 \
+        || log "WARNING: device_manual.sh did not finish cleanly"
+    bash "$SCRIPTS_DIR/set_wallpaper.sh" >> "$LOG_FILE" 2>&1 \
+        || log "WARNING: set_wallpaper.sh did not finish cleanly"
     write_state "updated" "installed $TARGET" "$ATTENTION"
     log "==== Updated to $TARGET ===="
     exit 0

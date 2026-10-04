@@ -224,5 +224,14 @@ counter.audio_poll_due = 0
 counter.sync_mute_state()
 chk("and it goes when the sound is back", counter.mute_until.isHidden(), True)
 
+print("7. Settings keeps Amiri when the desktop's qt5ct theme sets another font")
+# qt5ct (Nunito Sans, no Arabic) is only there in the desktop session, so this reads the
+# order in the source: not desktop-settings-aware, before the app exists.
+source = open(SETTINGS_APP, encoding="utf-8").read()
+main_block = source[source.index('if __name__ == "__main__":'):]
+aware = main_block.find("QApplication.setDesktopSettingsAware(False)")
+chk("not desktop-settings-aware, before QApplication is made",
+    0 <= aware < main_block.index("QApplication(sys.argv)"), True)
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

@@ -569,6 +569,18 @@ else
 fi
 
 #######################################
+# Desktop background
+#######################################
+# Set once per picture, so an owner's own choice stays until a release ships a new one.
+bash "$SCRIPTS_DIR/set_wallpaper.sh" || echo "Wallpaper was not set"
+
+#######################################
+# This device's own manual on the Desktop
+#######################################
+# The shipped manual with a cover pointing at this device's address. Never fatal.
+bash "$SCRIPTS_DIR/device_manual.sh" || echo "Device manual was not written"
+
+#######################################
 # First update check
 #######################################
 # A device is only as current as the last time somebody copied files onto it. Ending setup

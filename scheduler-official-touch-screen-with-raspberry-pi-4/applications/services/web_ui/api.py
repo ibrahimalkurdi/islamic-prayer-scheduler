@@ -28,7 +28,7 @@ PERIOD_COLORS = {
     "green": "#006600",
     "beige": "#E7DBC1",
     "red": "#990000",
-    "makrooh": "#BF360C",
+    "makrooh": "#EF6C00",
 }
 PERIOD_TEXT = {
     "green": "#FFFFFF",
@@ -45,7 +45,7 @@ COUNTDOWN_BG_DEFAULT = "#333333"
 COUNTDOWN_FILL = {
     "green": "#006600",
     "red": "#990000",
-    "makrooh": "#BF360C",
+    "makrooh": "#EF6C00",
     "beige": COUNTDOWN_BG_DEFAULT,
 }
 COUNTDOWN_TEXT = "#FFFFFF"
@@ -68,8 +68,8 @@ CARD_ACTIVE = {
                 "glow": "rgba(231, 219, 193, 0.35)", "text": "#4A3F2F", "flat": False},
     "red":     {"from": "#990000", "to": "#780000", "border": "#b50000",
                 "glow": "rgba(153, 0, 0, 0.35)", "text": "#FFFFFF", "flat": False},
-    "makrooh": {"from": "#bf360c", "to": "#bf360c", "border": "#e1400e",
-                "glow": "rgba(191, 54, 12, 0.35)", "text": "#FFFFFF", "flat": True},
+    "makrooh": {"from": "#ef6c00", "to": "#ef6c00", "border": "#ff821b",
+                "glow": "rgba(239, 108, 0, 0.35)", "text": "#FFFFFF", "flat": True},
 }
 
 # And the cards that are not running: CARD_BG, CARD_BORDER and NAME_COLOR from the app.
@@ -90,8 +90,8 @@ CARD_BADGE = {
                 "glow": "rgba(231, 219, 193, 0.47)", "text": "#4A3F2F"},
     "red":     {"from": "#ab0000", "to": "#7d0000", "border": "#b50000",
                 "glow": "rgba(153, 0, 0, 0.47)", "text": "#FFFFFF"},
-    "makrooh": {"from": "#d63c0d", "to": "#9d2c0a", "border": "#e1400e",
-                "glow": "rgba(191, 54, 12, 0.47)", "text": "#FFFFFF"},
+    "makrooh": {"from": "#ff7a0d", "to": "#c45900", "border": "#ff821b",
+                "glow": "rgba(239, 108, 0, 0.47)", "text": "#FFFFFF"},
 }
 
 

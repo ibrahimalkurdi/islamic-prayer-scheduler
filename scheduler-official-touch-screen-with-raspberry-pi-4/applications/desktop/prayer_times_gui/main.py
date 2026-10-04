@@ -154,9 +154,10 @@ COUNTDOWN_BG_RED = "#990000"      # the 20 minutes before the next athan
 # Both makrooh windows: from sunrise until Duha opens, and the zawal stretch at
 # the end of Duha. Neither is merely "the next athan is close" - praying nafl in
 # them is discouraged, so they read as their own state rather than as red.
-# The deep burnt orange this counter has always used. A lighter, brighter orange
-# washes out to yellow on these panels and leaves white text hard to read on it.
-COUNTDOWN_BG_MAKROOH = "#BF360C"
+# A clear orange. The deeper #BF360C it replaced read as red on phones, next to the
+# red of the minutes before an athan; anything lighter than this washes out to yellow
+# and leaves the white text too faint.
+COUNTDOWN_BG_MAKROOH = "#EF6C00"
 
 # --- Window buttons ----------------------------------------------------------
 # A row of five in the top-left corner: close, fullscreen, view, mute, settings. Centred

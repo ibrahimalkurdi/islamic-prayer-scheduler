@@ -8,3 +8,6 @@
 python3-pandas
 xdotool
 avahi-daemon
+# The device's own copy of the manual (config/scripts/device_manual.sh).
+qpdf
+python3-segno
