@@ -135,6 +135,9 @@ INCLUDE=(
     # inside the tarball from the first day and was never on this list, which meant the
     # device kept whatever it already had and the package was never installed.
     "config/packages.txt"
+    # device_manual.sh prints this device's cover onto it. Shipped in the tarball from the
+    # start but not on this list, so a device kept the copy it was set up with.
+    "USER_MANUAL_AR.pdf"
 )
 # Belt and braces beside the strip above: rsync honours these on the device, so even a
 # state file that somehow survived packaging would not be copied over the live one.
@@ -156,7 +159,7 @@ git archive --format=tar "HEAD:$SUBTREE" | tar -x -C "$WORK"
 # directory left behind by a rename must not end up in the list either - so this asks
 # the exported tree what is really there, not the checkout.
 for optional in "config/fonts/" "config/icons/" "config/arabic-fonts/" "config/prayers-config/" \
-                "config/logrotate/" "default-audio/"; do
+                "config/logrotate/" "config/wallpaper/" "default-audio/"; do
     if [[ -d "$WORK/${optional%/}" ]] && [[ -n "$(ls -A "$WORK/${optional%/}")" ]]; then
         INCLUDE+=("$optional")
     fi
