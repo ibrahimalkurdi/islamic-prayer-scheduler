@@ -10,7 +10,8 @@ body { position: relative; font-family: AmiriC, serif; -webkit-print-color-adjus
 .title .mark { display: inline-flex; flex-direction: column; }
 .title .lockup { display: flex; align-items: center; gap: 5mm; }
 .title .logo { width: 24mm; height: 24mm; border-radius: 5.5mm; box-shadow: 0 2px 10px rgba(15,23,42,.25); }
-.title .brand { font-size: 50pt; font-weight: 700; line-height: 1; color: #0F172A; padding-top: 3mm; }
+/* The calligraphy of the device wallpaper (config/wallpaper), cut out in the gold of the rule below it. */
+.title .brand { display: block; height: 26mm; width: auto; }
 .title .rule { align-self: stretch; height: 1.4mm; margin: 6mm 0 5mm; background: #B8923A; border-radius: 1mm; }
 .title h1 { font-size: 30pt; font-weight: 700; line-height: 1.25; color: #1E293B; }
 .title h2 { font-size: 17pt; font-weight: 400; line-height: 1.5; color: #475569; margin-top: 4mm; }
@@ -25,7 +26,7 @@ body { position: relative; font-family: AmiriC, serif; -webkit-print-color-adjus
 </style></head><body>
 <img class="photo" src="{{BASE}}/applications/manual_cover/cover-photo.jpg">
 <div class="title">
-<div class="mark"><div class="lockup"><img class="logo" src="{{BASE}}/config/icons/athan-app-icon-256.png"><div class="brand">السكينة</div></div>
+<div class="mark"><div class="lockup"><img class="logo" src="{{BASE}}/config/icons/athan-app-icon-256.png"><img class="brand" src="{{BASE}}/applications/manual_cover/brand.png" alt="السكينة"></div>
 <div class="rule"></div></div>
 <h1>دليل المستخدم</h1>
 <h2>نظام مواقيت الصلاة والأذان</h2>
