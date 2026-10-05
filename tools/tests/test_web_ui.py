@@ -826,8 +826,9 @@ status, body, _ = raw("POST", "/api/mute", APP_ORIGIN, b"{}")
 check("and unmutes", json.loads(body)["muted"], False)
 check("a preview deployment of the site too",
       raw("OPTIONS", "/api/mute", "https://1a2b3c.alsakina-berlin.pages.dev")[0], 204)
-check("an app added from the old sakina-<city> site still reaches its device",
-      raw("OPTIONS", "/api/mute", "https://sakina-berlin.pages.dev")[0], 204)
+# The old sakina-<city> projects are deleted, so their names are free for anyone to take.
+check("the old sakina-<city> site is refused",
+      raw("OPTIONS", "/api/mute", "https://sakina-berlin.pages.dev")[0], 403)
 # Anyone can make a .pages.dev project: only our own sites, named in full, are let in.
 for origin in ("https://evil.pages.dev", "https://alsakina-berlin.pages.dev.evil.example",
                "http://alsakina-berlin.pages.dev", "https://sakina-app.pages.dev",

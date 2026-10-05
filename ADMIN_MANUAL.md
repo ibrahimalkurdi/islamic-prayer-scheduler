@@ -1913,7 +1913,7 @@ device only hands out its address:
   `http://<name>.local/settings/`; off the wifi Safari says it cannot open it.
 - The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
   lets `PUBLIC_APP_ORIGIN` - each site in `public_sites.json` named in full, plus a
-  `<preview>.` of one, plus the old `sakina-<city>` sites in `LEGACY_PUBLIC_SITES` - call
+  `<preview>.` of one - call
   `PUBLIC_APP_PATHS` - `/api/mute`, `/api/device`, `/api/settings`, `/api/apply`, nothing
   else - with CORS headers, a preflight answer carrying
   `Access-Control-Allow-Private-Network`, and `same_origin()` accepting it for those
@@ -2046,9 +2046,10 @@ A `.pages.dev` name is global (`sakina` itself is someone else's); if a name is 
 Cloudflare gives the project a suffixed address instead - change `site_url` or `ALL_URL`
 in `build.py` to match.
 
-The sites were `sakina-<city>.pages.dev` through 1.5.6. Keep those projects deployed until
-every device runs a newer release: an older device still hands out the old address, and
-an app already added to a phone from it keeps working only while it is served.
+The sites were `sakina-<city>.pages.dev` through 1.5.6. Those projects are deleted, so a
+stranger may take the names: 1.6.0 and 1.6.1 still accept calls from them, 1.6.2 on does
+not. A device on 1.5.6 or older hands out the dead address; its app is reinstalled from the
+new one after the update.
 
 ### Files
 

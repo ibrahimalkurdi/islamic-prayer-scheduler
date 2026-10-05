@@ -100,10 +100,6 @@ PRAYER_SOURCE_KEY = "prayer_csv_source_label"
 # The app a device hands out runs on those sites and reaches the device from there - its
 # settings page and its countdown's mute - so they may call the endpoints those need. The
 # browser still asks the user first (Local Network Access), per site.
-# Before the sites became alsakina-<city>, they were sakina-<city>: an app already added
-# to a phone from one still reaches its device for as long as that project is served.
-LEGACY_PUBLIC_SITES = ("https://sakina-aachen.pages.dev", "https://sakina-berlin.pages.dev",
-                       "https://sakina-damascus.pages.dev")
 
 
 def public_app_origins():
@@ -116,7 +112,7 @@ def public_app_origins():
     except (OSError, ValueError, AttributeError):
         sites = []
     hosts = sorted({urllib.parse.urlsplit(site).hostname or ""
-                    for site in (*sites, *LEGACY_PUBLIC_SITES)} - {""})
+                    for site in sites} - {""})
     return re.compile(r"^https://([a-z0-9-]+\.)?(%s)$" % "|".join(map(re.escape, hosts)))
 
 
