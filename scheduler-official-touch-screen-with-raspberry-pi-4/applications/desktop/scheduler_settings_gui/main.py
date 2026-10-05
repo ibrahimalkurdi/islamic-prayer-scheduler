@@ -2,13 +2,10 @@
 import sys
 import os
 import glob
-import shutil
-import hashlib
 import configparser
 import subprocess
 import csv
 import json
-import re
 import signal
 import threading
 import time
@@ -35,6 +32,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QComboBox,
     QDialog,
+    QFileDialog,
     QProgressBar,
     QStyle,
     QStyleOptionComboBox,
@@ -75,11 +73,7 @@ APPLY_SETTINGS_TIMEOUT_SECONDS = 180
 # that matters; nothing else is ever treated as "the current input".
 PRAYER_CSV_FILE = os.path.join(DESKTOP_DIR, "إدخال-مواقيت-الصلاة-للمستخدم.csv")
 
-# ---- prayer-times source resolution (NEW) ----
-AL_AWAIL_GLOB_PATTERN = os.path.join(DESKTOP_DIR, "*-[0-9][0-9][0-9][0-9].csv")
 PRAYERS_CONFIG_DIR = os.path.join(MAIN_DIR, "config", "prayers-config")
-RAW_IMPORTS_DIR = os.path.join(PRAYERS_CONFIG_DIR, "raw-imports")
-AL_AWAIL_CONVERT_SCRIPT = os.path.join(MAIN_DIR, "config", "scripts", "00_al_awail_convert_csv.py")
 SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
 
 # The settings rules and the audio listing live in applications/shared/, so the website
@@ -87,8 +81,13 @@ SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from shared import audio_lists
+from shared import audio_upload
 from shared import internet_status
+from shared import os_timezone
+from shared import prayer_source
+from shared import settings_defaults
 from shared import settings_rules
+from shared import updates
 from shared.settings_rules import (
     EXPECTED_CSV_HEADER, csv_is_valid_prayer_format, detect_csv_format, version_key,
     duha_time_is_makrooh as duha_rule,
@@ -113,30 +112,9 @@ CRONTAB_TEMPLATE_FILE = os.path.join(MAIN_DIR, "config", "crontab.txt")
 
 
 def update_check_time():
-    """(hour, minute) of the daily update check, or None.
-
-    Read from the live crontab, because that is what actually runs; config/crontab.txt,
-    which init.sh installs it from, only when the live one cannot be read. Moving the
-    check means editing that line, and the label follows without a code change.
-    """
-    try:
-        text = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
-                              timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        text = ""
-    if "check_updates.sh" not in text:
-        try:
-            with open(CRONTAB_TEMPLATE_FILE, encoding="utf-8") as handle:
-                text = handle.read()
-        except OSError:
-            return None
-    for line in text.splitlines():
-        fields = line.split()
-        if (len(fields) > 5 and not line.lstrip().startswith("#")
-                and "check_updates.sh" in line
-                and fields[0].isdigit() and fields[1].isdigit()):
-            return int(fields[1]), int(fields[0])
-    return None
+    """(hour, minute) of the daily update check, or None. Moving the check means editing
+    its crontab line, and the label follows without a code change."""
+    return updates.check_time(CRONTAB_TEMPLATE_FILE)
 # The update controls sit in a centred column rather than spanning the panel. Full-width
 # buttons on an 800px screen are a wall of colour with nothing for the eye to anchor on,
 # and a version list that wide is harder to read across, not easier. The rows still shrink
@@ -156,14 +134,8 @@ except ImportError:
     TIMEZONE_COUNTRIES = []
     DEFAULT_TIMEZONE = "Europe/Berlin"
 DEFAULT_PRAYERS_PRESET = os.path.join(PRAYERS_CONFIG_DIR, "برلين.csv")
-# Hash of PRAYER_CSV_FILE's content as of the last time the app itself wrote it, so a
-# later override attempt can detect the user hand-edited it since and warn before
-# clobbering that edit.
-PRAYER_CSV_HASH_CONFIG_KEY = "prayer_csv_manual_hash"
-# Purely informational - the absolute path of whichever file was picked to populate
-# PRAYER_CSV_FILE (an Al Awail export or a prayers-config preset). Never used to gate
-# any logic; PRAYER_CSV_FILE itself remains the only thing that matters functionally.
-PRAYER_SOURCE_LABEL_KEY = "prayer_csv_source_label"
+PRAYER_CSV_HASH_CONFIG_KEY = prayer_source.HASH_KEY
+PRAYER_SOURCE_LABEL_KEY = prayer_source.SOURCE_LABEL_KEY
 
 # ---- per-prayer audio directories (NEW) ----
 PRAYER_AUDIO_DIRS = {
@@ -197,29 +169,15 @@ INIT_SCRIPT_FILE = os.path.join(
 # =====================================================
 
 def scan_desktop_prayer_candidates():
-    """Al Awail exports (*-YYYY.csv) copied to the Desktop. The reference file itself is
-    not one: it is where every choice is copied to, so picking it would change nothing."""
-    return sorted(glob.glob(AL_AWAIL_GLOB_PATTERN))
+    return prayer_source.desktop_exports(DESKTOP_DIR)
 
 
 def compute_file_hash(path):
-    try:
-        with open(path, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except Exception:
-        return None
+    return prayer_source.file_hash(path)
 
 
 def scan_prayers_config_candidates():
-    """Ready-to-use presets living directly under PRAYERS_CONFIG_DIR (not raw-imports/)."""
-    if not os.path.isdir(PRAYERS_CONFIG_DIR):
-        return []
-    candidates = []
-    for fname in sorted(os.listdir(PRAYERS_CONFIG_DIR)):
-        fpath = os.path.join(PRAYERS_CONFIG_DIR, fname)
-        if os.path.isfile(fpath) and fname.lower().endswith(".csv"):
-            candidates.append(fpath)
-    return candidates
+    return prayer_source.presets(PRAYERS_CONFIG_DIR)
 
 
 def scan_prayer_sources():
@@ -228,24 +186,10 @@ def scan_prayer_sources():
 
 
 def current_prayer_source(recorded):
-    """The file the reference file was last copied from, as it exists on this device.
-    A preset recorded under another device's home (settings copied from louay to ihms-lr)
-    is the same preset here, found by its name. None when nothing can be restored from."""
-    if not recorded:
-        return None
-    if os.path.isfile(recorded):
-        return recorded
-    if os.path.basename(os.path.dirname(recorded)) == os.path.basename(PRAYERS_CONFIG_DIR):
-        here = os.path.join(PRAYERS_CONFIG_DIR, os.path.basename(recorded))
-        if os.path.isfile(here):
-            return here
-    return None
+    return prayer_source.current_source(recorded, PRAYERS_CONFIG_DIR)
 
 
-def isolated(name):
-    """A file name kept whole inside Arabic text: without the isolate marks the bidi
-    algorithm moves its «.csv» to the far end of the sentence."""
-    return f"\u2068{name}\u2069"
+isolated = prayer_source.isolated
 
 
 # ---------------- Defaults ----------------
@@ -264,7 +208,7 @@ DUHA_ENABLE = "enable_duha_prayer"
 DUHA_TIME = "duha_time"
 
 QURAN_ENABLE = "enable_listen_to_quran"
-DEFAULT_CRON = "07:00"
+DEFAULT_CRON = settings_defaults.DEFAULT_CRON
 
 FRIDAY_QURAN_ENABLE = "enable_friday_quran"
 FRIDAY_QURAN_TIME = "friday_quran_time"
@@ -278,26 +222,12 @@ DEFAULT_FRIDAY_QURAN_POSITION = FRIDAY_QURAN_AFTER
 FRIDAY_QURAN_MAX_MINUTES = 300
 FRIDAY_WEEKDAY = 4  # date.weekday()
 
-DAYLIGHT_SAVING_ENABLE = "enable_daylight_saving"
-DAYLIGHT_SAVING_TIMEZONE = "daylight_saving_timezone"
+# The daylight-saving choice of earlier releases. The shifts now follow the clock's own
+# zone (prayer_dst.py), so a save drops these rather than keep a choice nothing reads.
+RETIRED_DST_KEYS = ("enable_daylight_saving", "daylight_saving_timezone")
 
-DEFAULTS_INT = {
-    TAHAJJUD_TIME: 20,
-    DUHA_TIME: 60,
-    ATHKAR_ELSABAH_TIME: 210,
-    ATHKAR_ELMASA_TIME: 20,
-    FRIDAY_QURAN_TIME: 60,
-}
-
-DEFAULTS_BOOL = {
-    TAHAJJUD_ENABLE: True,
-    DUHA_ENABLE: True,
-    QURAN_ENABLE: True,
-    ATHKAR_ELSABAH_ENABLE: True,
-    ATHKAR_ELMASA_ENABLE: True,
-    FRIDAY_QURAN_ENABLE: True,
-    internet_status.ENABLE_KEY: internet_status.DEFAULT_ENABLED,
-}
+DEFAULTS_INT = settings_defaults.DEFAULTS_INT
+DEFAULTS_BOOL = settings_defaults.DEFAULTS_BOOL
 
 # QSpinBox requires *some* upper bound (its default is 99), so this is a widget bound
 # only, deliberately set past any real Fajr->Dhuhr gap so it never blocks a legitimate
@@ -312,13 +242,7 @@ PRAYER_PREFIX = "enable_prayer_"
 def read_default_settings():
     """The [Settings] of DEFAULT_SETTINGS_FILE, or {} when it is missing or unreadable -
     then the constants above are the defaults, as they were before the file shipped."""
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read(DEFAULT_SETTINGS_FILE, encoding="utf-8")
-    except configparser.Error as error:
-        print("Failed to read the default settings:", error)
-        return {}
-    return dict(parser["Settings"]) if parser.has_section("Settings") else {}
+    return settings_defaults.read_default_settings(DEFAULT_SETTINGS_FILE)
 
 # Every time this app puts on screen is a 12-hour clock, matching the daily prayer page
 # on the wall display. Only the display: the values written into config.ini stay 24-hour,
@@ -667,6 +591,43 @@ class UpdateWorker(QThread):
         self.finished_result.emit(success, output.strip())
 
 
+class AudioCopyWorker(QThread):
+    """Copies a chosen recitation into its folder off the UI thread: a whole surah from
+    a USB stick takes long enough to freeze the touch screen otherwise."""
+
+    finished_result = pyqtSignal(str, str)
+
+    def __init__(self, source, target, parent=None):
+        super().__init__(parent)
+        self.source = source
+        self.target = target
+
+    def run(self):
+        try:
+            self.finished_result.emit(audio_upload.copy(self.source, self.target), "")
+        except audio_upload.UploadError as error:
+            self.finished_result.emit("", str(error))
+
+
+class ZoneChangeWorker(QThread):
+    """Rebuilds the schedule for a new zone and sets it, off the UI thread: the rebuild
+    is the whole of apply_settings.sh."""
+
+    finished_result = pyqtSignal(str)
+
+    def __init__(self, zone, preset=None, parent=None):
+        super().__init__(parent)
+        self.zone = zone
+        self.preset = preset
+
+    def run(self):
+        try:
+            os_timezone.change(self.zone, TIMEZONE_COUNTRIES, MAIN_DIR, DESKTOP_DIR, self.preset)
+            self.finished_result.emit("")
+        except os_timezone.ZoneError as error:
+            self.finished_result.emit(str(error))
+
+
 class ApplySettingsWorker(QThread):
     """Runs apply_settings.sh off the UI thread and reports back real success/failure
     so Save can never claim success while the script actually failed."""
@@ -799,13 +760,14 @@ class ControlApp(QMainWindow):
             QPushButton:pressed { background-color: #2b2b2b; }
         """)
         change_source_btn.clicked.connect(lambda: self.run_prayer_source_picker(mandatory=False))
-        source_layout.addWidget(change_source_btn)
+        self.add_update_row(source_layout, (change_source_btn, 1))
 
         main_layout.addWidget(self.prayer_source_frame)
 
-        # ---------------- Daylight Saving Section ----------------
-        main_layout.addWidget(self.build_daylight_saving_section())
+        # ---------------- OS Time Zone Section ----------------
+        main_layout.addWidget(self.build_os_timezone_section())
         main_layout.addWidget(self.build_internet_warning_section())
+        main_layout.addWidget(self.build_audio_upload_section())
 
         # ---------------- Updates Section ----------------
         # Empty until a version list is first opened: what has been published is not
@@ -1280,10 +1242,8 @@ class ControlApp(QMainWindow):
 
     def effective_prayer_csv(self):
         """The file whose times actually get scheduled: the daylight-saving copy when
-        that is switched on and has been generated, otherwise the reference file."""
-        if prayer_dst is not None and self.config["Settings"].getboolean(
-            DAYLIGHT_SAVING_ENABLE, fallback=False
-        ):
+        that has been generated and not switched off, otherwise the reference file."""
+        if prayer_dst is not None and prayer_dst.adjustment_enabled(self.config["Settings"]):
             adjusted = prayer_dst.dst_output_path(datetime.now().year,
                                                   os.path.join(MAIN_DIR, "config"))
             if os.path.isfile(adjusted):
@@ -1588,6 +1548,9 @@ class ControlApp(QMainWindow):
 
     def create_checkable_audio_list(self, directory):
         list_widget = QListWidget()
+        if not hasattr(self, "audio_list_widgets"):
+            self.audio_list_widgets = {}
+        self.audio_list_widgets[os.path.normpath(directory)] = list_widget
         list_widget.setFixedHeight(220)
         list_widget.setLayoutDirection(Qt.RightToLeft)
         list_widget.setStyleSheet("""
@@ -1624,17 +1587,12 @@ class ControlApp(QMainWindow):
 
 
     def reset_audio_list(self, list_widget, config_key):
-        """Tick the files the defaults name, among those this device has. A device with
-        none of them gets every file in the folder ticked, so a reset never leaves an
-        event with nothing to play."""
-        wanted = audio_lists.checked_from_config(self.config["Settings"].get(config_key, ""))
-        names = {list_widget.item(i).text() for i in range(list_widget.count())}
-        if not wanted & names:
-            wanted = names
-        for i in range(list_widget.count()):
-            item = list_widget.item(i)
-            if item.flags() & Qt.ItemIsUserCheckable:
-                item.setCheckState(Qt.Checked if item.text() in wanted else Qt.Unchecked)
+        items = [list_widget.item(i) for i in range(list_widget.count())
+                 if list_widget.item(i).flags() & Qt.ItemIsUserCheckable]
+        wanted = set(settings_defaults.reset_audio(
+            self.config["Settings"].get(config_key, ""), [item.text() for item in items]))
+        for item in items:
+            item.setCheckState(Qt.Checked if item.text() in wanted else Qt.Unchecked)
         self.save_audio_checked_state(list_widget, config_key)
 
     def event_switches(self):
@@ -1904,20 +1862,8 @@ class ControlApp(QMainWindow):
         self.update_pointer_label.setVisible(bool(custom_pointer))
 
     def write_update_conf(self, key, value):
-        """update.conf is plain shell, and the updater sources it - so a value is
-        rewritten in place rather than the file regenerated, which would lose anything
-        the owner had set by hand."""
         try:
-            with open(UPDATE_CONF_FILE, encoding="utf-8") as handle:
-                text = handle.read()
-        except OSError:
-            text = ""
-        line = f"{key}={value}"
-        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
-        text = pattern.sub(line, text) if pattern.search(text) else (text.rstrip("\n") + f"\n{line}\n")
-        try:
-            with open(UPDATE_CONF_FILE, "w", encoding="utf-8") as handle:
-                handle.write(text)
+            updates.write_conf(UPDATE_CONF_FILE, key, value)
             return True
         except OSError as error:
             arabic_error(self, "تعذر حفظ إعدادات التحديث", str(error))
@@ -1952,12 +1898,7 @@ class ControlApp(QMainWindow):
         taking one turns the daily check off - but only once the user has said yes."""
         if not self.update_auto_chk.isChecked() or version == self.read_latest_version():
             return True
-        if not arabic_confirm(
-            self, "ليس أحدث إصدار",
-            f"الإصدار {version} ليس أحدث إصدار معتمد.\n"
-            "إن ثبّته فسيتوقف التحديث التلقائي اليومي، ويبقى الجهاز ثابتًا على الإصدار"
-            f" {version}.\n\nهل تريد المتابعة؟"
-        ):
+        if not arabic_confirm(self, "ليس أحدث إصدار", updates.hold_question(version)):
             return False
         self.update_auto_chk.setChecked(False)
         self.save_update_enabled()
@@ -1977,17 +1918,9 @@ class ControlApp(QMainWindow):
             self.set_update_auto_ticked(False)
             installed = getattr(self, "update_installed_version", "")
             latest = self.read_latest_version()
-            if latest and latest != installed:
-                if version_key(installed) > version_key(latest):
-                    text = (f"الإصدار المثبَّت {installed} أحدث من الإصدار المعتمد.\n"
-                            "إن فعّلت التحديث التلقائي اليومي فسيُرجَع الجهاز الآن إلى"
-                            f" الإصدار المعتمد: {latest}.")
-                else:
-                    text = (f"الإصدار المثبَّت {installed} ليس أحدث إصدار معتمد.\n"
-                            "إن فعّلت التحديث التلقائي اليومي فسيُنقل الجهاز الآن إلى أحدث"
-                            f" إصدار: {latest}.")
-                if not arabic_confirm(self, "تفعيل التحديث التلقائي",
-                                      text + "\n\nهل تريد المتابعة؟"):
+            question = updates.enable_question(installed, latest)
+            if question:
+                if not arabic_confirm(self, "تفعيل التحديث التلقائي", question):
                     return
                 move_to = latest
             self.set_update_auto_ticked(True)
@@ -2097,8 +2030,12 @@ class ControlApp(QMainWindow):
     def run_update_rollback(self):
         version = self.update_rollback_combo.currentData()
         if not version:
-            arabic_error(self, "لم يتم اختيار إصدار",
-                         "افتح القائمة أعلاه واختر إصدارًا منها.")
+            if self.update_rollback_combo.count() < 2:
+                arabic_error(self, "لا يوجد إصدار سابق",
+                             "لا يوجد على الجهاز ولا على الإنترنت إصدار أقدم للرجوع إليه.")
+            else:
+                arabic_error(self, "لم يتم اختيار إصدار",
+                             "افتح القائمة أعلاه واختر إصدارًا منها.")
             return
         if not self.confirm_update_hold(version):
             return
@@ -2117,15 +2054,9 @@ class ControlApp(QMainWindow):
         status = self.read_update_status()
         installed = status.get("installed") or ""
         backup = status.get("rollback_to") or ""
-        # After a rollback the backup directory still holds the version now running, and
-        # there is no going back to where you already are.
-        if backup == installed:
-            backup = ""
+        backup, older = updates.rollback_choices(installed, backup,
+                                                 self.update_published_versions)
         self.update_rollback_backup = backup
-
-        older = [v for v in self.update_published_versions
-                 if v != backup and (not installed or version_key(v) < version_key(installed))]
-        older.sort(key=version_key, reverse=True)
 
         previous = self.update_rollback_combo.currentData()
         self.update_rollback_combo.blockSignals(True)
@@ -2146,7 +2077,9 @@ class ControlApp(QMainWindow):
 
     def update_rollback_button_text(self):
         version = self.update_rollback_combo.currentData()
-        self.update_rollback_btn.setEnabled(bool(version))
+        # Red even with nothing chosen, as on the website: a tap then says to choose one.
+        # Only an update in progress greys it out.
+        self.update_rollback_btn.setEnabled(getattr(self, "update_busy", None) is None)
         if version:
             self.update_rollback_btn.setText(f"الرجوع إلى الإصدار {version}")
         elif self.update_rollback_combo.count() > 1:
@@ -2236,6 +2169,256 @@ class ControlApp(QMainWindow):
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         return frame
 
+    def audio_folder_combo(self):
+        combo = RightAlignedComboBox()
+        combo.setLayoutDirection(Qt.RightToLeft)
+        combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        combo.setFixedHeight(45)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        combo.addItem("اختر المجلد…", "")
+        for folder, label in audio_upload.folders(MAIN_DIR):
+            combo.addItem(f"{label} ({folder})", folder)
+        return combo
+
+    def audio_part_label(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("font-size: 21px; font-weight: bold; color: #1f5f8b; "
+                          "border: none; border-bottom: 2px solid #1f5f8b; padding: 4px 2px;")
+        return lbl
+
+    def build_audio_upload_section(self):
+        frame = self.create_section_frame(
+            "إدارة الملفات الصوتية", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
+
+        layout.addWidget(self.audio_part_label("رفع ملف"))
+        layout.addWidget(self.create_bold_label("المجلد:"))
+        self.upload_folder_combo = self.audio_folder_combo()
+        layout.addWidget(self.upload_folder_combo, alignment=Qt.AlignLeading)
+
+        self.upload_btn = QPushButton("اختيار الملف الصوتي ورفعه")
+        self.upload_btn.setFixedHeight(50)
+        self.upload_btn.setCursor(Qt.PointingHandCursor)
+        self.upload_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4d4d4d;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 7px;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #3d3d3d; }
+            QPushButton:pressed { background-color: #2b2b2b; }
+            QPushButton:disabled { background-color: #9e9e9e; }
+        """)
+        self.upload_btn.clicked.connect(self.upload_audio_file)
+        self.add_update_row(layout, (self.upload_btn, 1))
+
+        hint = QLabel(
+            "ملف MP3 فقط، من الجهاز أو من ذاكرة USB موصولة به. يظهر الملف بعد رفعه في "
+            "قائمة ملفات المجلد غير محدد؛ حدّده ثم اضغط «حفظ وتفعيل الإعدادت» ليُشغَّل."
+        )
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        layout.addSpacing(10)
+        layout.addWidget(self.audio_part_label("حذف ملفات"))
+        layout.addWidget(self.create_bold_label("المجلد:"))
+        self.remove_folder_combo = self.audio_folder_combo()
+        self.remove_folder_combo.currentIndexChanged.connect(self.fill_remove_list)
+        layout.addWidget(self.remove_folder_combo, alignment=Qt.AlignLeading)
+
+        self.remove_list = QListWidget()
+        self.remove_list.setFixedHeight(220)
+        self.remove_list.setLayoutDirection(Qt.RightToLeft)
+        self.remove_list.setStyleSheet("""
+            QListWidget {
+                font-size: 20px;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                background: white;
+            }
+        """)
+        layout.addWidget(self.remove_list)
+        self.fill_remove_list()
+
+        self.remove_btn = QPushButton("حذف الملفات المحددة")
+        self.remove_btn.setFixedHeight(50)
+        self.remove_btn.setCursor(Qt.PointingHandCursor)
+        self.remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #b3261e;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 7px;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #9a1f19; }
+            QPushButton:pressed { background-color: #7f1913; }
+            QPushButton:disabled { background-color: #9e9e9e; }
+        """)
+        self.remove_btn.clicked.connect(self.delete_audio_files)
+        self.add_update_row(layout, (self.remove_btn, 1))
+
+        remove_hint = QLabel(
+            "يُحذف الملف من الجهاز نهائيًا. إن كان محددًا للتشغيل أُزيل من قائمة المجلد، "
+            "وإن لم يبقَ للحدث ملف محدد يتم إيقافه."
+        )
+        remove_hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        remove_hint.setWordWrap(True)
+        layout.addWidget(remove_hint)
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def fill_remove_list(self, *_):
+        self.remove_list.clear()
+        folder = self.remove_folder_combo.currentData()
+        if not folder:
+            text = "اختر المجلد لعرض ملفاته."
+        else:
+            names = audio_lists.available_audio(audio_lists.audio_dir(MAIN_DIR, folder))
+            for name in names:
+                item = QListWidgetItem(name)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Unchecked)
+                self.remove_list.addItem(item)
+            if names:
+                return
+            text = "لا توجد ملفات صوتية في هذا المجلد"
+        item = QListWidgetItem(text)
+        item.setFlags(Qt.NoItemFlags)
+        self.remove_list.addItem(item)
+
+    def delete_audio_files(self):
+        folder = self.remove_folder_combo.currentData()
+        if not folder:
+            arabic_error(self, "لم يتم اختيار مجلد",
+                         "افتح القائمة واختر المجلد الذي ستُحذف منه الملفات.")
+            return
+        names = [self.remove_list.item(i).text() for i in range(self.remove_list.count())
+                 if self.remove_list.item(i).checkState() == Qt.Checked]
+        if not names:
+            arabic_error(self, "لم يتم تحديد ملفات", "حدّد الملفات التي تريد حذفها.")
+            return
+        try:
+            question = audio_upload.delete_question(MAIN_DIR, SETTINGS_INI_FILE, folder, names)
+            if not arabic_confirm(self, "تأكيد حذف الملفات", question):
+                return
+            deleted, _ticked, switched_off = audio_upload.delete(
+                MAIN_DIR, SETTINGS_INI_FILE, folder, names)
+        except audio_upload.UploadError as error:
+            self.fill_remove_list()
+            arabic_error(self, "تعذّر حذف الملفات", str(error))
+            return
+        self.forget_deleted_audio(folder, deleted, switched_off)
+        self.fill_remove_list()
+        label = audio_upload.FOLDER_LABELS.get(folder, folder)
+        message = (f"تم حذف {'الملف' if len(deleted) == 1 else f'{len(deleted)} ملفات'} "
+                   f"من مجلد «{label}».")
+        if switched_off:
+            message += "\nلم يبقَ له ملف محدد، فتم إيقافه."
+            self.delete_apply_worker = ApplySettingsWorker()
+            self.delete_apply_worker.finished_result.connect(self.on_delete_apply_finished)
+            self.delete_apply_worker.start()
+        arabic_info(self, "تم حذف الملفات", message)
+
+    def forget_deleted_audio(self, folder, deleted, switched_off):
+        """The deleted files out of their event's list and out of the settings this
+        screen will save, so a later save does not tick a file that is gone."""
+        key = audio_upload.CHECKED_KEYS[folder]
+        settings = self.config["Settings"]
+        kept = [n for n in audio_lists.checked_from_config(settings.get(key, ""))
+                if n not in deleted]
+        settings[key] = audio_lists.checked_to_config(sorted(kept))
+        directory = os.path.normpath(audio_lists.audio_dir(MAIN_DIR, folder))
+        list_widget = getattr(self, "audio_list_widgets", {}).get(directory)
+        if list_widget is None:
+            return
+        for i in reversed(range(list_widget.count())):
+            if list_widget.item(i).text() in deleted:
+                list_widget.takeItem(i)
+        if switched_off:
+            settings[audio_lists.EVENT_ENABLE_KEYS[key]] = "False"
+            for chk, widget in self.event_switches():
+                if widget is list_widget:
+                    chk.setChecked(False)
+
+    def on_delete_apply_finished(self, success, log_tail):
+        if not success:
+            arabic_error(self, "تعذّر تحديث جدول الأذان",
+                         "تم حذف الملفات، لكن تعذّر إعادة بناء الجدول بعد إيقاف الحدث.\n"
+                         "اضغط «حفظ وتفعيل الإعدادت» لإعادة المحاولة.")
+
+    def upload_audio_file(self):
+        folder = self.upload_folder_combo.currentData()
+        if not folder:
+            arabic_error(self, "لم يتم اختيار مجلد",
+                         "افتح القائمة واختر المجلد الذي سيُرفع إليه الملف.")
+            return
+        source, _ = QFileDialog.getOpenFileName(
+            self, "اختر الملف الصوتي", DESKTOP_DIR, "ملفات MP3 (*.mp3 *.MP3)")
+        if not source:
+            return
+        try:
+            target = audio_upload.target(MAIN_DIR, folder, os.path.basename(source))
+            question = audio_upload.exists_question(MAIN_DIR, folder, os.path.basename(source))
+        except audio_upload.UploadError as error:
+            arabic_error(self, "تعذّر رفع الملف", str(error))
+            return
+        if os.path.abspath(source) == os.path.abspath(target):
+            arabic_info(self, "الملف موجود", "هذا الملف موجود في المجلد المختار أصلًا.")
+            return
+        if question and not arabic_confirm(self, "الملف موجود", question):
+            return
+
+        self.upload_btn.setEnabled(False)
+        self.upload_btn.setText("جارٍ رفع الملف…")
+        self.upload_folder = folder
+        self.upload_worker = AudioCopyWorker(source, target)
+        self.upload_worker.finished_result.connect(self.on_audio_upload_finished)
+        self.upload_worker.start()
+
+    def on_audio_upload_finished(self, saved, error):
+        self.upload_btn.setEnabled(True)
+        self.upload_btn.setText("اختيار الملف الصوتي ورفعه")
+        if error:
+            arabic_error(self, "تعذّر رفع الملف", error)
+            return
+        directory = audio_lists.audio_dir(MAIN_DIR, self.upload_folder)
+        self.add_audio_list_item(directory, saved)
+        if self.remove_folder_combo.currentData() == self.upload_folder:
+            self.fill_remove_list()
+        arabic_info(self, "تم رفع الملف",
+                    f"تم رفع «{prayer_source.isolated(saved)}» إلى مجلد "
+                    f"«{audio_upload.FOLDER_LABELS.get(self.upload_folder, self.upload_folder)}».\n"
+                    "حدّده في قائمة ملفات المجلد ثم اضغط «حفظ وتفعيل الإعدادت» ليُشغَّل.")
+
+    def add_audio_list_item(self, directory, name):
+        """The new file in its event's list, unticked and in its sorted place, as the
+        list would show it if the app were opened now."""
+        list_widget = getattr(self, "audio_list_widgets", {}).get(os.path.normpath(directory))
+        if list_widget is None:
+            return
+        names = [list_widget.item(i).text() for i in range(list_widget.count())]
+        if name in names:
+            return
+        real = [list_widget.item(i) for i in range(list_widget.count())
+                if list_widget.item(i).flags() & Qt.ItemIsUserCheckable]
+        if not real:
+            # The "folder missing" row, now that the folder holds a file.
+            list_widget.clear()
+        item = QListWidgetItem(name)
+        flags = real[0].flags() if real else item.flags() | Qt.ItemIsUserCheckable
+        item.setFlags(flags | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Unchecked)
+        position = sum(1 for other in real if other.text() < name)
+        list_widget.insertItem(position, item)
+
     def refresh_internet_banner(self):
         message = self.internet.poll()
         if message is None:
@@ -2254,87 +2437,163 @@ class ControlApp(QMainWindow):
         self.internet.dismiss()
         self.internet_bar.hide()
 
-    def build_daylight_saving_section(self):
+    def build_os_timezone_section(self):
         frame = self.create_section_frame(
-            "التوقيت الصيفي", font_family="Amiri", font_size=22, bold=True
+            "المنطقة الزمنية للجهاز", font_family="Amiri", font_size=22, bold=True
         )
         layout = frame.layout()
 
-        self.dst_chk = QCheckBox("تفعيل التوقيت الصيفي")
-        self.dst_chk.setChecked(
-            self.config["Settings"].getboolean(DAYLIGHT_SAVING_ENABLE, fallback=False)
-        )
-        self.dst_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
-        self.dst_chk.setLayoutDirection(Qt.RightToLeft)
-        layout.addWidget(self.dst_chk)
-
+        self.os_timezone_current = os_timezone.current()
+        current = QLabel(f"ساعة الجهاز الآن على: {self.os_timezone_label()}")
+        current.setStyleSheet("font-size: 18px; padding: 5px; font-weight: bold;")
+        layout.addWidget(current)
         hint = QLabel(
-            "تُستخدم المنطقة الزمنية لتحديد مواعيد بدء وانتهاء التوقيت الصيفي فقط، "
-            "ولا تُحسب منها مواقيت الصلاة.\nاختر المنطقة التي حُسبت لها مواقيت الصلاة في ملفك."
+            "غيّرها عند نقل الجهاز إلى بلد آخر، ثم اختر ملف مواقيت الصلاة للمدينة الجديدة. "
+            "يُعاد تشغيل الجهاز بعد التغيير.\n"
+            "يُضبط التوقيت الصيفي تلقائيًا حسب هذه المنطقة، فلا حاجة لتفعيله."
         )
         hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self.dst_country_label = self.create_bold_label("الدولة:")
-        layout.addWidget(self.dst_country_label)
-        self.dst_country_combo = RightAlignedComboBox()
-        self.dst_country_combo.setLayoutDirection(Qt.RightToLeft)
-        self.dst_country_combo.setStyleSheet("font-size: 18px; padding: 5px;")
-        self.dst_country_combo.setFixedHeight(45)
-        self.dst_country_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.dst_country_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        layout.addWidget(self.dst_country_combo, alignment=Qt.AlignLeading)
-
-        self.dst_city_label = self.create_bold_label("المدينة:")
-        layout.addWidget(self.dst_city_label)
-        self.dst_city_combo = RightAlignedComboBox()
-        self.dst_city_combo.setLayoutDirection(Qt.RightToLeft)
-        self.dst_city_combo.setStyleSheet("font-size: 18px; padding: 5px;")
-        self.dst_city_combo.setFixedHeight(45)
-        self.dst_city_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.dst_city_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        layout.addWidget(self.dst_city_combo, alignment=Qt.AlignLeading)
+        combos = []
+        for label in ("الدولة:", "المدينة:"):
+            title = self.create_bold_label(label)
+            combo = RightAlignedComboBox()
+            combo.setLayoutDirection(Qt.RightToLeft)
+            combo.setStyleSheet("font-size: 18px; padding: 5px;")
+            combo.setFixedHeight(45)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            layout.addWidget(title)
+            layout.addWidget(combo, alignment=Qt.AlignLeading)
+            combos.append((title, combo))
+        (_, self.os_country_combo), (self.os_city_label, self.os_city_combo) = combos
 
         for arabic_name, _code, cities in TIMEZONE_COUNTRIES:
-            self.dst_country_combo.addItem(arabic_name, cities)
+            self.os_country_combo.addItem(arabic_name, cities)
+        self.os_country_combo.currentIndexChanged.connect(self.populate_os_cities)
+        self.populate_os_cities()
+        for index, (_arabic, _code, cities) in enumerate(TIMEZONE_COUNTRIES):
+            for city_index, (_city, zone) in enumerate(cities):
+                if zone == self.os_timezone_current:
+                    self.os_country_combo.setCurrentIndex(index)
+                    self.populate_os_cities()
+                    self.os_city_combo.setCurrentIndex(city_index)
 
-        self.dst_country_combo.currentIndexChanged.connect(self.populate_dst_cities)
-        self.select_saved_timezone()
-
-        for widget in (self.dst_country_label, self.dst_country_combo,
-                       self.dst_city_label, self.dst_city_combo, hint):
-            self.setup_checkbox_link(self.dst_chk, widget)
-
+        change_btn = QPushButton("تغيير المنطقة الزمنية وإعادة التشغيل")
+        change_btn.setFixedHeight(50)
+        change_btn.setCursor(Qt.PointingHandCursor)
+        change_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 7px;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #FB8C00; }
+            QPushButton:pressed { background-color: #EF6C00; }
+        """)
+        change_btn.clicked.connect(self.change_os_timezone)
+        self.add_update_row(layout, (change_btn, 1))
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         return frame
 
-    def populate_dst_cities(self):
-        """Only worth showing when a country spans more than one zone; for the ~175
-        single-zone countries the country alone determines the rule."""
-        cities = self.dst_country_combo.currentData() or []
-        self.dst_city_combo.clear()
-        for arabic_name, timezone_name in cities:
-            self.dst_city_combo.addItem(arabic_name, timezone_name)
+    def os_timezone_label(self):
+        """The clock's zone by its Arabic country and city, as the lists below name it;
+        the zone id itself only for one the lists do not have."""
+        zone = self.os_timezone_current
+        if not zone:
+            return "غير معروفة"
+        if os_timezone.known(zone, TIMEZONE_COUNTRIES):
+            return os_timezone.name(zone, TIMEZONE_COUNTRIES)
+        return f"\u2066{zone}\u2069"
 
+    def populate_os_cities(self):
+        cities = self.os_country_combo.currentData() or []
+        self.os_city_combo.clear()
+        for arabic_name, zone in cities:
+            self.os_city_combo.addItem(arabic_name, zone)
         multiple = len(cities) > 1
-        self.dst_city_label.setVisible(multiple)
-        self.dst_city_combo.setVisible(multiple)
+        self.os_city_label.setVisible(multiple)
+        self.os_city_combo.setVisible(multiple)
 
-    def select_saved_timezone(self):
-        saved = self.config["Settings"].get(DAYLIGHT_SAVING_TIMEZONE, DEFAULT_TIMEZONE).strip()
-        for index, (_arabic, _code, cities) in enumerate(TIMEZONE_COUNTRIES):
-            for city_index, (_city_arabic, timezone_name) in enumerate(cities):
-                if timezone_name == saved:
-                    self.dst_country_combo.setCurrentIndex(index)
-                    self.populate_dst_cities()
-                    self.dst_city_combo.setCurrentIndex(city_index)
-                    return
-        self.populate_dst_cities()
+    def change_os_timezone(self):
+        zone = self.os_city_combo.currentData()
+        if not zone or zone == self.os_timezone_current:
+            arabic_info(self, "المنطقة الزمنية",
+                        "ساعة الجهاز على هذه المنطقة الزمنية أصلًا.")
+            return
+        offered = os_timezone.prayer_offer(
+            zone, TIMEZONE_COUNTRIES, MAIN_DIR,
+            self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "")) or []
+        preset = None
+        if offered:
+            hand_edits = prayer_source.may_hold_hand_edits(self.config["Settings"],
+                                                           PRAYER_CSV_FILE)
+            preset = self.ask_prayer_file(
+                os_timezone.question(zone, TIMEZONE_COUNTRIES, offered, hand_edits), offered)
+            if preset is None:
+                return
+        elif not arabic_confirm(self, "تغيير المنطقة الزمنية",
+                                os_timezone.question(zone, TIMEZONE_COUNTRIES)):
+            return
+        self.zone_busy = self.make_update_busy_dialog("جارٍ إعادة بناء جدول الأذان للمنطقة الجديدة…")
+        self.zone_busy.setWindowTitle("المنطقة الزمنية للجهاز")
+        self.zone_busy.show()
+        self.zone_worker = ZoneChangeWorker(zone, preset or None)
+        self.zone_worker.finished_result.connect(self.on_os_timezone_changed)
+        self.zone_worker.start()
 
-    def selected_timezone(self):
-        return self.dst_city_combo.currentData() or DEFAULT_TIMEZONE
+    def ask_prayer_file(self, question, offered):
+        """The question with the new country's city files in a list under it. The file
+        chosen, "" to keep the current one, or None for no."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("تغيير المنطقة الزمنية")
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+        dialog.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(dialog)
+        text = QLabel(question)
+        text.setWordWrap(True)
+        text.setStyleSheet("font-size: 18px; padding: 6px;")
+        # A wrapped label in a dialog is given room for fewer lines than it has; its
+        # height is asked for at the width it will really have.
+        text.setFixedWidth(500)
+        text.setMinimumHeight(text.heightForWidth(500))
+        layout.addWidget(text)
+        self.os_prayer_combo = RightAlignedComboBox()
+        self.os_prayer_combo.setLayoutDirection(Qt.RightToLeft)
+        self.os_prayer_combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        self.os_prayer_combo.setFixedHeight(45)
+        for name in offered:
+            self.os_prayer_combo.addItem(name, name)
+        self.os_prayer_combo.addItem("إبقاء الملف الحالي", "")
+        layout.addWidget(self.os_prayer_combo)
+        buttons = QHBoxLayout()
+        go = QPushButton("متابعة")
+        cancel = QPushButton("إلغاء")
+        for button in (go, cancel):
+            button.setFixedHeight(50)
+            button.setStyleSheet("font-size: 18px; font-weight: bold;")
+            buttons.addWidget(button)
+        go.clicked.connect(dialog.accept)
+        cancel.clicked.connect(dialog.reject)
+        layout.addLayout(buttons)
+        dialog.setMinimumWidth(520)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        return self.os_prayer_combo.currentData()
 
-    # ---------------- Prayer source resolution ----------------
+    def on_os_timezone_changed(self, error):
+        self.zone_busy.close()
+        if error:
+            arabic_error(self, "تعذّر تغيير المنطقة الزمنية", error)
+            return
+        arabic_info(self, "تم تغيير المنطقة الزمنية",
+                    "تم تغيير المنطقة الزمنية، ويُعاد تشغيل الجهاز الآن.")
+
     def update_prayer_source_label(self):
         lines = [f"الملف المرجعي: {PRAYER_CSV_FILE}"]
 
@@ -2382,77 +2641,23 @@ class ControlApp(QMainWindow):
 
     def resolve_and_apply_prayer_source(self, source_path, confirmed=False):
         same_file = os.path.abspath(source_path) == os.path.abspath(PRAYER_CSV_FILE)
-
-        # Warn before clobbering hand edits made to PRAYER_CSV_FILE since we last wrote it.
-        # A missing stored hash means we have no proof this app produced the current
-        # file (fresh upgrade, first-ever pick, or a file typed by hand per README
-        # Step 6) - treat that as "possibly hand-written" and warn, rather than
-        # silently overwriting it.
-        if not same_file and not confirmed and os.path.isfile(PRAYER_CSV_FILE):
-            stored_hash = self.config["Settings"].get(PRAYER_CSV_HASH_CONFIG_KEY, "").strip()
-            current_hash = compute_file_hash(PRAYER_CSV_FILE)
-            if not stored_hash or not current_hash or stored_hash != current_hash:
-                proceed = arabic_confirm(
-                    self,
-                    "تنبيه",
-                    "قد يحتوي ملف مواقيت الصلاة الحالي على تعديلات يدوية لم يقم بها التطبيق.\n"
-                    "المتابعة الآن ستستبدل محتواه بالكامل بالملف الذي اخترته.\n\n"
-                    f"الملف الذي سيتم استبداله:\n{PRAYER_CSV_FILE}\n\n"
-                    "هل أنت متأكد من المتابعة؟"
-                )
-                if not proceed:
-                    return False
-
-        fmt = detect_csv_format(source_path)
-        if fmt == "al_awail" and same_file:
-            # The reference file itself is somehow in raw/unconverted format - refuse
-            # rather than read-while-truncating the same path.
-            arabic_error(self, "خطأ", "ملف مواقيت الصلاة الحالي بصيغة غير محولة، الرجاء اختيار ملف آخر")
-            return False
-        try:
-            os.makedirs(os.path.dirname(PRAYER_CSV_FILE), exist_ok=True)
-            if fmt == "al_awail":
-                os.makedirs(RAW_IMPORTS_DIR, exist_ok=True)
-                # Timestamp the archive copy so importing a file whose name already
-                # exists in raw-imports/ doesn't destroy the earlier archived export.
-                stem, ext = os.path.splitext(os.path.basename(source_path))
-                backup_name = f"{stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}{ext}"
-                shutil.copy2(source_path, os.path.join(RAW_IMPORTS_DIR, backup_name))
-                result = subprocess.run(
-                    [sys.executable, AL_AWAIL_CONVERT_SCRIPT, source_path, PRAYER_CSV_FILE],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    arabic_error(
-                        self, "خطأ",
-                        f"فشل تحويل ملف مواقيت الصلاة:\n{result.stderr or result.stdout}"
-                    )
-                    return False
-            elif fmt == "ready":
-                if not same_file:
-                    shutil.copyfile(source_path, PRAYER_CSV_FILE)
-            else:
-                arabic_error(self, "خطأ", "صيغة الملف المختار غير معروفة أو غير صالحة")
+        if (not same_file and not confirmed
+                and prayer_source.may_hold_hand_edits(self.config["Settings"], PRAYER_CSV_FILE)):
+            if not arabic_confirm(
+                self, "تنبيه",
+                f"{prayer_source.HAND_EDITS_WARNING}\n\n"
+                f"الملف الذي سيتم استبداله:\n{PRAYER_CSV_FILE}\n\n"
+                "هل أنت متأكد من المتابعة؟"
+            ):
                 return False
-        except Exception as e:
-            arabic_error(self, "خطأ", f"فشل تطبيق ملف مواقيت الصلاة:\n{e}")
+
+        try:
+            new_hash = prayer_source.install(source_path, PRAYER_CSV_FILE, MAIN_DIR)
+        except prayer_source.SourceError as refusal:
+            arabic_error(self, "خطأ", str(refusal))
             return False
 
-        if not csv_is_valid_prayer_format(PRAYER_CSV_FILE):
-            arabic_error(
-                self, "خطأ",
-                "الملف الناتج لا يطابق الصيغة المطلوبة:\n\n"
-                "Month,Day,Fajr,Sunrise,Dhuhr,Asr,Maghrib,Isha"
-            )
-            return False
-
-        new_hash = compute_file_hash(PRAYER_CSV_FILE)
-        if new_hash:
-            self.config["Settings"][PRAYER_CSV_HASH_CONFIG_KEY] = new_hash
-        if not same_file:
-            # Re-selecting PRAYER_CSV_FILE itself is a no-op confirmation, not a new
-            # source - leave whatever was previously recorded as "chosen from" alone.
-            self.config["Settings"][PRAYER_SOURCE_LABEL_KEY] = source_path
+        prayer_source.record(self.config["Settings"], source_path, PRAYER_CSV_FILE, new_hash)
         os.makedirs(os.path.dirname(SETTINGS_INI_FILE), exist_ok=True)
         with open(SETTINGS_INI_FILE, "w", encoding="utf-8") as f:
             self.config.write(f)
@@ -2691,10 +2896,6 @@ class ControlApp(QMainWindow):
         self.internet_warning_chk.setChecked(s.getboolean(
             internet_status.ENABLE_KEY, fallback=internet_status.DEFAULT_ENABLED))
 
-        # Daylight saving
-        self.dst_chk.setChecked(s.getboolean(DAYLIGHT_SAVING_ENABLE, fallback=False))
-        self.select_saved_timezone()
-
         # Cron time
         try:
             hour, minute = s["listen_to_quran"].split(":")
@@ -2750,9 +2951,8 @@ class ControlApp(QMainWindow):
         # ---------------- Surat Al-Kahf position ----------------
         s.setdefault(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION)
 
-        # ---------------- Daylight saving (off unless explicitly enabled) ----------------
-        s.setdefault(DAYLIGHT_SAVING_ENABLE, "False")
-        s.setdefault(DAYLIGHT_SAVING_TIMEZONE, DEFAULT_TIMEZONE)
+        for key in RETIRED_DST_KEYS:
+            s.pop(key, None)
 
         # ---------------- Audio lists defaults (checked) ----------------
         audio_defaults = {
@@ -2818,9 +3018,7 @@ class ControlApp(QMainWindow):
         s[FRIDAY_QURAN_ENABLE] = str(self.friday_quran_chk.isChecked())
         s[FRIDAY_QURAN_TIME] = str(self.friday_quran_spin.value())
         s[FRIDAY_QURAN_POSITION] = self.selected_friday_quran_position()
-        s[DAYLIGHT_SAVING_ENABLE] = str(self.dst_chk.isChecked())
         s[internet_status.ENABLE_KEY] = str(self.internet_warning_chk.isChecked())
-        s[DAYLIGHT_SAVING_TIMEZONE] = self.selected_timezone()
 
         for key, chk in self.prayer_checkboxes.items():
             s[key] = str(chk.isChecked())
@@ -2863,27 +3061,8 @@ class ControlApp(QMainWindow):
 
         try:
             fresh = configparser.ConfigParser(interpolation=None)
-            fresh["Settings"] = {}
-            settings = fresh["Settings"]
-
-            for k, v in DEFAULTS_INT.items():
-                settings[k] = str(v)
-            for k, v in DEFAULTS_BOOL.items():
-                settings[k] = str(v)
-            settings["listen_to_quran"] = DEFAULT_CRON
-            settings[ATHKAR_ELSABAH_MODE] = DEFAULT_ATHKAR_ELSABAH_MODE
-            settings[ATHKAR_ELSABAH_CLOCK] = DEFAULT_ATHKAR_ELSABAH_CLOCK
-            settings[FRIDAY_QURAN_POSITION] = DEFAULT_FRIDAY_QURAN_POSITION
-            settings[DAYLIGHT_SAVING_ENABLE] = "False"
-            settings[DAYLIGHT_SAVING_TIMEZONE] = DEFAULT_TIMEZONE
-            settings.update(read_default_settings())
-
-            # The prayer-times file is not a setting this button resets: the file on the
-            # Desktop stays as it is, and so does the record of where it came from.
-            for key in (PRAYER_SOURCE_LABEL_KEY, PRAYER_CSV_HASH_CONFIG_KEY):
-                value = self.config["Settings"].get(key, "")
-                if value:
-                    settings[key] = value
+            fresh["Settings"] = settings_defaults.reset_values(
+                self.config["Settings"], DEFAULT_SETTINGS_FILE)
 
             self.config = fresh
 
@@ -2910,11 +3089,12 @@ class ControlApp(QMainWindow):
             # Reload UI from config
             self.apply_config_to_ui()
 
-            # -------- NEW: run init.sh --------
+            # Setup, told to apply the reset settings even on a device it has set up before.
             subprocess.Popen(
                 ["/bin/bash", INIT_SCRIPT_FILE],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, "SCHEDULER_INIT_APPLY_SETTINGS": "1"},
             )
 
             arabic_info(

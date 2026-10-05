@@ -5,8 +5,10 @@ Runs as part of the apply_settings.sh pipeline (so init.sh, "Save & Apply" and t
 yearly cron job all trigger it), and is also imported by the Settings GUI to locate
 the adjusted file.
 
-The timezone selects DST *rules* only - prayer times themselves always come from the
-user's CSV. A source file may already contain DST (many published tables do), so a
+The zone is the clock's own - the operating system's, which the Settings app and the
+website change under «المنطقة الزمنية للجهاز». It selects DST *rules* only - prayer times
+themselves always come from the user's CSV. The file's times are read against that clock,
+so its rules are the only ones that can be right; there is nothing to choose. A source file may already contain DST (many published tables do), so a
 naive "+1 hour in summer" would double-apply. Instead the baked-in shifts are detected,
 stripped to a standard-time baseline, and the real per-day offset is re-applied from
 tzdata. That is idempotent: a file already carrying the correct shifts is left alone.
@@ -29,8 +31,10 @@ INPUT_CSV_FILE = os.path.join(CONFIG_DIR, "input-prayers-time.csv")
 DST_DIR = os.path.join(CONFIG_DIR, "prayers-config", "dst")
 REFERENCE_CSV_NAME = "إدخال-مواقيت-الصلاة-للمستخدم"
 
-ENABLE_KEY = "enable_daylight_saving"
-TIMEZONE_KEY = "daylight_saving_timezone"
+# Not on either screen: "off" uses the file exactly as it is, for a table the shift
+# detection below misreads. Anything else, or nothing, follows the clock's zone. The
+# enable_daylight_saving and daylight_saving_timezone of earlier releases are ignored.
+ADJUSTMENT_KEY = "daylight_saving_adjustment"
 
 TIME_COLUMNS = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]
 ANCHOR_COLUMN = "Dhuhr"
@@ -53,14 +57,35 @@ def dst_output_path(year, config_dir=None):
     return os.path.join(directory, f"{REFERENCE_CSV_NAME}_DST_{year}.csv")
 
 
+def os_timezone():
+    """The zone the clock shows, e.g. "Europe/Berlin", or "".
+
+    TZ first: it is what this process's own clock follows, and how a zone about to be set
+    is applied ahead of the reboot that makes it the system's. Then /etc/localtime, which
+    timedatectl points into the zoneinfo tree, then Debian's /etc/timezone."""
+    zone = os.environ.get("TZ", "").lstrip(":").strip()
+    if zone:
+        return zone
+    target = os.path.realpath("/etc/localtime")
+    if "/zoneinfo/" in target:
+        return target.split("/zoneinfo/", 1)[1]
+    try:
+        with open("/etc/timezone", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def adjustment_enabled(section):
+    return str(section.get(ADJUSTMENT_KEY, "auto")).strip().lower() != "off"
+
+
 def read_settings(settings_file=SETTINGS_INI_FILE):
     """Returns (enabled, timezone_name)."""
     config = configparser.ConfigParser(interpolation=None)
     config.read(settings_file, encoding="utf-8")
-    if "Settings" not in config:
-        return False, ""
-    section = config["Settings"]
-    return section.getboolean(ENABLE_KEY, fallback=False), section.get(TIMEZONE_KEY, "").strip()
+    section = config["Settings"] if "Settings" in config else {}
+    return adjustment_enabled(section), os_timezone()
 
 
 def round_to_quarter(minutes):
@@ -136,22 +161,24 @@ def write_rows(path, fieldnames, rows):
 def main():
     enabled, timezone_name = read_settings()
     if not enabled:
-        print("Daylight saving is disabled - leaving prayer times unchanged.")
+        print(f"{ADJUSTMENT_KEY} = off - leaving prayer times unchanged.")
         return 0
 
     if ZoneInfo is None:
         print("ERROR: this Python has no zoneinfo module; cannot apply daylight saving.")
         return 1
 
+    # A clock whose zone cannot be told still keeps time: the file is used as it is,
+    # rather than failing the whole apply and leaving the old schedule in place.
     if not timezone_name:
-        print("ERROR: daylight saving is enabled but no timezone is configured.")
-        return 1
+        print("WARNING: the device's time zone cannot be read - leaving prayer times unchanged.")
+        return 0
 
     try:
         ZoneInfo(timezone_name)
     except Exception as error:
-        print(f"ERROR: unknown timezone '{timezone_name}': {error}")
-        return 1
+        print(f"WARNING: unknown time zone '{timezone_name}' ({error}) - leaving prayer times unchanged.")
+        return 0
 
     if not os.path.isfile(INPUT_CSV_FILE):
         print(f"ERROR: {INPUT_CSV_FILE} does not exist.")

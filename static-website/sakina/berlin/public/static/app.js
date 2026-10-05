@@ -193,14 +193,16 @@ const Site = (() => {
         || (typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches);
 
     /* A request to the device itself, given up after DEVICE_CHECK_MS - which includes
-       the time the permission prompt is open the first time. */
+       the time the permission prompt is open the first time - or after the caller's own
+       timeoutMs, for an upload that takes as long as the file is big. */
     async function deviceFetch(host, path, options) {
+        const { timeoutMs, ...rest } = options || {};
         const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), DEVICE_CHECK_MS);
+        const timer = setTimeout(() => abort.abort(), timeoutMs || DEVICE_CHECK_MS);
         try {
             return await fetch(`http://${host}.local${path}`, Object.assign(
                 { cache: "no-store", targetAddressSpace: "local", signal: abort.signal },
-                options));
+                rest));
         } finally {
             clearTimeout(timer);
         }

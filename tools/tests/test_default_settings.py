@@ -85,7 +85,7 @@ gui.arabic_confirm = lambda parent, title, text: True
 INIT_MARKER = os.path.join(HERE, "init-ran")
 INIT_STUB = os.path.join(HERE, "init-stub.sh")
 with open(INIT_STUB, "w") as f:
-    f.write(f"#!/bin/bash\ntouch '{INIT_MARKER}'\n")
+    f.write(f"#!/bin/bash\necho \"$SCHEDULER_INIT_APPLY_SETTINGS\" > '{INIT_MARKER}'\n")
 if os.path.exists(INIT_MARKER):
     os.remove(INIT_MARKER)
 gui.INIT_SCRIPT_FILE = INIT_STUB
@@ -104,21 +104,24 @@ try:
     w.reset_settings()
     written = read_settings(SETTINGS_INI_FILE)
     for key in ("listen_to_quran", "athkar_elsabah_mode", "athkar_elsabah_clock",
-                "athkar_elsabah_time", "enable_daylight_saving", "daylight_saving_timezone",
-                "enable_athkar_elmasa", "friday_quran_position"):
+                "athkar_elsabah_time", "enable_athkar_elmasa", "friday_quran_position"):
         chk(f"{key} is the default", written.get(key), defaults.get(key))
+    chk("the retired daylight-saving choice is gone, not reset",
+        [k for k in ("enable_daylight_saving", "daylight_saving_timezone") if k in written], [])
     for _ in range(50):
         if os.path.exists(INIT_MARKER):
             break
         app.processEvents(); __import__("time").sleep(0.1)
     chk("init.sh is still run after it", os.path.exists(INIT_MARKER), True)
+    chk("told to apply the reset settings, though the device was set up before",
+        open(INIT_MARKER).read().strip() if os.path.exists(INIT_MARKER) else None, "1")
 
     print("4. and shows them")
     chk("Quran 7:00", (w.cron_hour_spin.value(), w.cron_min_spin.value()), (7, 0))
     chk("Athkar Elsabah a fixed 9:45",
         (w.selected_athkar_elsabah_mode(), w.athkar_elsabah_hour_spin.value(),
          w.athkar_elsabah_min_spin.value()), ("clock", 9, 45))
-    chk("daylight saving on", w.dst_chk.isChecked(), defaults.getboolean("enable_daylight_saving"))
+    chk("with no daylight-saving choice on screen", hasattr(w, "dst_chk"), False)
     chk("Athkar Elmasa back on", w.athkar_elmasa_chk.isChecked(), True)
 
     print("5. it does not forget the prayer-times file")

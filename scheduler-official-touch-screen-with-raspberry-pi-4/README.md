@@ -507,7 +507,7 @@ The hostname is the device's user name — `louay.local`, `ahmad.local`. Step 7'
 | `http://louay.local/settings/` | الاعدادات — the same settings, applied the same way |
 
 **On the phone, away from home too:** the landing page's **ثبّت التطبيق على هاتفك** opens
-the same pages from the city's public site at `https://sakina-<city>.pages.dev/d/louay/`.
+the same pages from the city's public site at `https://alsakina-<city>.pages.dev/d/louay/`.
 Its **ثبّت التطبيق** button installs it (Android; on an iPhone it shows the two Share-menu taps).
 Installed, the list and the countdown work anywhere, even offline; its settings
 icon opens `http://louay.local/settings/` on the home wifi and says it is out of reach

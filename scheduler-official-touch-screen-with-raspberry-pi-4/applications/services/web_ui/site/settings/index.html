@@ -23,14 +23,17 @@
 
 <div class="overlay hidden" id="working" role="status" aria-live="polite">
     <div class="spinner"></div>
-    <p>جارٍ حفظ الإعدادات وتطبيقها...</p>
+    <p id="working-text">جارٍ حفظ الإعدادات وتطبيقها...</p>
 </div>
 
 <form id="form"></form>
 
 <div class="bar">
     <button id="save">حفظ وتطبيق الإعدادات</button>
+    <button id="reset" class="warn hidden">إعادة ضبط الإعدادات</button>
 </div>
+
+<div id="updates"></div>
 
 <script src="/static/config.js"></script>
 <script src="/static/app.js"></script>
@@ -94,6 +97,7 @@ function el(tag, props, children) {
 function audioBox(key) {
     const info = state.audio[key];
     const box = el("div", { className: "audio" });
+    box.dataset.audioBox = key;
     if (!info || info.folder_missing) {
         box.appendChild(el("div", { textContent: "مجلد الملفات غير موجود" }));
         return box;
@@ -195,16 +199,10 @@ function buildForm() {
         for (const field of section.fields) set.appendChild(buildField(field));
         form.appendChild(set);
     }
+    if (state.audio_folders) form.appendChild(audioManage());
 
-    /* Daylight saving, and the prayer-times file in use. The file is shown but not
-       chosen here: picking one runs a conversion and rewrites the Desktop reference
-       file, which belongs with the touch screen. */
     const extra = el("fieldset", {}, [el("legend", { textContent: "مواقيت الصلاة" })]);
-    const dst = el("input", { type: "checkbox", id: "enable_daylight_saving",
-                              checked: !!state.values.enable_daylight_saving });
-    dst.dataset.bool = "enable_daylight_saving";
-    extra.appendChild(el("label", {}, [dst,
-        document.createTextNode("تفعيل التوقيت الصيفي")]));
+    extra.appendChild(el("div", { id: "source" }));
 
     /* Offered only where the device reports it: a device from before the warning
        refuses a key it does not know, and this copy of the page can be newer than it. */
@@ -215,15 +213,374 @@ function buildForm() {
         extra.appendChild(el("label", {}, [warn,
             document.createTextNode("تنبيه على شاشة الجهاز عند انقطاع الإنترنت")]));
     }
+    form.appendChild(extra);
+    if ("os_timezone" in state && (state.timezones || []).length) form.appendChild(osTimezone());
+    renderSource();
+}
 
-    const csv = state.csv;
-    const name = csv.current ? csv.current.split("/").pop() : "غير محدد";
-    extra.appendChild(el("p", { className: "sub",
-        textContent: `الملف المستخدم: ${name}` +
-                     (csv.current_valid ? "" : " — الملف غير صالح") }));
-    extra.appendChild(el("p", { className: "sub",
-        textContent: "لتغيير ملف المواقيت، استخدم تطبيق الإعدادات على شاشة الجهاز." }));
-    document.querySelector("#form").appendChild(extra);
+function folderSelect(id) {
+    const folder = el("select", { id });
+    folder.appendChild(el("option", { value: "", textContent: "اختر المجلد…" }));
+    for (const [name, label] of state.audio_folders) {
+        folder.appendChild(el("option", { value: name, textContent: `${label} (${name})` }));
+    }
+    return folder;
+}
+
+/* «إدارة الملفات الصوتية»: adding a recitation to one event's folder, and deleting some.
+   Both happen at once, apart from the save button. */
+function audioManage() {
+    const set = el("fieldset", {}, [el("legend", { textContent: "إدارة الملفات الصوتية" })]);
+    audioUpload(set);
+    audioRemove(set);
+    return set;
+}
+
+/* A recitation from the phone. It arrives unticked, as a file copied in by hand does: it
+   plays once it is ticked in that list and the settings are saved. */
+function audioUpload(set) {
+    set.appendChild(el("h3", { className: "part", textContent: "رفع ملف" }));
+    const folder = folderSelect("upload_folder");
+    /* The browser's own file input words its button and its "no file" in the phone's
+       language, not the page's, so it is hidden and an Arabic button opens it. */
+    const file = el("input", { type: "file", id: "upload_file", accept: ".mp3,audio/mpeg",
+                               className: "hidden" });
+    const browse = el("button", { type: "button", className: "ghost", textContent: "اختيار الملف" });
+    const NONE = "لم يتم اختيار ملف";
+    const picked = el("span", { className: "sub", id: "upload_name", textContent: NONE });
+    browse.addEventListener("click", () => file.click());
+    file.addEventListener("change", () => {
+        picked.textContent = file.files[0] ? isolate(file.files[0].name) : NONE;
+    });
+    const send = el("button", { type: "button", className: "ghost", textContent: "رفع الملف" });
+    send.addEventListener("click", () => uploadAudio(folder, file));
+    set.appendChild(el("label", {}, [document.createTextNode("المجلد: "), folder]));
+    set.appendChild(el("div", {}, [document.createTextNode("الملف الصوتي: "), browse, file,
+                                   document.createTextNode(" "), picked]));
+    set.appendChild(el("div", { className: "bar" }, [send]));
+    set.appendChild(el("p", { className: "sub", textContent:
+        "ملف MP3 فقط. يظهر الملف بعد رفعه في قائمة ملفات المجلد غير محدد؛ حدّده ثم اضغط " +
+        "«حفظ وتطبيق الإعدادات» ليُشغَّل." }));
+}
+
+function audioRemove(set) {
+    set.appendChild(el("h3", { className: "part", textContent: "حذف ملفات" }));
+    const folder = folderSelect("remove_folder");
+    const box = el("div", { className: "audio", id: "remove_list" });
+    folder.addEventListener("change", () => fillRemoveList(box, folder.value));
+    const drop = el("button", { type: "button", className: "danger", textContent: "حذف الملفات المحددة" });
+    drop.addEventListener("click", () => removeAudio(folder));
+    set.appendChild(el("label", {}, [document.createTextNode("المجلد: "), folder]));
+    set.appendChild(box);
+    set.appendChild(el("div", { className: "bar" }, [drop]));
+    set.appendChild(el("p", { className: "sub", textContent:
+        "يُحذف الملف من الجهاز نهائيًا. إن كان محددًا للتشغيل أُزيل من قائمة المجلد، " +
+        "وإن لم يبقَ للحدث ملف محدد يتم إيقافه." }));
+    fillRemoveList(box, "");
+}
+
+function folderFiles(folder) {
+    const info = Object.values(state.audio || {}).find((entry) => entry.event === folder);
+    return info ? info.available : [];
+}
+
+function fillRemoveList(box, folder) {
+    box.textContent = "";
+    if (!folder) {
+        box.appendChild(el("div", { className: "sub", textContent: "اختر المجلد لعرض ملفاته." }));
+        return;
+    }
+    const files = folderFiles(folder);
+    if (!files.length) {
+        box.appendChild(el("div", { textContent: "لا توجد ملفات صوتية في هذا المجلد" }));
+        return;
+    }
+    for (const name of files) {
+        const input = el("input", { type: "checkbox", value: name });
+        input.dataset.remove = "1";
+        box.appendChild(el("label", {}, [input, document.createTextNode(isolate(name))]));
+    }
+}
+
+async function removeAudio(folder) {
+    if (!folder.value) return show("error", "اختر المجلد الذي ستُحذف منه الملفات.");
+    const names = [...document.querySelectorAll("#remove_list [data-remove]")]
+        .filter((node) => node.checked).map((node) => node.value);
+    if (!names.length) return show("error", "حدّد الملفات التي تريد حذفها.");
+    const label = folder.selectedOptions[0].textContent;
+    const request = (confirmed) => api("/api/audio/delete", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: folder.value, names, confirmed }) });
+    show(null);
+    try {
+        const check = await request(false);
+        if (!window.confirm(check.confirm)) return;
+        working(true, "جارٍ حذف الملفات…");
+        const answer = await request(true);
+        refreshAudioBox(answer.folder, answer.available, answer.deleted);
+        let message = `تم حذف ${answer.deleted.length === 1 ? "الملف" :
+                      `${answer.deleted.length} ملفات`} من مجلد «${label}».`;
+        if (answer.switched_off) {
+            const toggle = document.querySelector(`[data-bool="${answer.switched_off}"]`);
+            if (toggle) toggle.checked = false;
+            state.values[answer.switched_off] = false;
+            message += "\nلم يبقَ له ملف محدد، فتم إيقافه.";
+        }
+        working(false);
+        show("ok", message);
+    } catch (e) {
+        working(false);
+        show("error", e.message);
+    }
+}
+
+async function uploadAudio(folder, file) {
+    const chosen = file.files[0];
+    if (!folder.value) return show("error", "اختر المجلد الذي سيُرفع إليه الملف.");
+    if (!chosen) return show("error", "اختر الملف الصوتي من جهازك.");
+    const label = folder.selectedOptions[0].textContent;
+    show(null);
+    working(true, "جارٍ التحقق من الملف…");
+    try {
+        const check = await api("/api/audio/check", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folder: folder.value, name: chosen.name }) });
+        if (check.confirm && !window.confirm(check.confirm)) return working(false);
+        working(true, `جارٍ رفع «${isolate(chosen.name)}»…\nقد يستغرق ذلك عدة دقائق لملف كبير، ` +
+                      "اترك هذه الصفحة مفتوحة.");
+        const query = new URLSearchParams({ folder: folder.value, name: chosen.name,
+                                            replace: check.confirm ? "1" : "0" });
+        const answer = await api(`/api/audio?${query}`, { method: "POST",
+            headers: { "Content-Type": "application/octet-stream" }, body: chosen,
+            timeoutMs: 60 * 60 * 1000 });
+        refreshAudioBox(answer.folder, answer.available);
+        file.value = "";
+        file.dispatchEvent(new Event("change"));
+        working(false);
+        show("ok", `تم رفع «${isolate(answer.name)}» إلى مجلد «${label}».\n` +
+                   "حدّده في قائمة ملفات المجلد ثم اضغط «حفظ وتطبيق الإعدادات» ليُشغَّل.");
+    } catch (e) {
+        working(false);
+        show("error", e.name === "AbortError" ? "انتهت مدة رفع الملف، أعد المحاولة." : e.message);
+    }
+}
+
+/* The folder's list redrawn with the files it has now, keeping what is ticked on the page
+   but not yet saved - less any file just deleted. */
+function refreshAudioBox(folder, available, deleted = []) {
+    for (const [key, info] of Object.entries(state.audio)) {
+        if (info.event !== folder) continue;
+        const old = document.querySelector(`[data-audio-box="${key}"]`);
+        if (old) {
+            info.checked = [...old.querySelectorAll("[data-audio]")]
+                .filter((node) => node.checked && !deleted.includes(node.value))
+                .map((node) => node.value);
+        }
+        info.available = available;
+        info.folder_missing = false;
+        const fresh = audioBox(key);
+        if (old) old.replaceWith(fresh);
+    }
+    const shown = document.querySelector("#remove_folder");
+    if (shown && shown.value === folder) fillRemoveList(document.querySelector("#remove_list"), folder);
+}
+
+/* A country list and, for a country that spans several zones, its cities - the
+   touch screen's pair of lists. The city select's value is the zone. */
+function zonePicker(countryId, cityId, selected) {
+    const table = state.timezones || [];
+    const country = el("select", { id: countryId });
+    const city = el("select", { id: cityId });
+    table.forEach(([name], index) => country.appendChild(el("option", { value: index, textContent: name })));
+    const cityRow = el("label", {}, [document.createTextNode("المدينة: "), city]);
+    const fillCities = (chosen) => {
+        const cities = table[country.value][1];
+        city.textContent = "";
+        for (const [name, tz] of cities) {
+            city.appendChild(el("option", { value: tz, textContent: name, selected: tz === chosen }));
+        }
+        cityRow.classList.toggle("hidden", cities.length < 2);
+    };
+    const home = table.findIndex(([, cities]) => cities.some(([, tz]) => tz === selected));
+    country.value = String(home >= 0 ? home : 0);
+    fillCities(selected);
+    country.addEventListener("change", () => fillCities(null));
+    const node = el("div", {}, [
+        el("label", {}, [document.createTextNode("الدولة: "), country]), cityRow]);
+    return { node, city };
+}
+
+/* A zone by its Arabic country and city, as the lists name it - the touch screen's
+   os_timezone.name(); the zone id itself only for one the lists do not have. */
+function zoneName(zone) {
+    if (!zone) return "غير معروفة";
+    for (const [country, cities] of state.timezones || []) {
+        const match = cities.find(([, tz]) => tz === zone);
+        if (match) return cities.length === 1 ? country : `${country} — ${match[0]}`;
+    }
+    return ltr(zone);
+}
+
+/* The clock's own zone, apart from the save button: the device reboots to take it,
+   which nothing else on this page does. */
+function osTimezone() {
+    const set = el("fieldset", {}, [el("legend", { textContent: "المنطقة الزمنية للجهاز" })]);
+    set.appendChild(el("p", { className: "sub", textContent:
+        `ساعة الجهاز الآن على: ${zoneName(state.os_timezone)}\nغيّرها عند نقل الجهاز إلى بلد آخر، ثم اختر ملف ` +
+        "مواقيت الصلاة للمدينة الجديدة. يُعاد تشغيل الجهاز بعد التغيير.\n" +
+        "يُضبط التوقيت الصيفي تلقائيًا حسب هذه المنطقة، فلا حاجة لتفعيله.",
+        style: "white-space:pre-line" }));
+    const picker = zonePicker("os_country", "os_timezone", state.os_timezone);
+    set.appendChild(picker.node);
+    const change = el("button", { type: "button", className: "warn",
+                                  textContent: "تغيير المنطقة الزمنية وإعادة التشغيل" });
+    const offer = el("div", { id: "os_prayer_offer" });
+    change.addEventListener("click", () => changeOsTimezone(picker.city.value, offer, change));
+    set.appendChild(el("div", { className: "bar" }, [change]));
+    set.appendChild(offer);
+    return set;
+}
+
+/* The question, with the new country's city files to choose from under it when the
+   device has any: a list cannot sit inside window.confirm, so it is asked here, in the
+   page. Resolves to the file chosen ("" to keep the current one), or null for no. */
+function askPrayerFile(box, question, files) {
+    return new Promise((resolve) => {
+        box.textContent = "";
+        const pick = el("select", { id: "os_prayer_file" });
+        for (const name of files) pick.appendChild(el("option", { value: name, textContent: name }));
+        pick.appendChild(el("option", { value: "", textContent: "إبقاء الملف الحالي" }));
+        const go = el("button", { type: "button", className: "warn", textContent: "متابعة" });
+        const cancel = el("button", { type: "button", className: "ghost", textContent: "إلغاء" });
+        const done = (value) => { box.textContent = ""; resolve(value); };
+        go.addEventListener("click", () => done(pick.value));
+        cancel.addEventListener("click", () => done(null));
+        box.appendChild(el("div", { className: "note warn" }, [
+            el("p", { style: "white-space:pre-line;margin:0 0 .6rem", textContent: question }),
+            el("label", {}, [document.createTextNode("ملف المواقيت: "), pick]),
+            el("div", { className: "bar" }, [go, cancel])]));
+        box.scrollIntoView({ block: "nearest" });
+    });
+}
+
+async function changeOsTimezone(zone, offerBox, button) {
+    show(null);
+    const post = (body) => api("/api/os-timezone", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    try {
+        const ask = await post({ zone });
+        let prayerFile = "";
+        if ((ask.prayer_files || []).length) {
+            button.disabled = true;
+            prayerFile = await askPrayerFile(offerBox, ask.confirm, ask.prayer_files);
+            button.disabled = false;
+            if (prayerFile === null) return;
+        } else if (!window.confirm(ask.confirm)) {
+            return;
+        }
+        working(true, "جارٍ إعادة بناء جدول الأذان للمنطقة الجديدة…");
+        await api("/api/os-timezone", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ zone, confirmed: true, prayer_file: prayerFile }),
+            timeoutMs: 5 * 60 * 1000 });
+        working(true, "يُعاد تشغيل الجهاز الآن…\nاترك هذه الصفحة مفتوحة، ستعود خلال دقيقة أو اثنتين.");
+        /* Long enough for the reboot to have started, so the device answering is the
+           device back rather than the device not yet gone. */
+        await pause(20000);
+        state = await waitUntil(() => api("/api/settings"), 10 * 60 * 1000);
+        buildForm();
+        working(false);
+        show("ok", `تم تغيير المنطقة الزمنية لساعة الجهاز إلى ${ltr(state.os_timezone)}.`);
+    } catch (e) {
+        working(false);
+        show("error", e.message);
+    }
+}
+
+/* The prayer-times file. Choosing one copies it into the Desktop file the schedule is
+   built from, the same as the touch screen's picker, and the schedule is rebuilt at
+   once. A device from before this choice reports only the file in use. */
+function renderSource() {
+    const box = document.querySelector("#source");
+    box.textContent = "";
+    const source = state.prayer_source;
+    if (!source) {
+        const csv = state.csv;
+        const name = csv.current ? csv.current.split("/").pop() : "غير محدد";
+        box.appendChild(el("p", { className: "sub", textContent: `الملف المستخدم: ${name}` +
+                                  (csv.current_valid ? "" : " — الملف غير صالح") }));
+        box.appendChild(el("p", { className: "sub",
+            textContent: "لتغيير ملف المواقيت، استخدم تطبيق الإعدادات على شاشة الجهاز." }));
+        return;
+    }
+
+    const lines = [`الملف المرجعي: ${isolate(source.reference)}` +
+                   (source.valid ? "" : " — الملف غير صالح")];
+    lines.push(source.updated ? `آخر تحديث: ${ltr(source.updated)}` : "الملف غير موجود حاليًا");
+    if (source.chosen) lines.push(`تم اختياره من: ${isolate(source.chosen)}`);
+    box.appendChild(el("p", { className: "sub", style: "white-space:pre-line",
+                              textContent: lines.join("\n") }));
+
+    const pick = el("select", { id: "prayer_source" });
+    if (!source.options.length) {
+        pick.appendChild(el("option", { value: "", textContent: "لا توجد ملفات مواقيت" }));
+    }
+    for (const name of source.options) {
+        pick.appendChild(el("option", { value: name, textContent: name,
+                                        selected: name === (source.restore || source.chosen) }));
+    }
+    const choose = el("button", { type: "button", className: "ghost",
+                                  textContent: "اختيار هذا الملف", disabled: !source.options.length });
+    choose.addEventListener("click", () => changeSource({ name: pick.value }));
+    box.appendChild(el("label", {}, [document.createTextNode("ملف المواقيت: "), pick, choose]));
+    box.appendChild(el("div", { className: "note warn", textContent:
+        `سيتم نسخ المواقيت التي تختارها إلى الملف «${isolate(source.reference)}» على سطح ` +
+        "مكتب الجهاز، ويُعاد بناء جدول الأذان فورًا." }));
+
+    const restore = el("button", { type: "button", className: "ghost",
+                                   textContent: "استعادة مواقيت المدينة", disabled: !source.restore });
+    restore.addEventListener("click", () => {
+        if (!window.confirm(`سيتم استبدال محتوى «${isolate(source.reference)}» بمواقيت ` +
+                            `«${isolate(source.restore)}»، وتُلغى أي تعديلات عليه.\n\n` +
+                            "هل أنت متأكد من المتابعة؟")) return;
+        changeSource({ restore: true });
+    });
+    box.appendChild(el("div", { className: "bar" }, [restore, el("span", { className: "sub",
+        textContent: source.restore
+            ? `يعيد نسخ «${isolate(source.restore)}» إلى «${isolate(source.reference)}»، فتُلغى أي تعديلات عليه.`
+            : "لا يوجد ملف معروف تمت منه آخر عملية نسخ." })]));
+}
+
+/* A file name kept whole inside Arabic text, and a date or version kept left to right:
+   the same isolates the touch screen wraps them in. */
+const isolate = (text) => `\u2068${text}\u2069`;
+const ltr = (text) => `\u2066${text}\u2069`;
+
+async function changeSource(choice) {
+    show(null);
+    working(true, "جارٍ تطبيق ملف المواقيت...");
+    try {
+        const post = () => api("/api/prayer-source", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(choice) });
+        let answer = await post();
+        if (answer.confirm) {
+            if (!window.confirm(answer.confirm)) return working(false);
+            choice.confirmed = true;
+            answer = await post();
+        }
+        const applied = await waitForApply();
+        const fresh = await api("/api/settings");
+        state.prayer_source = fresh.prayer_source;
+        state.times = fresh.times;
+        renderSource();
+        working(false);
+        if (applied.state === "ok") show("ok", `تم اختيار «${isolate(answer.chosen)}» وتطبيقه.`);
+        else show("error", "تم نسخ الملف، لكن تعذّر تطبيق الإعدادات.\n" + (applied.log || ""));
+    } catch (e) {
+        working(false);
+        show("error", e.message);
+    }
 }
 
 /* An event plays only the files ticked for it, so one with none ticked is switched off -
@@ -289,8 +646,35 @@ function show(id, message) {
     box.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
 }
 
-function working(on) {
+function working(on, text) {
+    document.querySelector("#working-text").textContent = text || "جارٍ حفظ الإعدادات وتطبيقها...";
     document.querySelector("#working").classList.toggle("hidden", !on);
+}
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* apply_settings.sh's result, once it has one. */
+async function waitForApply() {
+    for (;;) {
+        const status = await api("/api/apply");
+        if (status.state !== "running") return status;
+        await pause(1500);
+    }
+}
+
+/* Until check() answers true. A request that fails is asked again rather than reported:
+   an update and a reset both restart this website on the way, and it is gone for a few
+   seconds in the middle of the very job being waited for. */
+async function waitUntil(check, limitMs) {
+    const end = Date.now() + limitMs;
+    while (Date.now() < end) {
+        await pause(3000);
+        try {
+            const answer = await check();
+            if (answer) return answer;
+        } catch (e) { /* the website restarting */ }
+    }
+    throw new Error("انتهت مدة الانتظار ولم يُعرف الناتج. أعد فتح هذه الصفحة بعد قليل.");
 }
 
 async function pollApply() {
@@ -321,6 +705,34 @@ document.querySelector("#save").addEventListener("click", async () => {
     show(null);
     working(true);
     try {
+        /* A file picked in the list but not yet chosen with its own button is chosen
+           here, and its rebuild finished, before the rest is saved: a save posted while
+           one rebuild runs would not start another. */
+        const picked = document.querySelector("#prayer_source");
+        const source = state.prayer_source;
+        if (picked && picked.value && source && picked.value !== source.chosen) {
+            const choice = { name: picked.value };
+            const choose = () => api("/api/prayer-source", { method: "POST",
+                headers: { "Content-Type": "application/json" }, body: JSON.stringify(choice) });
+            let chosen = await choose();
+            if (chosen.confirm) {
+                if (!window.confirm(chosen.confirm)) {
+                    working(false);
+                    button.disabled = false;
+                    return;
+                }
+                choice.confirmed = true;
+                chosen = await choose();
+            }
+            const applied = await waitForApply();
+            if (applied.state !== "ok") {
+                throw new Error("تم نسخ ملف المواقيت، لكن تعذّر تطبيق الإعدادات.\n" + (applied.log || ""));
+            }
+            const fresh = await api("/api/settings");
+            state.prayer_source = fresh.prayer_source;
+            state.times = fresh.times;
+            renderSource();
+        }
         const payload = collect();
         const post = () => api("/api/settings", {
             method: "POST",
@@ -347,9 +759,278 @@ document.querySelector("#save").addEventListener("click", async () => {
     }
 });
 
+/* Software updates: the touch screen's section, acting at once rather than on the save
+   button. The device runs the update by itself and restarts this website on the way, so
+   the page waits it out and then reads what check_updates.sh recorded. */
+const Updates = (() => {
+    const ROLLBACK_LOCAL_LABEL = "نسخة محفوظة";
+    const OUTCOME = {
+        updated: "آخر عملية: تم التحديث بنجاح",
+        up_to_date: "آخر فحص: البرنامج محدَّث",
+        rolled_back: "آخر عملية: تم الرجوع إلى الإصدار السابق",
+        no_release: "آخر فحص: لا يوجد إصدار منشور",
+        error: "آخر عملية: فشلت",
+    };
+    let info = null;
+
+    const post = (path, body) => api(path, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+    function versionSelect(id, placeholder) {
+        const select = el("select", { id });
+        select.appendChild(el("option", { value: "", textContent: placeholder }));
+        return select;
+    }
+
+    function render() {
+        const box = document.querySelector("#updates");
+        box.textContent = "";
+        const status = info.status || {};
+        const installed = status.installed || "غير معروف";
+        const set = el("fieldset", {}, [el("legend", { textContent: "تحديثات البرنامج" })]);
+
+        const lines = [`الإصدار المثبَّت: ${ltr(installed)}`];
+        const outcome = OUTCOME[status.last_result];
+        if (outcome) {
+            const at = (status.last_checked || "").replace("T", " ");
+            lines.push(at ? `${outcome}  (${ltr(at)})` : outcome);
+        }
+        if (status.last_result === "error" && status.last_message) lines.push(status.last_message);
+        set.appendChild(el("p", { style: "white-space:pre-line", textContent: lines.join("\n") }));
+
+        if (status.needs_attention) {
+            set.appendChild(el("div", { className: "note warn", textContent:
+                "هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة «تثبيت مكونات النظام» من سطح " +
+                `مكتب الجهاز.\n(${status.needs_attention})` }));
+        }
+
+        /* A PIN left by an older release, or set over SSH, holds the device just as
+           ENABLED=false does, so it shows as off too - and ticking the box clears it. */
+        const auto = el("input", { type: "checkbox", id: "update_auto",
+                                   checked: status.enabled !== false && !status.pinned });
+        auto.addEventListener("change", () => setAuto(auto.checked));
+        set.appendChild(el("label", {}, [auto, el("strong", { textContent: "تحديث تلقائي يومي" })]));
+        if (auto.checked && info.check_time) {
+            set.appendChild(el("p", { className: "sub",
+                textContent: `يُفحص عن تحديث ويُثبَّت يوميًا الساعة ${info.check_time}` }));
+        }
+        if (!auto.checked) {
+            set.appendChild(el("p", { className: "held", textContent:
+                `التحديث التلقائي متوقف — الجهاز ثابت على الإصدار ${ltr(status.pinned || installed)}، ` +
+                "ولن يُحدَّث تلقائيًا حتى تفعيل «تحديث تلقائي يومي»" }));
+        }
+        if (status.pointer_is_default === false && status.pointer) {
+            set.appendChild(el("p", { className: "sub",
+                textContent: `يتبع ملف إصدارات خاص: ${ltr(status.pointer)}` }));
+        }
+
+        const now = el("button", { type: "button", className: "go",
+                                   textContent: "التحديث إلى أحدث إصدار" });
+        now.addEventListener("click", () => start({ action: "now" }, "جارٍ التحديث…"));
+        set.appendChild(el("div", { className: "bar" }, [now]));
+
+        const versions = info.versions || {};
+        const fetching = versions.state === "fetching";
+        const published = versions.versions || [];
+
+        set.appendChild(el("strong", { textContent: "التثبيت على إصدار محدد:" }));
+        const pick = versionSelect("update_version",
+            fetching ? "جارٍ جلب الإصدارات…" : published.length ? "اختر إصدارًا…"
+                     : "تعذّر جلب الإصدارات — تأكد من اتصال الجهاز بالإنترنت");
+        for (const version of published) {
+            pick.appendChild(el("option", { value: version, textContent: version }));
+        }
+        const install = el("button", { type: "button", textContent: "تثبيت الإصدار المحدد" });
+        install.addEventListener("click", () => {
+            if (!pick.value) return show("error", "افتح القائمة واختر إصدارًا منها.");
+            start({ action: "target", version: pick.value }, `جارٍ التثبيت ${pick.value}…`);
+        });
+        set.appendChild(el("label", {}, [pick, install]));
+
+        /* The retained backup first - the one true restore, with no download - then
+           every published version older than the one installed. Nothing preselected:
+           this moves the device, and a list already showing a version invites a stray
+           tap. */
+        set.appendChild(el("strong", { textContent: "الرجوع إلى إصدار سابق:" }));
+        const backup = status.rollback_to && status.rollback_to !== status.installed
+            ? status.rollback_to : "";
+        const key = (v) => v.split(".").map(Number);
+        const older = (a, b) => {
+            const x = key(a), y = key(b);
+            for (let i = 0; i < Math.max(x.length, y.length); i++) {
+                if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+            }
+            return false;
+        };
+        const back = published.filter((v) => v !== backup &&
+                                             (!status.installed || older(v, status.installed)));
+        const rollback = versionSelect("update_rollback",
+            backup || back.length ? "اختر إصدارًا…" : "لا يوجد إصدار سابق");
+        if (backup) {
+            rollback.appendChild(el("option", { value: backup,
+                textContent: `${backup}  "${ROLLBACK_LOCAL_LABEL}"` }));
+        }
+        for (const version of back) {
+            rollback.appendChild(el("option", { value: version, textContent: version }));
+        }
+        const goBack = el("button", { type: "button", className: "danger",
+                                      textContent: "الرجوع إلى الإصدار المحدد" });
+        goBack.addEventListener("click", () => {
+            if (!rollback.value) return show("error", "افتح القائمة أعلاه واختر إصدارًا منها.");
+            start({ action: "rollback", version: rollback.value },
+                  `جارٍ الرجوع إلى ${rollback.value}…`);
+        });
+        set.appendChild(el("label", {}, [rollback, goBack]));
+
+        if (info.running) {
+            for (const button of set.querySelectorAll("button")) button.disabled = true;
+            set.appendChild(el("p", { className: "sub", textContent: "جارٍ تحديث البرنامج الآن…" }));
+        }
+        box.appendChild(set);
+    }
+
+    async function refresh() {
+        info = await api("/api/update");
+        render();
+        return info;
+    }
+
+    /* The list comes off the network, slower than a phone waits for one answer: the
+       device fetches it in the background and is asked again until it has it. */
+    async function fetchVersions(force) {
+        let versions = await api("/api/update/versions" + (force ? "?refresh=1" : ""));
+        info.versions = versions;
+        render();
+        const end = Date.now() + 90 * 1000;
+        while (versions.state === "fetching" && Date.now() < end) {
+            await pause(1500);
+            versions = await api("/api/update/versions");
+        }
+        info.versions = versions;
+        render();
+        return versions;
+    }
+
+    async function load() {
+        try {
+            await refresh();
+            await fetchVersions(false);
+        } catch (e) {
+            /* A device from before updates could be run from here simply has no section. */
+        }
+    }
+
+    async function ask(path, body) {
+        let answer = await post(path, body);
+        if (answer.confirm) {
+            if (!window.confirm(answer.confirm)) return null;
+            answer = await post(path, Object.assign({ confirmed: true }, body));
+        }
+        return answer;
+    }
+
+    async function start(body, text) {
+        show(null);
+        working(true, text);
+        try {
+            /* The approved version decides whether this holds the device, so the list
+               it comes with is fetched fresh first. */
+            if (body.action !== "now") await fetchVersions(false);
+            const before = (info.status || {}).last_checked || "";
+            const answer = await ask("/api/update", body);
+            if (!answer) return working(false);
+            working(true, text + "\nقد يستغرق ذلك عدة دقائق، اترك هذه الصفحة مفتوحة.");
+            await finish(before);
+        } catch (e) {
+            working(false);
+            show("error", e.message);
+            refresh().catch(() => {});
+        }
+    }
+
+    async function setAuto(enabled) {
+        show(null);
+        working(true, enabled ? "جارٍ التحقق من أحدث إصدار…" : "جارٍ الحفظ…");
+        try {
+            if (enabled) await fetchVersions(true);
+            const before = (info.status || {}).last_checked || "";
+            const answer = await ask("/api/update/auto", { enabled });
+            if (answer && answer.started) {
+                working(true, "جارٍ التحديث…\nقد يستغرق ذلك عدة دقائق، اترك هذه الصفحة مفتوحة.");
+                return await finish(before);
+            }
+            await refresh();
+            working(false);
+        } catch (e) {
+            working(false);
+            show("error", e.message);
+            refresh().catch(() => {});
+        }
+    }
+
+    /* What the touch screen says when an update finishes, read from the state the
+       updater wrote. An unchanged last check means it never started: it leaves an
+       athan that is playing alone and tries again later. */
+    async function finish(before) {
+        await waitUntil(async () => !(await api("/api/update")).running, 20 * 60 * 1000);
+        await refresh();
+        working(false);
+        const status = info.status || {};
+        const version = status.installed || "—";
+        if ((status.last_checked || "") === before) {
+            return show("error", "لم يبدأ التحديث — قد يكون الجهاز يشغّل صوتًا الآن. " +
+                                 "أعد المحاولة بعد انتهائه.");
+        }
+        const text = {
+            up_to_date: `أنت تستخدم أحدث إصدار.\nالإصدار المثبَّت: ${ltr(version)}\nلا يوجد تحديث جديد للتثبيت.`,
+            no_release: `لا يوجد إصدار منشور لهذا الجهاز حاليًا.\nالإصدار المثبَّت: ${ltr(version)}`,
+            rolled_back: `تمت إعادة الجهاز إلى الإصدار السابق.\nالإصدار المثبَّت الآن: ${ltr(version)}`,
+            updated: `تم التحديث بنجاح.\nالإصدار المثبَّت الآن: ${ltr(version)}`,
+        }[status.last_result];
+        if (status.last_result === "no_pointer") {
+            return show("error", "تعذر الوصول إلى خادم التحديثات، ولم يتغيّر شيء على الجهاز.\n" +
+                                 "تأكد من اتصال الإنترنت ثم أعد المحاولة.");
+        }
+        if (text) return show("ok", text);
+        show("error", "لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.\n" +
+                      (status.last_message || "راجع سجل logs/check_updates.log على الجهاز."));
+    }
+
+    return { load };
+})();
+
+/* «إعادة ضبط الإعدادات»: every setting back to the defaults, then setup is run, as the
+   touch screen's button does. The prayer-times file stays. */
+document.querySelector("#reset").addEventListener("click", async () => {
+    if (!window.confirm("هل أنت متأكد من إعادة جميع الإعدادات إلى الوضع الافتراضي؟")) return;
+    show(null);
+    working(true, "جارٍ إعادة ضبط الإعدادات...");
+    try {
+        const answer = await api("/api/reset", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: "{}" });
+        if (answer.setup) {
+            await waitUntil(async () => !(await api("/api/reset")).running, 15 * 60 * 1000);
+        } else {
+            await waitForApply();
+        }
+        state = await api("/api/settings");
+        buildForm();
+        working(false);
+        show("ok", "تمت إعادة جميع الإعدادات إلى الوضع الافتراضي");
+    } catch (e) {
+        working(false);
+        show("error", e.message);
+    }
+});
+
 api("/api/settings").then((payload) => {
     state = payload;
     buildForm();
+    /* A device that reports the prayer-file choice also has the reset and the updates. */
+    if (state.prayer_source) {
+        document.querySelector("#reset").classList.remove("hidden");
+        Updates.load();
+    }
 }).catch(async (e) => {
     if (!owner) return show("error", e.message);
     /* A device that answers but refused is on a release from before the app could reach

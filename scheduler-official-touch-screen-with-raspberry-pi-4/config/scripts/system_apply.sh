@@ -26,6 +26,8 @@ ICON_DIR="/usr/share/icons/hicolor/48x48/apps"
 PIPEWIRE_DIR="/etc/pipewire"
 LOGROTATE_SRC_NAME="config/logrotate/scheduler"
 LOGROTATE_INSTALLED="/etc/logrotate.d/scheduler"
+ZONEINFO_DIR="/usr/share/zoneinfo"
+TIMEZONE_FILE="/etc/timezone"
 
 # id -u rather than $EUID, because $EUID is readonly in bash and a test cannot stand in
 # for it - and a root-only script with no way to exercise it is how the last one shipped
@@ -41,9 +43,15 @@ fi
 # not be asked at all, which is a different situation and gets a different answer.
 CHECK_ONLY=0
 PACKAGES_ONLY=0
+NEW_TIMEZONE=""
 case "${1:-}" in
     --check)    CHECK_ONLY=1 ;;
     --packages) PACKAGES_ONLY=1 ;;
+    # The zone the device's clock shows, chosen in the Settings app or on the website,
+    # which run as the device user. Then a reboot: every program running read the old
+    # zone when it started and keeps it until it starts again.
+    --timezone) NEW_TIMEZONE="${2:-}"
+                [[ -n "$NEW_TIMEZONE" ]] || { echo "--timezone needs a zone" >&2; exit 2; } ;;
 esac
 
 changed=0
@@ -110,6 +118,30 @@ if [[ -z "${SCHEDULER_APPLY_REEXEC:-}" && -f "$SELF_SRC" && -f "$SELF" ]]; then
         fi
     fi
     rm -f "$staged"
+fi
+
+# ---------------------------------------------------------------------------
+# The time zone
+# ---------------------------------------------------------------------------
+# The one argument here that comes from the caller, so it must name a zone and nothing
+# else: IANA's own characters, no "..", and a file tzdata actually has.
+if [[ -n "$NEW_TIMEZONE" ]]; then
+    if [[ ! "$NEW_TIMEZONE" =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+){0,2}$ \
+          || "$NEW_TIMEZONE" == *..* || ! -f "$ZONEINFO_DIR/$NEW_TIMEZONE" ]]; then
+        echo "unknown time zone: $NEW_TIMEZONE" >&2
+        exit 2
+    fi
+    timedatectl set-timezone "$NEW_TIMEZONE" || exit 1
+    # timedatectl moves /etc/localtime only. Debian's /etc/timezone is read by raspi-config
+    # and others, and left alone it goes on naming the old zone.
+    printf '%s\n' "$NEW_TIMEZONE" > "$TIMEZONE_FILE" \
+        || echo "could not write $TIMEZONE_FILE" >&2
+    echo "time zone set to $NEW_TIMEZONE"
+    # A few seconds later rather than now, so the screen that asked can say what happens
+    # next before it goes.
+    systemd-run --quiet --collect --on-active=5 --unit=scheduler-timezone-reboot \
+        /bin/systemctl reboot || exit 1
+    exit 0
 fi
 
 # ---------------------------------------------------------------------------

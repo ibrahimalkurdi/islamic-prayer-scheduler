@@ -493,6 +493,7 @@ repo root:
 ```bash
 python3 tools/tests/test_prayer_logic.py   # the prayer period rules
 python3 tools/tests/test_web_ui.py         # the website, every route
+python3 tools/tests/test_dst_from_os.py    # daylight saving follows the clock's zone
 python3 tools/tests/test_site_js.py        # its JavaScript (skipped where there is no node)
 python3 tools/tests/test_static_website.py # the public city sites
 python3 tools/tests/test_layout.py         # it fits a phone (skipped where there is no Chrome)
@@ -501,25 +502,26 @@ bash tools/tests/test_system_apply.sh      # the root helper, against a fake roo
 
 | suite | what it proves |
 |---|---|
-| `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` overrides the deny-list but resolves to nothing because no release ships that file, a pointer naming `var/update/` is still refused, and the plain-string shorthand still resolves; `--rollback` restores; a release's `default-audio/` is seeded into `audio/`, a seeded file the owner deletes does not come back, and one they put there themselves is not overwritten; a forced `include` installs over the deny-list without `--delete` touching the owner's own recitations beside it; a device pointed at its own version file follows it and says so in the log and in `--status` |
+| `test_updater.sh` | a release for the other variant is refused **before download**; `update.conf` disagreeing with the hardware is caught; `ENABLED=false` stops cron but not the button; a manifest naming protected data is refused outright; a truncated download is caught by checksum and the live tree is untouched; `EXTRA_EXCLUDE` protects a hand-edited file; an unpinned device follows the pointer, moving the pointer back downgrades it, an unreachable pointer stops the run without changing the device, an empty pointer entry installs nothing, and a pin beats the pointer; a pointer `exclude` keeps a file the release would replace, a pointer `include` installs a path the manifest omits, a pointer naming `config.ini` overrides the deny-list but resolves to nothing because no release ships that file, a pointer naming `var/update/` is still refused, and the plain-string shorthand still resolves; `--rollback` restores; a release's `default-audio/` is seeded into `audio/`, a seeded file the owner deletes does not come back, and one they put there themselves is not overwritten; a forced `include` installs over the deny-list without `--delete` touching the owner's own recitations beside it; a device pointed at its own version file follows it and says so in the log and in `--status`; an update or rollback started from the website (`--remote`) puts the countdown back on the screen in a unit of its own, while one from the Settings app still leaves it closed and checks it offscreen |
 | `test_make_release.sh` | `default-audio/` ships while `audio/` is still stripped; an `.mp3` anywhere else fails the build; a folder name matching no event is reported with the real name suggested and refuses to build with no terminal, while `--yes` proceeds; a payload over the cap is refused and the archive removed, while `--allow-large` builds it; and every path the device reads out of its own tree is on the manifest's include list, so a release can actually replace it |
-| `test_system_apply.sh` | the helper refuses to run as anyone but root, installs packages, units and icons from a release, and reports `10` only when there is work to do; the manifest can carry package names but never arguments; the tree it installs from is fixed rather than chosen by the caller; a failed package install fails the run; the desktop shortcut bootstraps itself where there is no helper and runs setup silently where there is one; `init.sh` survives a run with no way to ask for a password; and a release can replace the helper, including an old one that cannot replace itself, with nobody typing anything |
+| `test_system_apply.sh` | the helper refuses to run as anyone but root, installs packages, units and icons from a release, and reports `10` only when there is work to do; the manifest can carry package names but never arguments; the tree it installs from is fixed rather than chosen by the caller; a failed package install fails the run; the desktop shortcut bootstraps itself where there is no helper and runs setup silently where there is one; `init.sh` survives a run with no way to ask for a password; and a release can replace the helper, including an old one that cannot replace itself, with nobody typing anything; `--timezone` sets a real zone through `timedatectl` and schedules a reboot, refusing an unknown zone, a path, `..` or an option-like argument without touching anything |
 | `test_state_survives.sh` | after a real 1.0.0 → 1.1.0 update: new code present, and audio, settings and both prayer maps byte-identical; no file left pointing at the template user; a unit that runs as root still does; the website's unit carries no `CapabilityBoundingSet`, which is what let `sudo` work from the save button again; the Wi-Fi watchdog can see a hang that leaves the association up; and the logrotate policy ships and is driven through a real `logrotate` to prove it rotates by copy rather than rename |
-| `test_settings_updates.py` | the grey schedule line reads its time from the live crontab, then `config/crontab.txt`, skips a commented line, and shows only while ticked; there is no fetch button; opening either list fetches both, newest-first, reuses a fetch under a minute old, and offline keeps the install list shut with an error; `--latest` names the pointer's version; ticking the daily check on a device behind it asks, a no leaves it unticked, a yes enables and runs `--now`, and a device already on it or offline is not asked; choosing an older version asks first, installs nothing on a no, and on a yes unticks the daily check and installs without writing `PIN`, while the newest version installs without asking; the checkbox writes `ENABLED`, and ticking it also clears `PIN`; choosing nothing raises an error rather than doing nothing; the red hold line naming the version is on screen only while the box is unticked, and a leftover `PIN` shows as unticked; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest, asking first and writing no `PIN` either way; both lists show five rows at a time |
+| `test_settings_updates.py` | the grey schedule line reads its time from the live crontab, then `config/crontab.txt`, skips a commented line, and shows only while ticked; there is no fetch button; opening either list fetches both, newest-first, reuses a fetch under a minute old, and offline keeps the install list shut with an error; `--latest` names the pointer's version; ticking the daily check on a device behind it asks, a no leaves it unticked, a yes enables and runs `--now`, and a device already on it or offline is not asked; choosing an older version asks first, installs nothing on a no, and on a yes unticks the daily check and installs without writing `PIN`, while the newest version installs without asking; the checkbox writes `ENABLED`, and ticking it also clears `PIN`; choosing nothing raises an error rather than doing nothing; the red hold line naming the version is on screen only while the box is unticked, and a leftover `PIN` shows as unticked; the rollback list opens on its placeholder, puts the retained backup ahead of the published versions, and offers neither the installed version nor anything newer, ordered numerically so 1.0.10 sits above 1.0.9, and runs `--rollback` for the marked entry and `--target` for the rest, asking first and writing no `PIN` either way; both lists show five rows at a time; the clock's own zone is chosen by country (and city where there are several), asked about - with the new country's city files in a list when there are any, the chosen one or none handed on - then handed to the helper, with a refusal shown and the current zone asking nothing |
 | `test_prayer_logic.py` | Duha opens 20 minutes after sunrise and its period ends at Dhuhr; Isha's period crosses midnight for today but not for a browsed date; green holds to exactly 20 minutes past the athan and red begins exactly 20 before the next; الشروق is makrooh throughout, zawal takes the makrooh colour while the close of العصر keeps red and is makrooh too; and `period_boundaries` gives the same answer as `period_state` at **every second** of every period — which is what lets the website carry no rules of its own |
-| `test_web_ui.py` | every page and asset is served and nothing else is, including six traversal attempts; the day payload carries spans that agree with the rules second by second over the wire; a save writes exactly the keys it was given and a no-change save is byte-identical; the Duha and Athkar rules are refused in the Settings app's own words and nothing is written; an unknown key, a missing audio file, a bad clock and a negative number are all refused; a save really runs `apply_settings.sh`, off the request; a foreign `Origin` cannot post; mute round-trips through a real `wpctl` subprocess and falls back to stopping the player when there is none; the prayer map is re-read when it changes underneath; and the static build carries no settings page and no unguarded call to the device |
+| `test_web_ui.py` | every page and asset is served and nothing else is, including six traversal attempts; the day payload carries spans that agree with the rules second by second over the wire; a save writes exactly the keys it was given and a no-change save is byte-identical; the Duha and Athkar rules are refused in the Settings app's own words and nothing is written; an unknown key, a missing audio file, a bad clock and a negative number are all refused; a save really runs `apply_settings.sh`, off the request; a foreign `Origin` cannot post; the country and city table is offered, and an older page that still sends the retired daylight-saving keys saves the rest while they are dropped from `config.ini`; a prayer file is chosen by name only, a path never opened, a file the app did not write asked about first, a bad file refused and «استعادة» copies the last one in over a hand edit; a reset restores the shipped defaults, keeps the prayer file and runs `init.sh` in its own unit without its update check; an update starts in its own unit with `--remote`, one at a time, asks before holding the device, uses `--rollback` for the kept backup, and the daily-check switch asks before it moves the device; with no user systemd an update is refused and a reset applies instead; mute round-trips through a real `wpctl` subprocess and falls back to stopping the player when there is none; the prayer map is re-read when it changes underneath; an MP3 is uploaded into the chosen folder whole and unticked, a name already there is asked about and refused without the answer, a bad folder or name, a comma, a non-MP3, an empty file and a full card are refused leaving nothing behind, the handed-out app may upload and a stranger's page may not; files are deleted from a folder only after a question naming them, unticked in `config.ini` with the rest kept, an event left with none ticked switched off and the schedule rebuilt, and a missing file, a bad folder or name refused with nothing deleted; the clock's zone is asked about, the schedule rebuilt with `TZ` set to it and then the zone changed through the helper (and rebuilt back when that fails), a move offers the new country's city files - Germany's both, the exact zone first - copies the one chosen in and records it, offers nothing when the file in use is already that country's, falls back to the reminder for a country with none, refuses another country's file, and puts the file and its record back when the change fails, refused when unknown, a path or already set, and a helper failure reported; and the static build carries no settings page and no unguarded call to the device |
 | `test_web_ui.py` (small hours) | the period in force at 00:30, 02:30 and 04:30 is the evening before's Isha, beginning the previous day and running to this morning's Fajr while the card still shows tonight's; exactly one period covers every hour asked about; and a browsed date keeps its own Isha rather than borrowing the evening before it |
 | `test_web_ui.py` (palette) | the counter's green, red, makrooh and neutral grey are read out of `prayer_times_gui/main.py` and compared; the counter is confirmed to have no beige; and every card shade is re-derived with a real `QColor.darker()`/`lighter()` so a colour changed in the app but not on the website fails with both values side by side |
 | `test_layout.py` | at 360x640, 412x732 and 1440x820, no page scrolls sideways - measured by framing it at that exact size and comparing `scrollWidth` against `clientWidth`, not judged from a screenshot - and the daily list shows all seven prayers with the last one ending inside the screen. Both of these have gone wrong once: a `<fieldset>` will not shrink below its content's min-content width unless told to, which took the settings form off a 360px screen; and the rows inherited the body's prose line-height, which pushed two prayers off a 640px-tall one |
 | `test_site_js.py` | `site/app.js` loaded for real and driven against a baked year: timestamps are read as local time rather than UTC, the clock reads as `clock_12h` writes it, and the span the page would paint matches `period_state` at every sampled second |
 | `test_static_website.py` | a standard-time table baked for Europe/Berlin changes clocks on 29 March and 25 October 2026 and on 28 March and 31 October 2027; a table with summer time carried to 1 November comes out right, and is used as it stands when no timezone is given; Asia/Damascus is left as it is; an unknown zone is refused; the output is the daily page alone with nothing that acts on a device; `app.js` fetches 31 December and 1 January from their own year files, each once, and a missing year - a 404, or Cloudflare's 200 with a page instead of JSON - reads «لا توجد مواقيت لهذا اليوم»; every city folder says true or false for `daylight_saving`, has a real timezone when true, and a relative symlink that resolves inside `prayers-config/`; berlin and aachen are true and damascus false |
+| `test_dst_from_os.py` | `prayer_dst.py` against the clock's zone (`TZ`): a standard-time table gets Berlin's summer hour, the same table on a Damascus clock loses it, a matching table is untouched, the old `enable_daylight_saving`/`daylight_saving_timezone` are ignored, `daylight_saving_adjustment = off` uses the file as it is, and an unknown zone leaves it without failing the apply; every shipped city file is in `zones.ini` with the zone its site's `city.ini` gives |
 | `test_friday_quran.py` | Surat Al-Kahf is scheduled on Fridays and no other day; the default is an hour after Jumu'ah; before/after and the minute count both take effect; the time is clamped into the day's own Sunrise→Asr window; the checkbox switches it off; a nonsense or missing setting falls back to an hour after; its audio selection is separate from the daily one; the player routes `friday_quran` to its own folder and treats an empty folder as a no-op; the Settings section round-trips all three keys |
 | `test_athkar_elsabah.py` | Athkar Elsabah at a fixed time (default 09:45) or minutes after Fajr: the schedule keeps a fixed time every day and moves it a minute inside Fajr..Dhuhr on a day it does not fit; a config.ini from before the choice gets 09:45; the Settings section shows only the half in use, refuses a time outside today's Fajr..Dhuhr, and saves both values. Needs `ADD_FIELDS_PYTHON` pointing at a Python with pandas on a machine without it; before saving an Athkar Elsabah or Surat Al-Kahf time that does not fit every day of the year, the Settings app and the website both ask, naming the prayer, an example day and the time it will play instead - no saves nothing, yes saves; a website save that does not touch either asks nothing |
 | `test_default_settings.py` | `config/default-config.ini` ships and has no device's prayer file; a key missing from config.ini comes from it; «إعادة ضبط الإعدادات» writes it back, keeps the prayer-file keys, runs init.sh, and ticks the default audio files where the device has them, every file otherwise |
 | `test_internet_warning.py` | the no-internet warning shows at once when an app starts offline - unless the device booted under five minutes ago, when it waits five minutes like any drop - and after five minutes when the internet drops, stays through the outage unless closed with ✕, says the internet is back for ten seconds, and is dark blue on the red and makrooh backgrounds; it covers nothing on the countdown or the daily list; the wifi picker opens at launch with no network and after two minutes otherwise, reads nmcli's escaped output, connects with exactly the password typed and says why a connect failed |
 | `test_one_app.py` | the desktop entries are «السكينة» and «إعدادات السكينة» and the release asks for setup; the time screen's ⚙ and the desktop's Settings icon (`--open`) both show the copy kept ready, never a second one - from ⚙ with «رجوع» back to the time screen, from the icon with «إغلاق» and no time screen; a copy from before 1.5.1, ended by the icon's signal, is replaced by a new one; closing Settings brings the time screen back unless it is running or an update is installing. `test_updater.sh` §25 runs the real init.sh through an update: «السكينة» and «إعدادات السكينة» are both on the desktop, the Settings one opening with `--open`; muted, both the countdown and the daily list show «الصوت مكتوم حتى» and the time it lapses under the window buttons, in the buttons' colour, «الصوت مكتوم» alone when the speaker is silenced with no deadline, and nothing once the sound is back |
 | `test_prayer_source.py` | the prayer-times picker offers the cities then any Al Awail exports, never the Desktop reference file; it opens on the source in use, found here even when recorded under another device's home; its yellow note says the choice is copied into «إدخال-مواقيت-الصلاة-للمستخدم.csv» and to save; «استعادة مواقيت المدينة» copies the current source in again after one confirmation, while picking another city over hand edits still warns |
-| `test_audio_selection.py` | an event plays only its ticked files, and none ticked plays nothing rather than the whole folder; an event left on with no file ticked is switched off on save, by the Settings app (its checkbox unticked too) and by the website for the events that save touches |
+| `test_audio_selection.py` | an event plays only its ticked files, and none ticked plays nothing rather than the whole folder; an event left on with no file ticked is switched off on save, by the Settings app (its checkbox unticked too) and by the website for the events that save touches; a file picked in «إدارة الملفات الصوتية» is copied into the chosen folder and listed at once, unticked and in order, and the same name again is asked about; files ticked under «حذف ملفات» are deleted only after a yes, leave the event's list and the delete list, are unticked in `config.ini`, and an event left with none is switched off on the screen too and the schedule rebuilt |
 
 Poke at the fixture device by hand the same way the tests do — `HOME` and the model file
 are the only things that make it a device:
@@ -1679,7 +1681,7 @@ use the address. The settings page prints it under its title, and the API report
 ```bash
 curl -s http://<hostname>.local/api/device
 {"hostname": "louay", "ip": "192.168.2.159", "now": "…", "version": "1.3.0",
- "public_site": "https://sakina-berlin.pages.dev"}
+ "public_site": "https://alsakina-berlin.pages.dev"}
 ```
 
 The hostname is the device's user name, set by `init.sh` along with `avahi-daemon`
@@ -1783,8 +1785,8 @@ curl -s http://localhost/api/day | head -c 200
 ### Access
 
 **There is no authentication, by choice.** Anyone on the wifi can change that device's
-settings and cause a scheduler restart — the same as anyone standing in front of its touch
-screen. It binds the LAN only and nothing is reachable from the internet. Two guards are in
+settings, reset them, change its prayer-times file, update it or roll it back — the same as
+anyone standing in front of its touch screen. It binds the LAN only and nothing is reachable from the internet. Two guards are in
 place regardless: every write is a `POST` whose `Origin` must be the device itself, so a
 page in another tab cannot drive it; and static files come from a fixed allow-list, so no
 part of a URL is ever turned into a file name.
@@ -1799,9 +1801,67 @@ Settings app's own button does, under the same lock. It refuses the same values 
 words — the two rules live in `applications/shared/settings_rules.py` and are read by both.
 The touch screen picks up the change on its own; neither screen needs restarting.
 
-What the website deliberately does **not** do: upload a prayer-times CSV. The touch screen
-has no upload either, so a new file still arrives on the Desktop or on a USB stick, and is
-chosen there.
+Everything else the Settings app offers is on the page too, and goes through the same code
+in `applications/shared/`:
+
+| On the page | Shared with the Settings app | What happens |
+|---|---|---|
+| Prayer-times file, «استعادة مواقيت المدينة» | `prayer_source.py` | The file is copied or converted into the Desktop file at once, then `apply_settings.sh` runs — the touch screen waits for its save button instead. The browser sends a file *name*, looked up again among the presets and Desktop exports, so no path it sends is opened. A file the app did not write is asked about first, in the app's words. |
+| «إعادة ضبط الإعدادات» | `settings_defaults.py` | `config.ini` is reset (the prayer file and its record kept), then `init.sh` runs — without its update check, which would leave the countdown closed on a screen nobody is at. |
+| Software updates: update now, a chosen version, roll back, daily check on/off | `updates.py` | The same questions before a version that would hold the device, or before the daily check moves it. |
+| «المنطقة الزمنية للجهاز»: the OS clock's zone, by country and city (`config/scripts/timezones_ar.py`) | `os_timezone.py` | Also the daylight-saving zone - see below. Asked about first. When the device has city files for the new country (`config/prayers-config/zones.ini` names each file's zone) and the file in use is not already one of them, the question carries a list of them, the exact zone first, plus «إبقاء الملف الحالي»; the chosen file is copied into the Desktop file and recorded as choosing it would, and both are put back if the change then fails. Without such a file the question reminds the user to choose one instead; the schedule is rebuilt with `TZ=<zone>` so `prayer_dst.py` already applies the new zone's shifts (rebuilt back if the change then fails), then `sudo -n scheduler-apply-system --timezone <zone>` - the root helper's one argument from a caller, taken only if it matches IANA's characters, has no `..` and exists under `/usr/share/zoneinfo`; the screens also only send zones in `timezones_ar.py`. The helper runs `timedatectl set-timezone` and reboots 5 s later (`systemd-run --on-active=5`), because every running program keeps the zone it started with. The page waits for the device to come back and shows the new zone. A device whose installed helper predates this takes it on the first call: the helper replaces itself from the tree before reading its arguments. |
+| «إدارة الملفات الصوتية» → «رفع ملف»: a folder under `audio/` and an MP3 | `audio_upload.py` | The page sends the file as the raw body of `POST /api/audio?folder=&name=` (no multipart), written to the card in 1 MB pieces beside its final name and renamed into place. The Settings app copies from a file picker that opens on `~/Desktop/`. Both refuse a folder that is not an event's, a name with `/`, a leading `.` or a comma (`config.ini` lists files comma-separated), anything not `.mp3` or not starting like one, over 1 GB, or that would leave under 200 MB free; a name already in the folder is asked about first (`/api/audio/check`). The file arrives unticked — it plays once ticked and saved. The phone app waits up to an hour for it rather than its usual 10 s. |
+| «إدارة الملفات الصوتية» → «حذف ملفات»: a folder and its files, ticked | `audio_upload.py` | `POST /api/audio/delete` with `{folder, names}` answers the question first (the files by name, and whether the event will stop); with `confirmed` it deletes them. The player reads each event's ticked list from `config.ini` when it plays, so the deleted names are unticked there at once; an event left on with none ticked is switched off and `apply_settings.sh` run. A name that is missing, a path or not `.mp3`, or a folder that is not an event's, refuses the whole request before anything is deleted. |
+
+What it still does **not** do: upload a prayer-times CSV. The touch screen has no upload
+either, so a new file still arrives on the Desktop or on a USB stick, and is then chosen on
+either screen.
+
+#### Daylight saving follows the clock
+
+There is no daylight-saving choice on either screen. `prayer_dst.py` takes its zone from
+the operating system - `TZ` when set, otherwise `/etc/localtime` - because the prayer
+table's times are read against that clock, so its rules are the only ones that can be
+right. Each apply strips whatever clock changes the table already carries and applies
+that zone's real ones for the year: Berlin gets its summer hour, Damascus none, and a
+table that already matches is left byte for byte. Moving a device is one step - change
+«المنطقة الزمنية للجهاز» - and the table follows.
+
+`enable_daylight_saving` and `daylight_saving_timezone` from earlier releases are ignored,
+dropped on the next save from either screen and by a reset, and refused by neither: an
+older copy of the app's page that still sends them saves everything else. The one
+override is by hand, for a table the shift detection misreads (a jump of 30 minutes or
+more in Dhuhr between two days that is not a clock change):
+
+```ini
+daylight_saving_adjustment = off
+```
+
+A zone that cannot be read or is unknown leaves the table as it is and does not fail the
+apply.
+
+#### Jobs that restart the website
+
+An update and the setup a reset runs both restart `scheduler_web_ui.service` on the way, and
+systemd stops every process in a unit when it restarts it — a job started as the website's
+child would kill itself halfway. So both run as transient units of the device user's own
+systemd (`systemd-run --user`): `scheduler-web-update` and `scheduler-web-reset`. The fixed
+name is also how the page learns the job is still running (`systemctl --user is-active`); the
+page keeps asking through the website's own restart and then reads what `check_updates.sh`
+recorded. An update from the website runs `check_updates.sh --remote`, which puts the
+countdown back on the screen in a unit of its own (`scheduler-countdown-<time>`) instead of
+leaving it closed for someone at the Settings app.
+
+With nobody logged in there is no user systemd: the website then refuses an update and asks
+for the touch screen, and a reset runs `apply_settings.sh` in place of setup.
+
+```bash
+systemctl --user status scheduler-web-update     # while one runs
+journalctl --user -u scheduler-web-update        # what it printed
+```
+
+The version list comes off the network, slower than the 10 s the handed-out app waits for
+the device, so `/api/update/versions` fetches it in the background and the page asks again.
 
 ### Serving the prayer pages publicly
 
@@ -1827,7 +1887,7 @@ device only hands out its address:
   `public_site`. That comes from `web_ui/public_sites.json` - prayer table file name to
   site, written by `static-website/sakina/build.py` - looked up by the file name in
   `config.ini`'s `prayer_csv_source_label`. A device on any other table shows no button.
-- The button opens `https://sakina-<city>.pages.dev/d/<name>/`, `<name>` being the `.local`
+- The button opens `https://alsakina-<city>.pages.dev/d/<name>/`, `<name>` being the `.local`
   name the phone used (mDNS names can differ from `hostname`; ihms-lr's is).
 - That page installs itself: on Chrome it keeps the `beforeinstallprompt` event and shows
   **ثبّت التطبيق**, whose tap opens Chrome's install dialog. A page on `.local` cannot do
@@ -1852,12 +1912,15 @@ device only hands out its address:
   `http://` from an `https://` page at all, nor check the wifi, so there the icon opens
   `http://<name>.local/settings/`; off the wifi Safari says it cannot open it.
 - The countdown's speaker mutes and unmutes the device from the app on Chrome: `main.py`
-  lets `PUBLIC_APP_ORIGIN` (`https://[<preview>.]sakina-<city>.pages.dev`) call
+  lets `PUBLIC_APP_ORIGIN` - each site in `public_sites.json` named in full, plus a
+  `<preview>.` of one, plus the old `sakina-<city>` sites in `LEGACY_PUBLIC_SITES` - call
   `PUBLIC_APP_PATHS` - `/api/mute`, `/api/device`, `/api/settings`, `/api/apply`, nothing
   else - with CORS headers, a preflight answer carrying
   `Access-Control-Allow-Private-Network`, and `same_origin()` accepting it for those
   paths. A save from the app is validated exactly like one from the device's own page.
-  Trusting that origin means trusting what is deployed there.
+  Trusting that origin means trusting what is deployed there. Never a pattern such as
+  `sakina-*.pages.dev`: anyone can create a `.pages.dev` project, and `sakina-app` is
+  already a stranger's.
   The mute is posted as `{}` in `text/plain`; the app reads the state
   back, and follows it every 15 s once the permission is granted. A device that answers
   but refuses - a release from before this - gets its own countdown opened instead.
@@ -1886,9 +1949,10 @@ Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`st
 
 | city | address |
 |---|---|
-| `damascus` | `https://sakina-damascus.pages.dev` |
-| `berlin` | `https://sakina-berlin.pages.dev` |
-| `aachen` | `https://sakina-aachen.pages.dev` |
+| `damascus` | `https://alsakina-damascus.pages.dev` |
+| `berlin` | `https://alsakina-berlin.pages.dev` |
+| `aachen` | `https://alsakina-aachen.pages.dev` |
+| `all` | `https://alsakina.pages.dev` — no city of its own, see below |
 
 ```
 static-website/sakina/
@@ -1905,7 +1969,8 @@ workflow commits `public/` only, so a new city's entry is committed by hand with
 folder, and reaches the devices with the next release. `test_static_website.py` fails
 while the two disagree.
 
-`daylight_saving` in `city.ini` is the same switch a device has. With `true`, each year is
+`daylight_saving` in `city.ini` is the site's own switch; a device has none (see
+"Daylight saving follows the clock" below). With `true`, each year is
 baked separately through the same `prayer_dst.py` functions a device runs in January: the
 clock changes baked into the table are stripped and that year's real ones applied from
 tzdata for `timezone`, so a table carrying the wrong dates still produces the right site.
@@ -1928,6 +1993,14 @@ stored. In the app a device hands out, the site's own city is the device's; any 
 shows a yellow line under the name linking straight back to it. Only the phone's view
 changes; the device keeps its table. A device's own pages list no cities.
 
+**One site with no city in its name: `https://alsakina.pages.dev`.** For someone who wants
+one installed app and picks the city themselves. `static-website/sakina/all/site.ini`
+names the city it opens on (`default = berlin`); `build.py` builds that city's table a
+second time into `all/public/` under the plain name «السكينة» (manifest and iOS title) and
+links every city into it as above, so the list under the title holds them all and the
+choice stays on the phone. It is not a city: it has no `city.ini`, is not in
+`public_sites.json`, and no device hands out its app from it.
+
 **Nothing is built by hand.** `.github/workflows/sakina-static-website.yml` runs the tests,
 runs `build.py` and commits any change to `public/` on main:
 
@@ -1946,16 +2019,19 @@ mkdir static-website/sakina/hamburg
 ln -s "../../../scheduler-official-touch-screen-with-raspberry-pi-4/config/prayers-config/هامبورغ.csv" \
       static-website/sakina/hamburg/prayer-times.csv
 printf '[city]\nplace = هامبورغ\ndaylight_saving = true\ntimezone = Europe/Berlin\n' > static-website/sakina/hamburg/city.ini
+printf 'هامبورغ.csv = Europe/Berlin\n' >> scheduler-official-touch-screen-with-raspberry-pi-4/config/prayers-config/zones.ini
 ```
 
-and a Cloudflare Pages project for it, as below.
+The `zones.ini` line is what lets a device moved to that country offer the file when its
+time zone is changed; `test_dst_from_os.py` fails while a shipped city file is missing
+from it or disagrees with its `city.ini`. Then a Cloudflare Pages project for it, as below.
 
 **Cloudflare Pages, once per city:** Workers & Pages → Create → Pages → connect the GitHub
 repo, then:
 
 | setting | value |
 |---|---|
-| project name | `sakina-<city>` (this is the `.pages.dev` address) |
+| project name | `alsakina-<city>` (this is the `.pages.dev` address) |
 | production branch | `main` |
 | framework preset | None |
 | build command | *(empty)* |
@@ -1963,6 +2039,16 @@ repo, then:
 | build watch paths → include | `static-website/sakina/<city>/public/*` |
 
 The watch path keeps a push that changes nothing of a city's site from redeploying it.
+
+For `https://alsakina.pages.dev` the same, with project name `alsakina`, output directory
+`static-website/sakina/all/public` and watch path `static-website/sakina/all/public/*`.
+A `.pages.dev` name is global (`sakina` itself is someone else's); if a name is taken,
+Cloudflare gives the project a suffixed address instead - change `site_url` or `ALL_URL`
+in `build.py` to match.
+
+The sites were `sakina-<city>.pages.dev` through 1.5.6. Keep those projects deployed until
+every device runs a newer release: an older device still hands out the old address, and
+an app already added to a phone from it keeps working only while it is served.
 
 ### Files
 

@@ -467,6 +467,45 @@ chk "the working helper is still in place" \
 chk "and the refusal is said out loud" \
     "$(grep -c 'does not parse' "$ROOT/boot.log")" "1"
 
+echo "15. the clock's time zone is set, then the device reboots, and only a real zone is taken"
+build
+sed -i "s|^ZONEINFO_DIR=.*|ZONEINFO_DIR=\"$ROOT/zoneinfo\"|" "$ROOT/apply.sh"
+echo Europe/Berlin > "$ROOT/timezone"
+sed -i "s|^TIMEZONE_FILE=.*|TIMEZONE_FILE=\"$ROOT/timezone\"|" "$ROOT/apply.sh"
+mkdir -p "$ROOT/zoneinfo/Asia" "$ROOT/zoneinfo/America/Argentina"
+touch "$ROOT/zoneinfo/Asia/Damascus" "$ROOT/zoneinfo/America/Argentina/Salta" "$ROOT/zoneinfo/UTC"
+for tool in timedatectl systemd-run; do
+    cat > "$BIN/$tool" <<STUB
+#!/bin/bash
+echo "$tool \$*" >> "\$CALLS"
+STUB
+    chmod +x "$BIN/$tool"
+done
+chk "a zone is set" "$(run --timezone Asia/Damascus)" "0"
+chk "through timedatectl" "$(grep -c '^timedatectl set-timezone Asia/Damascus$' "$CALLS")" "1"
+chk "and /etc/timezone names it too" "$(cat "$ROOT/timezone")" "Asia/Damascus"
+chk "then a reboot, a few seconds later" \
+    "$(grep -c '^systemd-run .*--on-active=5 .*/bin/systemctl reboot$' "$CALLS")" "1"
+chk "and nothing else of setup runs" "$(grep -c '^install \|^apt-get' "$CALLS")" "0"
+chk "a three-part zone is a zone" "$(run --timezone America/Argentina/Salta)" "0"
+chk "so is one with no region" "$(run --timezone UTC)" "0"
+for bad in "Asia/Atlantis" "../../etc/passwd" "Asia/../UTC" "-rf" "Asia/Damascus x" "/Asia/Damascus"; do
+    chk "refused: $bad" "$(run --timezone "$bad")" "2"
+    chk "and nothing set or rebooted: $bad" "$(grep -c 'timedatectl\|systemd-run' "$CALLS")" "0"
+    chk "and /etc/timezone untouched: $bad" "$(cat "$ROOT/timezone")" "UTC"
+done
+chk "a missing zone is refused" "$(run --timezone)" "2"
+cat > "$BIN/timedatectl" <<'STUB'
+#!/bin/bash
+echo "timedatectl $*" >> "$CALLS"
+exit 1
+STUB
+echo Europe/Berlin > "$ROOT/timezone"
+chk "a zone timedatectl refuses is a failed run" "$(run --timezone Asia/Damascus)" "1"
+chk "and no reboot follows it" "$(grep -c 'systemd-run' "$CALLS")" "0"
+chk "nor is /etc/timezone changed" "$(cat "$ROOT/timezone")" "Europe/Berlin"
+rm -f "$BIN/timedatectl" "$BIN/systemd-run"
+
 echo
 if [[ ${#fails[@]} -eq 0 ]]; then
     echo "ALL PASS"

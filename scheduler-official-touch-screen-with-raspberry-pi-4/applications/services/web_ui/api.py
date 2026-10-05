@@ -11,10 +11,12 @@ the website and the touch screen ever painting different colours.
 """
 
 import configparser
+import importlib.util
 import os
 from datetime import date as date_cls, datetime, time, timedelta
 
-from shared import audio_lists, prayer_logic, settings_rules
+from shared import (audio_lists, audio_upload, os_timezone, prayer_logic, prayer_source,
+                    settings_defaults, settings_rules)
 
 # The colours the touch screen paints, by the names period_state returns. Sent to the
 # browser rather than written into the CSS so that changing one in the GUI changes the
@@ -193,11 +195,11 @@ BOOL_KEYS = ("enable_tahajjud_prayer", "enable_duha_prayer", "enable_listen_to_q
              "enable_friday_quran", "enable_athkar_elsabah", "enable_athkar_elmasa",
              "enable_prayer_fajr", "enable_prayer_sunrise", "enable_prayer_dhuhr",
              "enable_prayer_asr", "enable_prayer_maghrib", "enable_prayer_isha",
-             "enable_daylight_saving", "enable_internet_warning")
+             "enable_internet_warning")
 # On unless the owner turned it off, so a device that has never saved it reads as on.
 BOOL_DEFAULT_ON = ("enable_internet_warning",)
-TEXT_KEYS = ("listen_to_quran", "friday_quran_position", "daylight_saving_timezone",
-             "athkar_elsabah_mode", "athkar_elsabah_clock")
+TEXT_KEYS = ("listen_to_quran", "friday_quran_position", "athkar_elsabah_mode",
+             "athkar_elsabah_clock")
 # Each audio list is a comma-separated set of file names from one event folder.
 AUDIO_KEYS = {
     "quran_audio_checked": "quran",
@@ -246,6 +248,7 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
     values["athkar_elsabah_mode"] = settings_rules.athkar_elsabah_mode(
         values["athkar_elsabah_mode"])
     values["athkar_elsabah_clock"] = athkar_elsabah_clock(section)
+    table, _default_timezone = timezones(scheduler_dir)
 
     audio = {}
     for key, event in AUDIO_KEYS.items():
@@ -260,9 +263,115 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
     return {
         "values": values,
         "audio": audio,
+        "audio_folders": [[folder, label] for folder, label
+                          in audio_upload.folders(scheduler_dir)],
         "csv": csv_sources(scheduler_dir, desktop_dir),
+        "prayer_source": prayer_source_payload(section, scheduler_dir, desktop_dir),
+        "timezones": [[country, [[city, zone] for city, zone in cities]]
+                      for country, _code, cities in table],
+        "os_timezone": os_timezone.current(),
         "times": today_times(scheduler_dir, desktop_dir),
     }
+
+
+# The Arabic country and city names for the device's time zone, from the same generated
+# table the Settings app reads. Loaded from the device's own tree, and once.
+_TIMEZONES = {}
+
+
+def timezones(scheduler_dir):
+    """(the COUNTRIES table, the default zone). An empty table when the file is missing,
+    and then no zone is offered or refused."""
+    if scheduler_dir not in _TIMEZONES:
+        path = os.path.join(scheduler_dir, "config", "scripts", "timezones_ar.py")
+        try:
+            spec = importlib.util.spec_from_file_location("timezones_ar", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _TIMEZONES[scheduler_dir] = (module.COUNTRIES, module.DEFAULT_TIMEZONE)
+        except (OSError, AttributeError, SyntaxError):
+            _TIMEZONES[scheduler_dir] = ([], settings_defaults.FALLBACK_TIMEZONE)
+    return _TIMEZONES[scheduler_dir]
+
+
+def prayer_source_payload(section, scheduler_dir, desktop_dir):
+    """The prayer-times file in use and the ones that can replace it, by name only: a
+    choice comes back as a name and is looked up again here, so no path a browser sends
+    is ever opened."""
+    reference = prayer_source.reference_file(desktop_dir)
+    recorded = section.get(prayer_source.SOURCE_LABEL_KEY, "").strip()
+    restore = prayer_source.current_source(recorded, prayer_source.presets_dir(scheduler_dir))
+    try:
+        updated = datetime.fromtimestamp(os.path.getmtime(reference)).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        updated = None
+    return {
+        "reference": prayer_source.REFERENCE_NAME,
+        "valid": settings_rules.csv_is_valid_prayer_format(reference),
+        "updated": updated,
+        "chosen": os.path.basename(recorded) if recorded else None,
+        "restore": os.path.basename(restore) if restore else None,
+        "options": [os.path.basename(path) for path in source_options(scheduler_dir, desktop_dir)],
+    }
+
+
+def source_options(scheduler_dir, desktop_dir):
+    return prayer_source.sources(prayer_source.presets_dir(scheduler_dir), desktop_dir)
+
+
+def choose_prayer_source(ini_path, scheduler_dir, desktop_dir, name, restore=False,
+                         confirmed=False):
+    """Copy the named file into the reference file, as the Settings app's picker does.
+
+    restore names nothing: it copies in again the file last chosen, over any hand edits,
+    and is asked about by the page before it is sent. Raises Invalid or
+    NeedsConfirmation; writes nothing unless the file was installed."""
+    config = read_config(ini_path)
+    section = config["Settings"]
+    reference = prayer_source.reference_file(desktop_dir)
+
+    if restore:
+        recorded = section.get(prayer_source.SOURCE_LABEL_KEY, "").strip()
+        source = prayer_source.current_source(recorded, prayer_source.presets_dir(scheduler_dir))
+        if not source:
+            raise Invalid("لا يوجد ملف معروف تمت منه آخر عملية نسخ.")
+    else:
+        matches = [path for path in source_options(scheduler_dir, desktop_dir)
+                   if os.path.basename(path) == name]
+        if not matches:
+            raise Invalid("ملف المواقيت المختار غير موجود على الجهاز.")
+        source = matches[0]
+        if not confirmed and prayer_source.may_hold_hand_edits(section, reference):
+            raise NeedsConfirmation(f"{prayer_source.HAND_EDITS_WARNING}\n\n"
+                                    f"الملف الذي سيتم استبداله:\n{prayer_source.REFERENCE_NAME}"
+                                    "\n\nهل أنت متأكد من المتابعة؟")
+
+    try:
+        new_hash = prayer_source.install(source, reference, scheduler_dir)
+    except prayer_source.SourceError as refusal:
+        raise Invalid(str(refusal))
+    prayer_source.record(section, source, reference, new_hash)
+    with open(ini_path, "w", encoding="utf-8") as handle:
+        config.write(handle)
+    return os.path.basename(source)
+
+
+def reset_settings(ini_path, scheduler_dir):
+    """«إعادة ضبط الإعدادات»: every setting back to the shipped defaults, the prayer-times
+    file and its record kept, and each event's files ticked as the touch screen ticks
+    them on a reset."""
+    config = read_config(ini_path)
+    fresh = settings_defaults.reset_values(
+        config["Settings"], os.path.join(scheduler_dir, "config", "default-config.ini"))
+    for key, event in AUDIO_KEYS.items():
+        available = audio_lists.available_audio(audio_lists.audio_dir(scheduler_dir, event))
+        fresh[key] = audio_lists.checked_to_config(
+            settings_defaults.reset_audio(fresh.get(key, ""), available))
+    config = configparser.ConfigParser(interpolation=None)
+    config["Settings"] = fresh
+    os.makedirs(os.path.dirname(ini_path), exist_ok=True)
+    with open(ini_path, "w", encoding="utf-8") as handle:
+        config.write(handle)
 
 
 def csv_sources(scheduler_dir, desktop_dir):
@@ -336,6 +445,10 @@ def apply_submission(ini_path, scheduler_dir, desktop_dir, submitted):
     section = config["Settings"]
     submitted = dict(submitted)
     confirmed = bool(submitted.pop("confirmed", False))
+    # The app's copy of this page can be older than the device and still send the
+    # daylight-saving choice; it is dropped rather than failing the whole save.
+    for key in settings_defaults.RETIRED_KEYS:
+        submitted.pop(key, None)
 
     unknown = set(submitted) - set(INT_KEYS) - set(BOOL_KEYS) - set(TEXT_KEYS) - set(AUDIO_KEYS)
     if unknown:
@@ -401,6 +514,8 @@ def apply_submission(ini_path, scheduler_dir, desktop_dir, submitted):
 
     for key, value in staged.items():
         section[key] = value
+    for key in settings_defaults.RETIRED_KEYS:
+        section.pop(key, None)
 
     with open(ini_path, "w", encoding="utf-8") as handle:
         config.write(handle)
@@ -437,8 +552,9 @@ def _check_clock(value):
 
 def scheduled_prayer_csv(section, scheduler_dir, desktop_dir):
     """The file whose times get scheduled, as the Settings app finds it: this year's
-    daylight-saving copy when that is on and generated, otherwise the reference file."""
-    if str(section.get("enable_daylight_saving", "False")).lower() == "true":
+    daylight-saving copy when that is generated and not switched off, otherwise the
+    reference file."""
+    if str(section.get("daylight_saving_adjustment", "auto")).strip().lower() != "off":
         dst_dir = os.path.join(scheduler_dir, "config", "prayers-config", "dst")
         year = datetime.now().year
         if os.path.isdir(dst_dir):

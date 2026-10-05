@@ -248,7 +248,9 @@ fi
 #######################################
 # Apply settings script (run once)
 #######################################
-if [[ ! -f "$DONE_DIR/settings_applied" ]]; then
+# Once, unless a reset asks again: «إعادة ضبط الإعدادات» rewrites config.ini and runs this
+# script, and without a fresh apply the schedule would keep the settings just reset.
+if [[ ! -f "$DONE_DIR/settings_applied" || -n "${SCHEDULER_INIT_APPLY_SETTINGS:-}" ]]; then
     echo "Applying settings..."
     
     # The unit files themselves are copied further down, on every run rather than only

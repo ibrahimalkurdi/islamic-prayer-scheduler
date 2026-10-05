@@ -323,7 +323,7 @@ shipped = json.load(open(sakina_build.PUBLIC_SITES, encoding="utf-8"))
 check("public_sites.json matches the city folders - rerun build.py after adding one",
       shipped, sakina_build.public_sites())
 check("a table maps to its city's site", shipped.get("دمشق.csv"),
-      "https://sakina-damascus.pages.dev")
+      "https://alsakina-damascus.pages.dev")
 
 print("8. every site carries every city")
 sys.path.insert(0, os.path.dirname(BUILDER))
@@ -363,6 +363,33 @@ for name in sakina_build.cities():
         if other != name:
             check_true(f"{name}'s site has {other}'s years",
                        os.path.isdir(os.path.join(public, "data", other)))
+
+print("9. one site with no city in its name, for every city")
+ALL_PUBLIC = os.path.join(SAKINA, "all", "public")
+default = sakina_build.all_default()
+check_true("all/site.ini names a city folder that exists", default in list(sakina_build.cities()))
+check("its address carries no city", sakina_build.ALL_URL, "https://alsakina.pages.dev")
+check("it is not taken for a city", "all" in list(sakina_build.cities()), False)
+manifest = json.load(open(os.path.join(ALL_PUBLIC, "static", "manifest.webmanifest"),
+                          encoding="utf-8"))
+check("it installs as «السكينة», with no city after it - rerun build.py",
+      (manifest["name"], manifest["short_name"]), ("السكينة", "السكينة"))
+check_true("on iOS too", 'apple-mobile-web-app-title" content="السكينة"'
+           in open(os.path.join(ALL_PUBLIC, "index.html"), encoding="utf-8").read())
+all_config = open(os.path.join(ALL_PUBLIC, "static", "config.js"), encoding="utf-8").read()
+check_true("it opens on the default city", f'window.CITY = "{default}";' in all_config)
+listed = json.loads(all_config.split("window.CITIES = ", 1)[1].rstrip().rstrip(";"))
+check("and offers every city in the list", [c["id"] for c in listed],
+      list(sakina_build.cities()))
+check("with the default city's own years at the root, as its own site has them",
+      open(os.path.join(ALL_PUBLIC, "data", f"{date_cls.today().year}.json"), "rb").read(),
+      open(os.path.join(SAKINA, default, "public", "data", f"{date_cls.today().year}.json"),
+           "rb").read())
+for other in sakina_build.cities():
+    if other != default:
+        check_true(f"it has {other}'s years", os.path.isdir(os.path.join(ALL_PUBLIC, "data", other)))
+check("no device takes it for its own city's site",
+      sakina_build.ALL_URL in sakina_build.public_sites().values(), False)
 
 shutil.rmtree(ROOT, ignore_errors=True)
 

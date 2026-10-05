@@ -438,6 +438,42 @@ out="$(run_stubbed --now)"
 expect "the athan service is restarted" "$(cat "$CALLED")" "systemctl restart audio_event_scheduler.service"
 expect "and so is the website" "$(cat "$CALLED")" "systemctl restart scheduler_web_ui.service"
 
+echo "21b. started from the website, the countdown comes back on the screen"
+# The website runs the update as a transient unit of the user's systemd, which kills every
+# process left in it when the updater exits - so the countdown has to get a unit of its
+# own, and on the screen, since nobody is at the Settings app to start it.
+cat > "$STUB/systemd-run" <<STUBEOF
+#!/bin/bash
+echo "systemd-run \$*" >> "$CALLED"
+STUBEOF
+chmod +x "$STUB/systemd-run"
+: > "$CALLED"
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --remote --now)"
+expect "it says where it was started from" "$out" "Run mode: now, from the website"
+expect "the update goes in" "$out" "Health check passed"
+expect "the countdown is started in a unit of its own" "$(cat "$CALLED")" \
+    "systemd-run --user --collect --quiet --unit=scheduler-countdown-"
+expect "on the screen" "$(cat "$CALLED")" "--setenv=DISPLAY=:0 --setenv=QT_QPA_PLATFORM=xcb"
+if grep -qF "Leaving the countdown closed" <<< "$out" || grep -qF "offscreen check" <<< "$out"; then
+    echo "  ✗ it left the countdown closed, as for the Settings app on the screen"; fail=1
+else
+    echo "  ✓ and is not left closed for someone at the screen to start"
+fi
+: > "$CALLED"
+out="$(run_stubbed --remote --rollback)"
+expect "a rollback from the website does the same" "$(cat "$CALLED")" "--unit=scheduler-countdown-"
+: > "$CALLED"
+out="$(run_stubbed --now)"
+if grep -qF "systemd-run" "$CALLED"; then
+    echo "  ✗ an update from the Settings app started the countdown on the screen"; fail=1
+else
+    echo "  ✓ from the Settings app it is still left closed"
+fi
+expect "and checked offscreen" "$out" "Leaving the countdown closed"
+rm -f "$STUB/systemd-run"
+
 echo "22. but not on a device where the website was never installed"
 : > "$CALLED"
 cat > "$STUB/systemctl" <<STUBEOF

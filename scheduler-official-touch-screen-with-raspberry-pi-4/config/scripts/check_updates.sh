@@ -5,6 +5,8 @@
 #   check_updates.sh --now           update to the resolved target now
 #   check_updates.sh --target 1.0.3  install one specific version, up or down
 #   check_updates.sh --rollback      restore the retained previous version
+#   check_updates.sh --remote ...    with --now, --target or --rollback: started from the
+#                                    website, so the countdown comes back on the screen
 #   check_updates.sh --list          print every published version for this variant
 #   check_updates.sh --latest        print the version VERSIONS.json names for this variant
 #
@@ -121,11 +123,15 @@ ORIGINAL_ARGS=("$@")
 # what the Settings app runs, and what to use when testing that path by hand.
 MODE="cron"
 TARGET_ARG=""
+# Started from the website: nobody is at the Settings app on the screen, so the countdown
+# goes back up there as it does after a cron run, whatever MODE says.
+REMOTE=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cron)     MODE="cron" ;;
         --now)      MODE="now" ;;
         --rollback) MODE="rollback" ;;
+        --remote)   REMOTE=1 ;;
         --status)   MODE="status" ;;
         --list)     MODE="list" ;;
         --latest)   MODE="latest" ;;
@@ -464,6 +470,12 @@ verify_gui_offscreen() {
     return $rc
 }
 
+# Whether the countdown is put back on the screen and checked there, rather than left
+# closed and checked offscreen.
+on_screen() {
+    [[ "$MODE" == "cron" || "$REMOTE" == "1" ]]
+}
+
 restart_apps() {
     log "Restarting the athan service..."
     sudo -n systemctl restart "$SERVICE" 2>>"$LOG_FILE" \
@@ -486,7 +498,15 @@ restart_apps() {
     pkill -f "prayer_times_gui/main.py" 2>/dev/null || true
     sleep 2
 
-    if [[ "$MODE" == "cron" ]]; then
+    if [[ "$REMOTE" == "1" ]]; then
+        # The website starts this as a transient user unit, and every process left in a
+        # unit is killed when it ends - so the countdown gets a unit of its own.
+        log "Restarting the prayer times GUI on the screen..."
+        systemd-run --user --collect --quiet --unit="scheduler-countdown-$(date +%s)" \
+            --setenv=DISPLAY=:0 --setenv=QT_QPA_PLATFORM=xcb \
+            /bin/bash -c "exec python3 \"\$0\" >> \"\$1\" 2>&1" "$GUI_MAIN" "$GUI_LOG" \
+            2>>"$LOG_FILE" || log "WARNING: could not start the countdown"
+    elif [[ "$MODE" == "cron" ]]; then
         # Nobody is at the screen at 02:00, and the countdown is what the device is for -
         # so it goes straight back up. The autostart entry only fires at login, so killing
         # it does not bring it back; it has to be relaunched with that entry's environment.
@@ -508,7 +528,7 @@ verify_healthy() {
     sleep "$HEALTH_SETTLE_SECONDS"
 
     local args=()
-    if [[ "$MODE" != "cron" ]]; then
+    if ! on_screen; then
         # The countdown is deliberately not on the screen during an interactive run, so
         # the on-screen checks would fail for a reason that says nothing about the
         # release. verify_gui_offscreen below covers the same ground more strictly - it
@@ -521,7 +541,7 @@ verify_healthy() {
         return 1
     fi
 
-    if [[ "$MODE" != "cron" ]] && ! verify_gui_offscreen; then
+    if ! on_screen && ! verify_gui_offscreen; then
         log "Health check FAILED"
         return 1
     fi
@@ -571,7 +591,12 @@ fi
 # does not say which one ran cannot explain what the device did.
 case "$MODE" in
     cron) log "Run mode: cron (unattended - the countdown is restarted on the screen)" ;;
-    now)  log "Run mode: now (Settings app - the countdown stays closed and is checked offscreen)" ;;
+    now)
+        if [[ "$REMOTE" == "1" ]]; then
+            log "Run mode: now, from the website (the countdown is restarted on the screen)"
+        else
+            log "Run mode: now (Settings app - the countdown stays closed and is checked offscreen)"
+        fi ;;
 esac
 
 if [[ "$MODE" == "cron" && "${ENABLED,,}" != "true" ]]; then

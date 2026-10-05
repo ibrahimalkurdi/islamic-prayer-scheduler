@@ -83,9 +83,6 @@ COUNTRIES = [
     ("إستونيا", "EE", [
         ("Tallinn", "Europe/Tallinn"),
     ]),
-    ("إسرائيل", "IL", [
-        ("Jerusalem", "Asia/Jerusalem"),
-    ]),
     ("إسواتيني", "SZ", [
         ("Mbabane", "Africa/Mbabane"),
     ]),

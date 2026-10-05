@@ -6,6 +6,7 @@ drives it the way a browser does. The mute calls reach a `wpctl` that is a shell
 on PATH, so the fallback paths are exercised without a sound card.
 """
 
+import configparser
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import sys
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date as date_cls, datetime, timedelta
 
@@ -100,7 +102,6 @@ enable_prayer_dhuhr = True
 enable_prayer_asr = True
 enable_prayer_maghrib = True
 enable_prayer_isha = True
-enable_daylight_saving = False
 listen_to_quran = 06:30
 friday_quran_position = after
 quran_audio_checked = one.mp3
@@ -115,8 +116,107 @@ open(os.path.join(SCHEDULER, "audio", "fajr", "athan.mp3"), "w").close()
 APPLY_MARKER = os.path.join(ROOT, "applied")
 APPLY = os.path.join(SCHEDULER, "config", "scripts", "apply_settings.sh")
 with open(APPLY, "w", encoding="utf-8") as handle:
-    handle.write(f'#!/bin/bash\necho "applied settings"\ndate >> "{APPLY_MARKER}"\n')
+    handle.write(f'#!/bin/bash\necho "applied settings"\ndate >> "{APPLY_MARKER}"\n'
+                 f'echo "${{TZ:-}}" >> "{ROOT}/applied-tz"\n')
 os.chmod(APPLY, 0o755)
+
+# What the Settings app also offers: the daylight-saving zone table and the shipped
+# defaults are the real files; the city presets are the fixture's own times, so choosing
+# one leaves every later check reading the same day; bad.csv is a file in no known format.
+shutil.copyfile(os.path.join(REPO, VARIANT, "config", "scripts", "timezones_ar.py"),
+                os.path.join(SCHEDULER, "config", "scripts", "timezones_ar.py"))
+shutil.copyfile(os.path.join(REPO, VARIANT, "config", "default-config.ini"),
+                os.path.join(SCHEDULER, "config", "default-config.ini"))
+PRESETS = os.path.join(SCHEDULER, "config", "prayers-config")
+for name in ("برلين.csv", "آخن.csv"):
+    shutil.copyfile(CSV_PATH, os.path.join(PRESETS, name))
+with open(os.path.join(PRESETS, "bad.csv"), "w", encoding="utf-8") as handle:
+    handle.write("not,a,prayer,table\n")
+# Damascus's own times, told apart from Berlin's by its Dhuhr.
+DAMASCUS_CSV = open(CSV_PATH, encoding="utf-8").read().replace(",12:00,", ",12:30,")
+with open(os.path.join(PRESETS, "دمشق.csv"), "w", encoding="utf-8") as handle:
+    handle.write(DAMASCUS_CSV)
+# The real zones.ini, so the test reads what ships.
+shutil.copyfile(os.path.join(REPO, VARIANT, "config", "prayers-config", "zones.ini"),
+                os.path.join(PRESETS, "zones.ini"))
+
+# The jobs the website hands to the user's systemd, stubbed: systemd-run starts the
+# command in the background and keeps its pid under the unit's name, which is what the
+# stub systemctl answers is-active from. A file named "no-user-systemd" makes it fail,
+# as it does on a device with nobody logged in.
+UNITS = os.path.join(ROOT, "units")
+os.makedirs(UNITS)
+for name, text in (("systemd-run", f"""#!/bin/bash
+[[ -f "{ROOT}/no-user-systemd" ]] && {{ echo "Failed to connect to bus" >&2; exit 1; }}
+unit=""; envs=()
+while [[ "$1" != "--" ]]; do
+    case "$1" in
+        --unit=*) unit="${{1#--unit=}}" ;;
+        --setenv=*) envs+=("${{1#--setenv=}}") ;;
+    esac
+    shift
+done
+shift
+echo "${{envs[*]}} | $*" >> "{UNITS}/$unit.calls"
+env "${{envs[@]}}" "$@" > /dev/null 2>&1 &
+echo $! > "{UNITS}/$unit.pid"
+"""), ("systemctl", f"""#!/bin/bash
+unit="${{@: -1}}"
+pid="$(cat "{UNITS}/$unit.pid" 2>/dev/null)"
+[[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+""")):
+    with open(os.path.join(ROOT, "bin-jobs-" + name), "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+# check_updates.sh, stubbed: --status reads a JSON file the test writes, --list and
+# --latest answer from fixed versions, and anything else records its arguments, takes a
+# moment as a real run does, and leaves the result in the status file.
+UPDATE_STATUS = os.path.join(ROOT, "update-status.json")
+with open(UPDATE_STATUS, "w", encoding="utf-8") as handle:
+    json.dump({"installed": "1.5.5", "enabled": True, "pinned": "", "rollback_to": "1.5.4",
+               "pointer": "VERSIONS.json", "pointer_is_default": True,
+               "last_result": "up_to_date", "last_checked": "2026-10-04T02:00:00"}, handle)
+CHECK_UPDATES = os.path.join(SCHEDULER, "config", "scripts", "check_updates.sh")
+with open(CHECK_UPDATES, "w", encoding="utf-8") as handle:
+    handle.write(f"""#!/bin/bash
+case "$*" in
+    --status)
+        # ENABLED and PIN are update.conf's, as the real --status reports them.
+        python3 - "{UPDATE_STATUS}" "$(dirname "$0")/../update.conf" <<'PY'
+import json, re, sys
+state = json.load(open(sys.argv[1]))
+conf = open(sys.argv[2]).read()
+enabled = re.search(r"^ENABLED=(.*)$", conf, re.M)
+pin = re.search(r"^PIN=(.*)$", conf, re.M)
+state["enabled"] = (enabled.group(1) if enabled else "true").lower() == "true"
+state["pinned"] = pin.group(1) if pin else ""
+print(json.dumps(state))
+PY
+        exit 0 ;;
+    --list) printf '1.5.3\\n1.5.6\\n1.5.4\\n1.5.5\\n'; exit 0 ;;
+    --latest) echo 1.5.6; exit 0 ;;
+esac
+echo "$*" >> "{ROOT}/update-ran"
+sleep 1
+python3 - "{UPDATE_STATUS}" <<'PY'
+import json, sys, datetime
+state = json.load(open(sys.argv[1]))
+state["last_result"] = "updated"
+state["last_checked"] = datetime.datetime.now().isoformat(timespec="seconds")
+json.dump(state, open(sys.argv[1], "w"))
+PY
+""")
+os.chmod(CHECK_UPDATES, 0o755)
+with open(os.path.join(SCHEDULER, "config", "crontab.txt"), "w", encoding="utf-8") as handle:
+    handle.write("00 02 * * * bash $HOME/Desktop/scheduler/config/scripts/check_updates.sh --cron\n")
+with open(os.path.join(SCHEDULER, "config", "update.conf"), "w", encoding="utf-8") as handle:
+    handle.write("ENABLED=true\nPIN=\n")
+
+# init.sh, stubbed: a reset runs it, and it records whether it was told to skip its
+# update check.
+with open(os.path.join(SCHEDULER, "config", "scripts", "init.sh"), "w",
+          encoding="utf-8") as handle:
+    handle.write(f'#!/bin/bash\nsleep 1\necho "${{SCHEDULER_INIT_NO_UPDATE_CHECK:-}}${{SCHEDULER_INIT_APPLY_SETTINGS:-}}" >> "{ROOT}/init-ran"\n')
 
 # wpctl, stubbed. Its mute state lives in a file so the server's reads and writes of it
 # are really round-tripping through a subprocess, as they do on the device.
@@ -141,6 +241,26 @@ fi
 exit 1
 """)
 os.chmod(WPCTL, 0o755)
+# No live crontab, so the daily check's time is read from config/crontab.txt.
+with open(os.path.join(BIN, "crontab"), "w", encoding="utf-8") as handle:
+    handle.write("#!/bin/bash\nexit 1\n")
+os.chmod(os.path.join(BIN, "crontab"), 0o755)
+# The clock's zone, read from a file timedatectl reports, and sudo recording what the
+# root helper would be asked to do.
+OS_ZONE = os.path.join(ROOT, "os-zone")
+with open(OS_ZONE, "w", encoding="utf-8") as handle:
+    handle.write("Europe/Berlin\n")
+with open(os.path.join(BIN, "timedatectl"), "w", encoding="utf-8") as handle:
+    handle.write(f'#!/bin/bash\n[[ "$1" == show ]] && cat "{OS_ZONE}"\n')
+with open(os.path.join(BIN, "sudo"), "w", encoding="utf-8") as handle:
+    handle.write(f'#!/bin/bash\necho "$*" >> "{ROOT}/sudo-calls"\n'
+                 f'[[ -f "{ROOT}/sudo-fails" ]] && {{ echo "unknown time zone" >&2; exit 2; }}\n'
+                 'exit 0\n')
+for name in ("timedatectl", "sudo"):
+    os.chmod(os.path.join(BIN, name), 0o755)
+for name in ("systemd-run", "systemctl"):
+    shutil.move(os.path.join(ROOT, "bin-jobs-" + name), os.path.join(BIN, name))
+    os.chmod(os.path.join(BIN, name), 0o755)
 os.environ["PATH"] = BIN + os.pathsep + os.environ["PATH"]
 
 # shared.mute resolves its paths from $HOME at import time, so $HOME is the fixture.
@@ -281,11 +401,27 @@ check_true("with something that reads as working",
            'class="spinner"' in settings_html)
 # Every path that leaves the applying state must take the cover down. One that does not
 # leaves a spinner over a page nobody can touch, which is worse than no cover at all.
-# Four: a poll that fails, the apply finishing, a save refused, and a no to the question
-# about a time that does not fit every day.
+# Five for the save: a poll that fails, the apply finishing, a save refused, a no to
+# the question about a time that does not fit every day, and a no to replacing a
+# hand-edited prayer file picked but not yet chosen. Three for choosing a prayer
+# file (no, done, failed), two for the reset (done, failed), three for an update (no,
+# failed, finished), two for the daily-check switch (done, failed), three for an
+# audio upload (no to replacing, done, failed), two for deleting files (done, failed)
+# and two for the clock's zone (back, failed).
 check("every exit from applying lowers the cover",
-      settings_html.count("working(false)"), 4)
+      settings_html.count("working(false)"), 22)
 check_true("and the cover is raised on the tap", "working(true)" in settings_html)
+# A file picked in the list and then saved with the main button was dropped: the save
+# sent the settings alone, so the device stayed on the file it had while the list showed
+# the new one.
+save_handler = settings_html.split('document.querySelector("#save").addEventListener', 1)[1]
+save_handler = save_handler.split("const Updates", 1)[0]
+check_true("the save chooses a picked prayer file first",
+           save_handler.index('"/api/prayer-source"') < save_handler.index('"/api/settings", {'))
+check_true("only when it differs from the file in use",
+           'picked.value !== source.chosen' in save_handler)
+check_true("and waits for its rebuild before saving the rest",
+           save_handler.index("waitForApply()") < save_handler.index('"/api/settings", {'))
 # The overlay replaced an inline note; leaving the id behind in show()'s list would make
 # it throw on a page that no longer has that element.
 check("the busy note it replaced is gone", 'id="busy"' in settings_html, False)
@@ -660,7 +796,7 @@ check("asked for twice, still muted", reply["muted"], True)
 post("/api/mute", {"muted": False}, origin=BASE)
 
 print("17b. the app a device hands out may mute it from the public site, and nothing more")
-APP_ORIGIN = "https://sakina-berlin.pages.dev"
+APP_ORIGIN = "https://alsakina-berlin.pages.dev"
 
 
 def raw(method, path, origin, body=None):
@@ -689,9 +825,14 @@ check("with the header it needs", headers.get("Access-Control-Allow-Origin"), AP
 status, body, _ = raw("POST", "/api/mute", APP_ORIGIN, b"{}")
 check("and unmutes", json.loads(body)["muted"], False)
 check("a preview deployment of the site too",
-      raw("OPTIONS", "/api/mute", "https://1a2b3c.sakina-berlin.pages.dev")[0], 204)
-for origin in ("https://evil.pages.dev", "https://sakina-berlin.pages.dev.evil.example",
-               "http://sakina-berlin.pages.dev"):
+      raw("OPTIONS", "/api/mute", "https://1a2b3c.alsakina-berlin.pages.dev")[0], 204)
+check("an app added from the old sakina-<city> site still reaches its device",
+      raw("OPTIONS", "/api/mute", "https://sakina-berlin.pages.dev")[0], 204)
+# Anyone can make a .pages.dev project: only our own sites, named in full, are let in.
+for origin in ("https://evil.pages.dev", "https://alsakina-berlin.pages.dev.evil.example",
+               "http://alsakina-berlin.pages.dev", "https://sakina-app.pages.dev",
+               "https://alsakina-evil.pages.dev", "https://sakina-evil.pages.dev",
+               "https://xalsakina-berlin.pages.dev", "https://a.b.alsakina-berlin.pages.dev"):
     check(f"{origin} is refused", raw("POST", "/api/mute", origin, b"{}")[0], 403)
     check(f"and gets no preflight", raw("OPTIONS", "/api/mute", origin)[0], 403)
 # The app's settings page reads and saves the device's settings the same way - and they
@@ -776,12 +917,12 @@ check_true("and an address or an honest null", "ip" in info)
 print("20a. and which public site hands out its app, by the prayer table it uses")
 from main import PUBLIC_SITES  # noqa: E402
 sites = json.load(open(PUBLIC_SITES, encoding="utf-8"))
-check("the sites map carries berlin", sites.get("برلين.csv"), "https://sakina-berlin.pages.dev")
+check("the sites map carries berlin", sites.get("برلين.csv"), "https://alsakina-berlin.pages.dev")
 check("with no table recorded there is none", info["public_site"], None)
 ini_before = open(INI, encoding="utf-8").read()
 for label, want in (
         ("/home/x/Desktop/scheduler/config/prayers-config/برلين.csv",
-         "https://sakina-berlin.pages.dev"),
+         "https://alsakina-berlin.pages.dev"),
         ("/home/x/Desktop/some-other-city.csv", None)):
     with open(INI, "w", encoding="utf-8") as handle:
         handle.write(ini_before.replace("[Settings]\n",
@@ -895,6 +1036,498 @@ version_js = DAILY_HTML[DAILY_HTML.index("function refreshVersion"):]
 check_true("and it is asked for only on a device",
            version_js.index("if (!window.DEVICE)") < version_js.index('"/api/device"')
            and "return;\n    }\n    Site.json(\"/api/device\")" in version_js)
+
+print("20d. everything the touch screen's Settings offers, the website offers")
+import configparser as _cp  # noqa: E402
+from shared import prayer_source as source_lib, settings_defaults, updates as updates_lib  # noqa: E402
+
+INI_BEFORE = open(INI, encoding="utf-8").read()
+CSV_BEFORE = open(CSV_PATH, encoding="utf-8").read()
+
+
+def settings_section():
+    parser = _cp.ConfigParser(interpolation=None)
+    parser.read(INI, encoding="utf-8")
+    return parser["Settings"]
+
+
+def wait_for(predicate, seconds=15):
+    end = datetime.now() + timedelta(seconds=seconds)
+    while datetime.now() < end:
+        if predicate():
+            return True
+        threading.Event().wait(0.2)
+    return False
+
+
+def apply_finished():
+    return wait_for(lambda: json.loads(get("/api/apply")[1])["state"] != "running")
+
+
+def calls(unit):
+    try:
+        return open(os.path.join(UNITS, unit + ".calls"), encoding="utf-8").read()
+    except OSError:
+        return ""
+
+
+payload = json.loads(get("/api/settings")[1])
+
+# The country and city table, for the device's time zone.
+zones = {zone for _country, cities in payload["timezones"] for _city, zone in cities}
+check_true("the zone table is offered, country by country", len(payload["timezones"]) > 100)
+check_true("with the cities of a country that spans several",
+           any(len(cities) > 1 for _country, cities in payload["timezones"]))
+check_true("Europe/Berlin is one of them", "Europe/Berlin" in zones)
+# Daylight saving follows the clock's zone now: nothing to choose, nothing to send.
+check_true("the old choice is not offered",
+           not {"enable_daylight_saving", "daylight_saving_timezone"} & set(payload["values"]))
+with open(INI, "a", encoding="utf-8") as handle:
+    handle.write("enable_daylight_saving = False\ndaylight_saving_timezone = Europe/Berlin\n")
+check("an older page that still sends it saves the rest",
+      post("/api/settings", {"duha_time": 61, "enable_daylight_saving": True,
+                             "daylight_saving_timezone": "Mars/Olympus"})[0], 200)
+apply_finished()
+check("and the retired keys are dropped from config.ini",
+      [k for k in settings_section() if k in ("enable_daylight_saving",
+                                              "daylight_saving_timezone")], [])
+check("while the rest is written", settings_section()["duha_time"], "61")
+
+# The prayer-times file: offered by name, chosen by name.
+offered = payload["prayer_source"]
+check("the presets are offered by name, as the picker lists them",
+      offered["options"], sorted(["برلين.csv", "آخن.csv", "bad.csv", "دمشق.csv"]))
+check("the Desktop file is named", offered["reference"], source_lib.REFERENCE_NAME)
+check("nothing chosen yet, nothing to restore", (offered["chosen"], offered["restore"]), (None, None))
+check_true("the file in use is reported valid", offered["valid"])
+
+# The fixture's file was never written by the app, so it may hold hand edits: asked first.
+status, body = post("/api/prayer-source", {"name": "برلين.csv"})
+check("a file the app did not write is asked about first", (status, body.get("saved")), (200, False))
+check_true("in the Settings app's words", source_lib.HAND_EDITS_WARNING in body.get("confirm", ""))
+check("and nothing is recorded until yes",
+      settings_section().get(source_lib.SOURCE_LABEL_KEY), None)
+marker_before = open(APPLY_MARKER).read().count("\n") if os.path.exists(APPLY_MARKER) else 0
+status, body = post("/api/prayer-source", {"name": "برلين.csv", "confirmed": True})
+check("yes copies it in", (status, body.get("saved"), body.get("chosen")), (200, True, "برلين.csv"))
+check_true("the schedule is rebuilt at once", apply_finished()
+           and open(APPLY_MARKER).read().count("\n") == marker_before + 1)
+check("its path is recorded", settings_section()[source_lib.SOURCE_LABEL_KEY],
+      os.path.join(PRESETS, "برلين.csv"))
+check("with the hash of what was written", settings_section()[source_lib.HASH_KEY],
+      source_lib.file_hash(CSV_PATH))
+offered = json.loads(get("/api/settings")[1])["prayer_source"]
+check("and reported as chosen, and as the one to restore",
+      (offered["chosen"], offered["restore"]), ("برلين.csv", "برلين.csv"))
+status, body = post("/api/prayer-source", {"name": "آخن.csv"})
+check("a file the app wrote is replaced without asking", (status, body.get("saved")), (200, True))
+apply_finished()
+status, body = post("/api/prayer-source", {"name": "bad.csv"})
+check("a file in no known format is refused in the picker's words",
+      (status, body.get("error")), (400, "صيغة الملف المختار غير معروفة أو غير صالحة"))
+check("and the record stays", os.path.basename(settings_section()[source_lib.SOURCE_LABEL_KEY]), "آخن.csv")
+for name in ("../../config/config.ini", CSV_PATH, "", "nothing.csv"):
+    check(f"no path is ever opened: {name!r}", post("/api/prayer-source", {"name": name})[0], 400)
+with open(CSV_PATH, "a", encoding="utf-8") as handle:
+    handle.write("\n")
+check_true("a hand edit since is asked about again",
+           post("/api/prayer-source", {"name": "برلين.csv"})[1].get("confirm"))
+status, body = post("/api/prayer-source", {"restore": True})
+check("restore copies the last file in again, over the edit",
+      (status, body.get("chosen")), (200, "آخن.csv"))
+apply_finished()
+check("the edit is gone", open(CSV_PATH, encoding="utf-8").read(),
+      open(os.path.join(PRESETS, "آخن.csv"), encoding="utf-8").read())
+
+# Reset: the shipped defaults, the prayer file kept, then setup in its own unit.
+post("/api/settings", {"duha_time": 90})
+apply_finished()
+recorded = settings_section()[source_lib.SOURCE_LABEL_KEY]
+status, body = post("/api/reset", {})
+check("reset answers at once, setup started", (status, body), (200, {"reset": True, "setup": True}))
+want = settings_defaults.reset_values({}, os.path.join(SCHEDULER, "config", "default-config.ini"))
+after = settings_section()
+settings_only = {k: v for k, v in want.items() if not k.endswith("_audio_checked")}
+check("every default is back", {k: after.get(k) for k in settings_only}, settings_only)
+check("the prayer file's record is kept", after[source_lib.SOURCE_LABEL_KEY], recorded)
+check("an event's files are those the defaults name, or all of them",
+      after["quran_audio_checked"], "one.mp3,two.mp3")
+check_true("setup runs in a unit of its own, told to skip its update check and to apply",
+           "SCHEDULER_INIT_NO_UPDATE_CHECK=1 SCHEDULER_INIT_APPLY_SETTINGS=1 | /bin/bash"
+           in calls(web.RESET_UNIT))
+check("and is reported running", json.loads(get("/api/reset")[1])["running"], True)
+check_true("until it ends", wait_for(lambda: not json.loads(get("/api/reset")[1])["running"]))
+check("init.sh ran, with both", open(os.path.join(ROOT, "init-ran")).read(), "11\n")
+
+# Updates.
+info = json.loads(get("/api/update")[1])
+check("the status is check_updates.sh's", info["status"]["installed"], "1.5.5")
+check("the daily check's time, as the touch screen prints it",
+      info["check_time"], api.minutes_to_clock(120))
+check("nothing running", info["running"], False)
+check("a version that was never listed is refused",
+      post("/api/update", {"action": "target", "version": "1.5.6"})[0], 400)
+first = json.loads(get("/api/update/versions")[1])
+check_true("the list is fetched in the background", first["state"] in ("fetching", "ok"))
+check_true("and arrives", wait_for(lambda: json.loads(get("/api/update/versions")[1])["state"] == "ok"))
+versions = json.loads(get("/api/update/versions")[1])
+check("newest first", versions["versions"], ["1.5.6", "1.5.5", "1.5.4", "1.5.3"])
+check("with the approved one", versions["latest"], "1.5.6")
+for bad in ("1.5.6; rm -rf /", "--rollback", "9.9.9"):
+    check(f"not a listed version: {bad!r}",
+          post("/api/update", {"action": "target", "version": bad})[0], 400)
+check("an unknown action is refused", post("/api/update", {"action": "reboot"})[0], 400)
+
+status, body = post("/api/update", {"action": "target", "version": "1.5.3"})
+check("anything but the approved one is asked about, as it holds the device",
+      (status, body.get("confirm")), (200, updates_lib.hold_question("1.5.3")))
+check("and nothing has run", os.path.exists(os.path.join(ROOT, "update-ran")), False)
+status, body = post("/api/update", {"action": "target", "version": "1.5.3", "confirmed": True})
+check("yes starts it", (status, body), (200, {"started": True}))
+check_true("the daily check is turned off first",
+           "ENABLED=false" in open(os.path.join(SCHEDULER, "config", "update.conf")).read())
+check_true("in a unit of its own, saying it came from the website",
+           calls(web.UPDATE_UNIT).rstrip().endswith("check_updates.sh --remote --target 1.5.3"))
+check("one at a time", post("/api/update", {"action": "now"})[0], 409)
+check_true("reported running", json.loads(get("/api/update")[1])["running"])
+check_true("until it ends", wait_for(lambda: not json.loads(get("/api/update")[1])["running"]))
+check("and its result is the one the page reports",
+      json.loads(get("/api/update")[1])["status"]["last_result"], "updated")
+
+status, body = post("/api/update", {"action": "rollback", "version": "1.5.4"})
+check("the kept backup is a restore, not a download - auto is already off, so no question",
+      (status, body), (200, {"started": True}))
+wait_for(lambda: not json.loads(get("/api/update")[1])["running"])
+check("--rollback", open(os.path.join(ROOT, "update-ran")).read().splitlines()[-1],
+      "--remote --rollback")
+
+status, body = post("/api/update/auto", {"enabled": True})
+check("turning the daily check on asks when it would move the device",
+      body.get("confirm"), updates_lib.enable_question("1.5.5", "1.5.6"))
+check_true("and changes nothing until yes",
+           "ENABLED=false" in open(os.path.join(SCHEDULER, "config", "update.conf")).read())
+status, body = post("/api/update/auto", {"enabled": True, "confirmed": True})
+check("yes turns it on and moves it", body, {"saved": True, "started": True})
+conf = open(os.path.join(SCHEDULER, "config", "update.conf")).read()
+check_true("ENABLED=true, the PIN cleared", "ENABLED=true" in conf and "PIN=\n" in conf)
+wait_for(lambda: not json.loads(get("/api/update")[1])["running"])
+check("to the approved version", open(os.path.join(ROOT, "update-ran")).read().splitlines()[-1],
+      "--remote --now")
+check("off is off, nothing run", post("/api/update/auto", {"enabled": False})[1],
+      {"saved": True, "started": False})
+check_true("written", "ENABLED=false" in open(os.path.join(SCHEDULER, "config", "update.conf")).read())
+check("a body that is not a switch is refused", post("/api/update/auto", {"enabled": "yes"})[0], 400)
+
+# With nobody logged in there is no user systemd to start a job in.
+open(os.path.join(ROOT, "no-user-systemd"), "w").close()
+status, body = post("/api/update", {"action": "now"})
+check("an update says to use the screen instead",
+      (status, body.get("error")), (409, "تعذّر بدء التحديث من هنا، استخدم شاشة الجهاز."))
+status, body = post("/api/reset", {})
+check("a reset still resets, and rebuilds the schedule itself", (status, body),
+      (200, {"reset": True, "setup": False}))
+check_true("by applying", apply_finished())
+os.remove(os.path.join(ROOT, "no-user-systemd"))
+
+for path in ("/api/prayer-source", "/api/reset", "/api/update", "/api/update/versions",
+             "/api/update/auto"):
+    check_true(f"the handed-out app may call {path}", path in web.PUBLIC_APP_PATHS)
+check("a stranger's page may not reset the device",
+      post("/api/reset", {}, origin="http://evil.example")[0], 403)
+for needle in ("/api/prayer-source", "/api/reset", "/api/update/auto", "/api/update/versions",
+               "استعادة مواقيت المدينة",
+               "إعادة ضبط الإعدادات", "تحديث تلقائي يومي", "الرجوع إلى إصدار سابق:"):
+    check_true(f"the page offers {needle}", needle in settings_html)
+
+with open(INI, "w", encoding="utf-8") as handle:
+    handle.write(INI_BEFORE)
+with open(CSV_PATH, "w", encoding="utf-8") as handle:
+    handle.write(CSV_BEFORE)
+
+print("20e. a recitation is uploaded into the folder chosen for it, from either screen")
+from shared import audio_upload  # noqa: E402
+
+MP3 = b"ID3\x04\x00" + b"\x00" * 2000
+QURAN_DIR = os.path.join(SCHEDULER, "audio", "quran")
+
+
+def upload(folder, name, body, replace=False, origin=None, length=None):
+    query = urllib.parse.urlencode({"folder": folder, "name": name,
+                                    "replace": "1" if replace else "0"})
+    headers = {"Content-Type": "application/octet-stream"}
+    if origin:
+        headers["Origin"] = origin
+    request = urllib.request.Request(f"{BASE}/api/audio?{query}", data=body,
+                                     headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read() or b"{}")
+
+
+payload = json.loads(get("/api/settings")[1])
+check("every event folder the device has is offered, in the screens' order",
+      [folder for folder, _ in payload["audio_folders"]], list(audio_upload.FOLDER_LABELS))
+check("each under its event's name", dict(payload["audio_folders"])["shorooq"], "الشروق")
+check("a new name asks nothing", post("/api/audio/check", {"folder": "quran",
+                                                           "name": "سورة-يس.mp3"}), (200, {}))
+status, body = upload("quran", "سورة-يس.mp3", MP3)
+check("it is saved", (status, body["saved"], body["name"]), (200, True, "سورة-يس.mp3"))
+check("whole", open(os.path.join(QURAN_DIR, "سورة-يس.mp3"), "rb").read(), MP3)
+check("and the answer lists it with the rest", body["available"],
+      ["one.mp3", "two.mp3", "سورة-يس.mp3"])
+check_true("unticked: a new file plays only once it is chosen and saved",
+           "سورة-يس.mp3" not in json.loads(get("/api/settings")[1])
+           ["audio"]["quran_audio_checked"]["checked"])
+check("nothing half-written is left beside it",
+      [n for n in os.listdir(QURAN_DIR) if n.startswith(".")], [])
+status, body = post("/api/audio/check", {"folder": "quran", "name": "سورة-يس.mp3"})
+check_true("a name already there is asked about first",
+           status == 200 and "هل تريد استبداله" in body.get("confirm", "")
+           and "القرآن اليومي" in body["confirm"])
+check("and refused if sent without the answer", upload("quran", "سورة-يس.mp3", MP3)[0], 400)
+check("replaced with it", upload("quran", "سورة-يس.mp3", MP3 + b"x", replace=True)[0], 200)
+check("by the new file", os.path.getsize(os.path.join(QURAN_DIR, "سورة-يس.mp3")), len(MP3) + 1)
+
+for label, folder, name, body, message in (
+        ("a folder that is not an event's", "../config", "x.mp3", MP3, "المجلد المختار غير موجود"),
+        ("a name that climbs out", "quran", "../x.mp3", MP3, "اسم الملف غير صالح"),
+        ("a hidden name", "quran", ".x.mp3", MP3, "اسم الملف غير صالح"),
+        ("anything but mp3", "quran", "x.wav", MP3, "يُقبل ملف صوتي بصيغة MP3 فقط"),
+        ("a comma, which config.ini would split", "quran", "a,b.mp3", MP3,
+         "اسم الملف يجب ألا يحتوي على فاصلة «,» — غيّر اسمه ثم أعد المحاولة"),
+        ("a file that is not audio", "quran", "fake.mp3", b"<html>" * 50,
+         "الملف المختار ليس ملفًا صوتيًا بصيغة MP3"),
+        ("an empty file", "quran", "empty.mp3", b"", "الملف فارغ")):
+    status, answer = upload(folder, name, body)
+    check(f"{label} is refused", (status, answer.get("error")), (400, message))
+check("and leaves nothing behind", sorted(os.listdir(QURAN_DIR)),
+      ["one.mp3", "two.mp3", "سورة-يس.mp3"])
+check("the check refuses the same", post("/api/audio/check", {"folder": "quran",
+                                                              "name": "a,b.mp3"})[0], 400)
+check("an MPEG frame with no tag is audio too", audio_upload.looks_like_mp3(b"\xff\xfb\x90"),
+      True)
+
+original_free = audio_upload.FREE_MARGIN_BYTES
+audio_upload.FREE_MARGIN_BYTES = 1 << 60
+check("a card without room for it is refused before anything is written",
+      upload("quran", "big.mp3", MP3)[1].get("error"),
+      "لا توجد مساحة كافية على بطاقة الذاكرة لهذا الملف")
+audio_upload.FREE_MARGIN_BYTES = original_free
+
+status, answer = upload("fajr", "دعاء.mp3", MP3, origin=APP_ORIGIN)
+check("the handed-out app may upload", status, 200)
+check("a stranger's page may not",
+      upload("fajr", "x.mp3", MP3, origin="http://evil.example")[0], 403)
+status, _, headers = raw("OPTIONS", "/api/audio", APP_ORIGIN)
+check("its preflight is answered", status, 204)
+for path in ("/api/audio", "/api/audio/check"):
+    check_true(f"the handed-out app may call {path}", path in web.PUBLIC_APP_PATHS)
+
+copied = os.path.join(ROOT, "usb-recitation.mp3")
+with open(copied, "wb") as handle:
+    handle.write(MP3)
+check("the touch screen copies from the device the same way",
+      audio_upload.copy(copied, audio_upload.target(SCHEDULER, "duha", "usb-recitation.mp3")),
+      "usb-recitation.mp3")
+check_true("and it is there", os.path.isfile(os.path.join(SCHEDULER, "audio", "duha",
+                                                          "usb-recitation.mp3")))
+gui = open(os.path.join(APPLICATIONS, "desktop", "scheduler_settings_gui", "main.py"),
+           encoding="utf-8").read()
+check_true("the Settings app offers it beside the internet warning",
+           "main_layout.addWidget(self.build_internet_warning_section())\n"
+           "        main_layout.addWidget(self.build_audio_upload_section())" in gui)
+check_true("with a picker for a file on the device", "QFileDialog.getOpenFileName(" in gui
+           and "audio_upload.copy(" in gui)
+for needle in ("إدارة الملفات الصوتية", "رفع ملف", "حذف ملفات", "/api/audio/check",
+               'type: "file"', "timeoutMs"):
+    check_true(f"the page offers {needle}", needle in settings_html)
+check_true("the app waits as long as the upload takes, not the usual ten seconds",
+           "timeoutMs || DEVICE_CHECK_MS" in open(os.path.join(WEB_UI, "site", "app.js"),
+                                                  encoding="utf-8").read())
+for folder, name in (("fajr", "دعاء.mp3"), ("duha", "usb-recitation.mp3")):
+    os.remove(os.path.join(SCHEDULER, "audio", folder, name))
+
+print("20e2. recitations are deleted from a folder, asked about first, and unticked")
+DELETE_INI_BEFORE = open(INI, encoding="utf-8").read()
+
+
+def ini_value(key):
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(INI, encoding="utf-8")
+    return parser["Settings"].get(key)
+
+
+def set_ini(**values):
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(INI, encoding="utf-8")
+    for key, value in values.items():
+        parser["Settings"][key] = value
+    with open(INI, "w", encoding="utf-8") as handle:
+        parser.write(handle)
+
+
+set_ini(quran_audio_checked="one.mp3,سورة-يس.mp3", enable_listen_to_quran="True")
+status, body = post("/api/audio/delete", {"folder": "quran", "names": ["سورة-يس.mp3"]})
+check_true("the files are named in the question, and nothing is deleted yet",
+           status == 200 and "سورة-يس.mp3" in body.get("confirm", "")
+           and "القرآن اليومي" in body["confirm"] and "لا يمكن التراجع" in body["confirm"]
+           and os.path.isfile(os.path.join(QURAN_DIR, "سورة-يس.mp3")))
+check_true("a ticked one is said to leave the list",
+           "ستُزال من قائمة المجلد" in body["confirm"] and "فسيتم إيقافه" not in body["confirm"])
+status, body = post("/api/audio/delete", {"folder": "quran", "names": ["سورة-يس.mp3"],
+                                          "confirmed": True})
+check("deleted", (status, body.get("deleted"), body.get("switched_off")),
+      (200, ["سورة-يس.mp3"], ""))
+check("gone from the folder and from the answer",
+      (os.path.exists(os.path.join(QURAN_DIR, "سورة-يس.mp3")), body["available"]),
+      (False, ["one.mp3", "two.mp3"]))
+check("unticked in config.ini, the rest kept", ini_value("quran_audio_checked"), "one.mp3")
+check("and the event stays on", ini_value("enable_listen_to_quran"), "True")
+
+status, body = post("/api/audio/delete", {"folder": "quran", "names": ["one.mp3"]})
+check_true("deleting the last ticked file says the event will stop",
+           "فسيتم إيقافه" in body.get("confirm", ""))
+for name in ("one.mp3", "two.mp3"):
+    shutil.copy(os.path.join(QURAN_DIR, name), os.path.join(ROOT, "kept-" + name))
+status, body = post("/api/audio/delete", {"folder": "quran", "names": ["one.mp3", "two.mp3"],
+                                          "confirmed": True})
+check("several at once", (status, sorted(body["deleted"]), body["available"]),
+      (200, ["one.mp3", "two.mp3"], []))
+check("the event left with nothing ticked is switched off",
+      (body["switched_off"], ini_value("enable_listen_to_quran"), ini_value("quran_audio_checked")),
+      ("enable_listen_to_quran", "False", ""))
+check_true("and the schedule rebuilt for it", apply_finished())
+for name in ("one.mp3", "two.mp3"):
+    shutil.move(os.path.join(ROOT, "kept-" + name), os.path.join(QURAN_DIR, name))
+
+for label, payload, message in (
+        ("nothing chosen", {"folder": "quran", "names": []}, "لم يتم تحديد أي ملف للحذف"),
+        ("a file that is not there", {"folder": "quran", "names": ["x.mp3"]},
+         "الملف غير موجود: ⁨x.mp3⁩"),
+        ("a folder that is not an event's", {"folder": "../config", "names": ["config.ini"]},
+         "المجلد المختار غير موجود"),
+        ("a name that climbs out", {"folder": "quran", "names": ["../fajr/x.mp3"]},
+         "اسم الملف غير صالح"),
+        ("anything but mp3", {"folder": "quran", "names": ["config.ini"]},
+         "يُقبل ملف صوتي بصيغة MP3 فقط")):
+    status, answer = post("/api/audio/delete", {**payload, "confirmed": True})
+    check(f"{label} is refused", (status, answer.get("error")), (400, message))
+check("one bad name deletes none of the others",
+      post("/api/audio/delete", {"folder": "quran", "names": ["one.mp3", "x.mp3"],
+                                 "confirmed": True})[0], 400)
+check_true("and they are there", os.path.isfile(os.path.join(QURAN_DIR, "one.mp3")))
+check("a stranger's page may not delete",
+      post("/api/audio/delete", {"folder": "quran", "names": ["one.mp3"], "confirmed": True},
+           origin="http://evil.example")[0], 403)
+check_true("the handed-out app may", "/api/audio/delete" in web.PUBLIC_APP_PATHS)
+check_true("the Settings app deletes through the same code",
+           "audio_upload.delete_question(" in gui and "audio_upload.delete(" in gui
+           and "إدارة الملفات الصوتية" in gui and "حذف الملفات المحددة" in gui)
+with open(INI, "w", encoding="utf-8") as handle:
+    handle.write(DELETE_INI_BEFORE)
+
+print("20f. the clock's own time zone is changed from either screen, and the device reboots")
+SUDO_CALLS = os.path.join(ROOT, "sudo-calls")
+
+
+def sudo_calls():
+    try:
+        return open(SUDO_CALLS, encoding="utf-8").read().splitlines()
+    except OSError:
+        return []
+
+
+check("the page is told the clock's zone", json.loads(get("/api/settings")[1])["os_timezone"],
+      "Europe/Berlin")
+check_true("and names it in Arabic from the same table, not by its id",
+           "${zoneName(state.os_timezone)}" in settings_html
+           and "ltr(now)" not in settings_html)
+status, body = post("/api/os-timezone", {"zone": "Asia/Damascus"})
+check_true("a new zone is asked about first, naming the country and the reboot",
+           status == 200 and "سوريا" in body.get("confirm", "")
+           and "يُعاد تشغيل الجهاز" in body["confirm"])
+check("and nothing is changed before the answer", sudo_calls(), [])
+open(os.path.join(ROOT, "applied-tz"), "w").close()
+status, body = post("/api/os-timezone", {"zone": "Asia/Damascus", "confirmed": True})
+check("yes changes it", (status, body), (200, {"rebooting": True, "zone": "Asia/Damascus"}))
+check("after rebuilding the schedule for the new zone's daylight saving",
+      open(os.path.join(ROOT, "applied-tz")).read(), "Asia/Damascus\n")
+check("through the root helper, which reboots", sudo_calls(),
+      ["-n /usr/local/sbin/scheduler-apply-system --timezone Asia/Damascus"])
+for label, zone, message in (
+        ("a zone not in the table", "Mars/Olympus", "المنطقة الزمنية غير معروفة"),
+        ("something that is not a zone", "../../etc/passwd", "المنطقة الزمنية غير معروفة"),
+        ("the zone it is already on", "Europe/Berlin", "ساعة الجهاز على هذه المنطقة الزمنية أصلًا")):
+    status, body = post("/api/os-timezone", {"zone": zone, "confirmed": True})
+    check(f"{label} is refused", (status, body.get("error")), (400, message))
+check("and the helper is not asked", len(sudo_calls()), 1)
+
+# The new country's city files, offered with the move.
+with open(CSV_PATH, "w", encoding="utf-8") as handle:
+    handle.write(open(os.path.join(PRESETS, "برلين.csv"), encoding="utf-8").read())
+api.choose_prayer_source(INI, SCHEDULER, DESKTOP, "برلين.csv", confirmed=True)
+csv_berlin, ini_berlin = open(CSV_PATH, encoding="utf-8").read(), open(INI, encoding="utf-8").read()
+status, body = post("/api/os-timezone", {"zone": "Asia/Damascus"})
+check("a move to Syria offers Syria's city files", body.get("prayer_files"), ["دمشق.csv"])
+check_true("and the question says what the file replaces, without the reminder",
+           source_lib.REFERENCE_NAME in body["confirm"] and "تذكّر" not in body["confirm"])
+status, body = post("/api/os-timezone", {"zone": "Asia/Damascus", "confirmed": True,
+                                         "prayer_file": "دمشق.csv"})
+check("yes with Damascus's file", status, 200)
+check("copies it into the Desktop file", open(CSV_PATH, encoding="utf-8").read(), DAMASCUS_CSV)
+check("and records it", os.path.basename(settings_section()[source_lib.SOURCE_LABEL_KEY]),
+      "دمشق.csv")
+check("before the schedule is rebuilt for the new zone",
+      open(os.path.join(ROOT, "applied-tz")).read().splitlines()[-1], "Asia/Damascus")
+with open(OS_ZONE, "w", encoding="utf-8") as handle:
+    handle.write("Asia/Damascus\n")
+status, body = post("/api/os-timezone", {"zone": "Europe/Berlin"})
+check("back to Germany: both German cities, exact zone first",
+      sorted(body.get("prayer_files")), ["آخن.csv", "برلين.csv"])
+with open(OS_ZONE, "w", encoding="utf-8") as handle:
+    handle.write("Europe/Berlin\n")
+with open(CSV_PATH, "w", encoding="utf-8") as handle:
+    handle.write(csv_berlin)
+with open(INI, "w", encoding="utf-8") as handle:
+    handle.write(ini_berlin)
+check("a file already of the new country asks nothing more",
+      post("/api/os-timezone", {"zone": "Europe/Vienna"})[1].get("prayer_files"), [])
+check("a country with no city file falls back to the reminder",
+      "تذكّر" in post("/api/os-timezone", {"zone": "Asia/Riyadh"})[1]["confirm"], True)
+status, body = post("/api/os-timezone", {"zone": "Asia/Damascus", "confirmed": True,
+                                         "prayer_file": "برلين.csv"})
+check("a file of another country is refused",
+      (status, body.get("error")), (500, "ملف المواقيت المختار ليس من مدن هذه المنطقة"))
+check("keeping the file is a plain change",
+      post("/api/os-timezone", {"zone": "Asia/Damascus", "confirmed": True,
+                                "prayer_file": ""})[0], 200)
+check("and leaves it", open(CSV_PATH, encoding="utf-8").read(), csv_berlin)
+open(os.path.join(ROOT, "sudo-fails"), "w").close()
+status, body = post("/api/os-timezone", {"zone": "Asia/Damascus", "confirmed": True,
+                                         "prayer_file": "دمشق.csv"})
+check_true("a helper that refuses is reported, not taken for a reboot",
+           status == 500 and "تعذّر تغيير المنطقة الزمنية" in body.get("error", ""))
+check("and the prayer file it copied in is put back", open(CSV_PATH, encoding="utf-8").read(),
+      csv_berlin)
+check("with its record", open(INI, encoding="utf-8").read(), ini_berlin)
+check("and the schedule is rebuilt again for the zone the clock is still on",
+      open(os.path.join(ROOT, "applied-tz")).read().splitlines()[-2:], ["Asia/Damascus", ""])
+os.remove(os.path.join(ROOT, "sudo-fails"))
+check("a stranger's page may not change it",
+      post("/api/os-timezone", {"zone": "Asia/Damascus", "confirmed": True},
+           origin="http://evil.example")[0], 403)
+check_true("the handed-out app may", "/api/os-timezone" in web.PUBLIC_APP_PATHS)
+for needle in ("المنطقة الزمنية للجهاز", "/api/os-timezone", "os_country",
+               "تغيير المنطقة الزمنية وإعادة التشغيل"):
+    check_true(f"the page offers {needle}", needle in settings_html)
+check_true("the Settings app offers it in place of the daylight-saving choice",
+           "main_layout.addWidget(self.build_os_timezone_section())" in gui
+           and "build_daylight_saving_section" not in gui
+           and "os_timezone.change(self.zone, TIMEZONE_COUNTRIES, MAIN_DIR, DESKTOP_DIR, self.preset)" in gui)
+check_true("and the page has no daylight-saving choice left",
+           "enable_daylight_saving" not in settings_html and "dst_country" not in settings_html)
 
 print("21. a request for nothing in particular is a 404, not a crash")
 for path in ("/nope", "/api/nope", "/api/day/extra"):

@@ -294,6 +294,17 @@ w.refresh_update_status()
 # deliberate choice rather than a stray tap on an already-loaded version.
 chk("nothing is chosen to begin with", w.update_rollback_combo.currentData(), "")
 chk("and the button says so", w.update_rollback_btn.text(), "اختر إصدارًا للرجوع إليه")
+chk("still red and tappable, as on the website", w.update_rollback_btn.isEnabled(), True)
+rollback_errors = []
+real_error = m.arabic_error
+m.arabic_error = lambda parent, title, text: rollback_errors.append(title)
+real_start = w.start_update
+w.start_update = lambda *a: rollback_errors.append("started")
+w.run_update_rollback()
+m.arabic_error = real_error
+w.start_update = real_start
+chk("a tap with nothing chosen says to choose, and starts nothing",
+    rollback_errors, ["لم يتم اختيار إصدار"])
 chk("but the backup is the first real entry", w.update_rollback_combo.itemData(1), "1.0.0")
 chk("marked as the local copy, in quotes",
     f'"{m.ROLLBACK_LOCAL_LABEL}"' in w.update_rollback_combo.itemText(1), True)
@@ -348,5 +359,86 @@ chk("the placeholder is refused", seen and seen[-1][0], "error")
 chk("and no run was started", len(started), 2)
 
 w.start_update = real_start
+
+print("11. the clock's own zone: country then city, asked about, then the helper reboots")
+changed = []
+real_change = m.os_timezone.change
+m.os_timezone.change = (lambda zone, table, scheduler_dir, desktop_dir, preset:
+                        changed.append((zone, scheduler_dir, preset)))
+offers = []
+offer_answer = [None]
+real_ask = w.ask_prayer_file
+w.ask_prayer_file = lambda question, offered: offers.append((question, offered)) or offer_answer[0]
+def change_and_wait():
+    w.change_os_timezone()
+    worker = getattr(w, "zone_worker", None)
+    if worker is not None:
+        worker.wait()
+        app.processEvents()
+        w.zone_worker = None
+syria = w.os_country_combo.findText("سوريا")
+w.os_country_combo.setCurrentIndex(syria)
+chk("a one-zone country needs no city", w.os_city_combo.isVisibleTo(w), False)
+chk("and is its zone", w.os_city_combo.currentData(), "Asia/Damascus")
+w.config["Settings"][m.PRAYER_SOURCE_LABEL_KEY] = os.path.join(m.PRAYERS_CONFIG_DIR, "برلين.csv")
+seen.clear()
+change_and_wait()
+chk("a move to Syria asks with Syria's city files in a list",
+    [(("يُعاد تشغيل الجهاز" in q), o) for q, o in offers], [(True, ["دمشق.csv"])])
+chk("and a no changes nothing", changed, [])
+offer_answer[0] = "دمشق.csv"
+change_and_wait()
+chk("choosing Damascus's file changes the zone with it, off the screen's thread",
+    changed, [("Asia/Damascus", m.MAIN_DIR, "دمشق.csv")])
+chk("the busy box is gone", w.zone_busy.isVisible(), False)
+chk("and says the device is rebooting", seen[-1][0:2], ("info", "تم تغيير المنطقة الزمنية"))
+offer_answer[0] = ""
+changed.clear()
+change_and_wait()
+chk("keeping the current file is a plain change", changed, [("Asia/Damascus", m.MAIN_DIR, None)])
+w.os_country_combo.setCurrentIndex(w.os_country_combo.findText("الولايات المتحدة"))
+chk("a country with several zones shows its cities", w.os_city_combo.isVisibleTo(w)
+    and w.os_city_combo.count() > 1, True)
+seen.clear()
+offers.clear()
+changed.clear()
+answer[0] = False
+change_and_wait()
+chk("with no city file for it, a plain question with the reminder",
+    ([k for k, _, t in seen if "تذكّر" in t], offers), (["confirm"], []))
+chk("and a no changes nothing", changed, [])
+answer[0] = True
+def refuse(zone, table, scheduler_dir, desktop_dir, preset):
+    raise m.os_timezone.ZoneError("تعذّر تغيير المنطقة الزمنية:\nunknown time zone")
+m.os_timezone.change = refuse
+change_and_wait()
+chk("a refusal is shown as one", seen[-1][0:2], ("error", "تعذّر تغيير المنطقة الزمنية"))
+saved_zone = w.os_timezone_current
+for zone, want in (("Europe/Berlin", "ألمانيا — برلين"), ("Asia/Damascus", "سوريا"),
+                   ("Nowhere/Atlantis", "\u2066Nowhere/Atlantis\u2069"), ("", "غير معروفة")):
+    w.os_timezone_current = zone
+    chk(f"the clock's zone {zone or '(none)'} is shown as {want}", w.os_timezone_label(), want)
+w.os_timezone_current = saved_zone
+w.os_timezone_current = w.os_city_combo.currentData()
+seen.clear()
+w.change_os_timezone()
+chk("the zone it is already on asks nothing", [k for k, _, _ in seen], ["info"])
+m.os_timezone.change = real_change
+w.ask_prayer_file = real_ask
+if os.environ.get("OFFER_SAMPLE"):
+    from PyQt5.QtCore import QTimer
+    def grab_and_close():
+        dialog = w.os_prayer_combo.window()
+        dialog.grab().save(os.environ["OFFER_SAMPLE"])
+        dialog.reject()
+    QTimer.singleShot(300, grab_and_close)
+    w.ask_prayer_file(m.os_timezone.question("Asia/Damascus", m.TIMEZONE_COUNTRIES,
+                                             ["دمشق.csv"]), ["دمشق.csv"])
+if os.environ.get("ZONE_SAMPLE"):
+    w.os_country_combo.setCurrentIndex(syria)
+    w.resize(800, 1200)
+    w.show()
+    app.processEvents()
+    w.os_country_combo.parentWidget().grab().save(os.environ["ZONE_SAMPLE"])
 
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))

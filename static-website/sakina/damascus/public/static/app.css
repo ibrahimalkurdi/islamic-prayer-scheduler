@@ -567,6 +567,10 @@ input[type="checkbox"] {
 
 .audio label { font-size: .95rem; margin: .3rem 0; }
 
+/* The parts of one fieldset: «رفع ملف» and «حذف ملفات» under «إدارة الملفات الصوتية». */
+.part { margin: .4rem 0 0; font-size: 1.05rem; color: var(--accent); }
+.part ~ .part { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .8rem; }
+
 button {
     font: inherit;
     font-size: 1.15rem;
@@ -584,6 +588,8 @@ button.ghost {
     background: transparent;
     color: var(--text);
 }
+
+button.danger { background: transparent; color: #f87171; border-color: #b3505f; }
 
 .bar {
     display: flex;
@@ -739,3 +745,12 @@ body.full .back-to-app {
         font-size: .95rem;
     }
 }
+
+/* The touch screen's other buttons: reset in its orange, going back a version in red,
+   updating in green - the colours of the Settings app's own. */
+button.warn { background: #FF9800; color: #1f1300; border-color: #EF6C00; }
+button.danger { background: #dc3545; color: #fff; border-color: #b02a37; }
+button.go { background: #198754; color: #fff; border-color: #146c43; }
+.note.warn { background: #3f3410; border-color: #D4A72C; }
+.held { color: #f87171; font-weight: bold; }
+.overlay p { white-space: pre-line; }
