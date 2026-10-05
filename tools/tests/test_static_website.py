@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The public city sites under static-website/sakina/.
+"""The public city sites under static-website/alsakina/.
 
 Each city is built from a prayer table plus a timezone, once per year, through the same
 prayer_dst the devices run. What this holds to account: every year gets its own clock
@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILDER = os.path.join(REPO, "tools", "build_static_site.py")
-SAKINA = os.path.join(REPO, "static-website", "sakina")
+SAKINA = os.path.join(REPO, "static-website", "alsakina")
 SAKINA_ICONS = os.path.join(SAKINA, "icons")
 DEVICE_ICON = os.path.join(REPO, "scheduler-official-touch-screen-with-raspberry-pi-4",
                            "config", "icons", "athan-app-icon-256.png")

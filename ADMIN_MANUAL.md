@@ -78,8 +78,8 @@ at it. Rolling the fleet back is the same edit in reverse.
 | `tools/tests/test_layout.py` | measures the pages in a real browser at phone sizes: nothing wider than the screen, and a whole day visible without scrolling |
 | `tools/build_static_site.py` | bakes the prayer pages into a directory a static host can serve (§18) |
 | `tools/tests/test_static_website.py` | the public city sites: each year's clock changes, the pages and the device app, New Year in the browser, the city folders (§18) |
-| `static-website/sakina/` | the public city sites and their builder (§18) |
-| `.github/workflows/sakina-static-website.yml` | rebuilds and commits the city sites (§18) |
+| `static-website/alsakina/` | the public city sites and their builder (§18) |
+| `.github/workflows/alsakina-static-website.yml` | rebuilds and commits the city sites (§18) |
 | `tools/build_manual_pdf.sh` | builds `USER_MANUAL_AR.pdf` from the `.md`: cover, index with page numbers, then the manual numbered from 1, and saves the cover's date and page to `applications/manual_cover/cover.json`. Run it after every edit to the manual and commit both. Each device then makes its own copy after the next update - `config/scripts/device_manual.sh` prints a cover with its own `<name>.local` and QR code in front of the shipped pages and writes `~/Desktop/دليل-المستخدم.pdf` - so `--device <name> <out.pdf>` is only needed for a device that is not updating |
 | `tools/tests/test_manual_pdf.sh` | builds the manual PDF into a temp file and checks the page numbering and that every index number matches the page its link opens |
 | `tools/tests/test_wallpaper.sh` | `set_wallpaper.sh` with a fake HOME and a stand-in pcmanfm: the desktop background becomes `config/wallpaper/sakina-wallpaper.jpg`, told to the running desktop over its socket or written to its config otherwise, once per picture so an owner's own choice stays until a release ships a new one |
@@ -1885,7 +1885,7 @@ device only hands out its address:
 
 - The device's landing page shows **ثبّت التطبيق على هاتفك** when `/api/device` reports a
   `public_site`. That comes from `web_ui/public_sites.json` - prayer table file name to
-  site, written by `static-website/sakina/build.py` - looked up by the file name in
+  site, written by `static-website/alsakina/build.py` - looked up by the file name in
   `config.ini`'s `prayer_csv_source_label`. A device on any other table shows no button.
 - The button opens `https://alsakina-<city>.pages.dev/d/<name>/`, `<name>` being the `.local`
   name the phone used (mDNS names can differ from `hostname`; ihms-lr's is).
@@ -1941,10 +1941,10 @@ device only hands out its address:
 
 Nothing to set up on Cloudflare for this: `_redirects` is a file in `public/`.
 
-### The public city sites — `static-website/sakina/`
+### The public city sites — `static-website/alsakina/`
 
 One site per city - the daily list, the countdown, and the app devices hand out - served by
-Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`static-website/sakina/icons/`) and the name
+Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`static-website/alsakina/icons/`) and the name
 «السكينة - <place>», e.g. «السكينة - برلين»:
 
 | city | address |
@@ -1955,7 +1955,7 @@ Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`st
 | `all` | `https://alsakina.pages.dev` — no city of its own, see below |
 
 ```
-static-website/sakina/
+static-website/alsakina/
   build.py                  builds every city, this year and next
   <city>/
     city.ini                the Arabic name (place; defaults to the table's file name),
@@ -1994,19 +1994,19 @@ shows a yellow line under the name linking straight back to it. Only the phone's
 changes; the device keeps its table. A device's own pages list no cities.
 
 **One site with no city in its name: `https://alsakina.pages.dev`.** For someone who wants
-one installed app and picks the city themselves. `static-website/sakina/all/site.ini`
+one installed app and picks the city themselves. `static-website/alsakina/all/site.ini`
 names the city it opens on (`default = berlin`); `build.py` builds that city's table a
 second time into `all/public/` under the plain name «السكينة» (manifest and iOS title) and
 links every city into it as above, so the list under the title holds them all and the
 choice stays on the phone. It is not a city: it has no `city.ini`, is not in
 `public_sites.json`, and no device hands out its app from it.
 
-**Nothing is built by hand.** `.github/workflows/sakina-static-website.yml` runs the tests,
+**Nothing is built by hand.** `.github/workflows/alsakina-static-website.yml` runs the tests,
 runs `build.py` and commits any change to `public/` on main:
 
 - on every push to main that touches what the build reads — the pages, `api.py`,
   `prayer_logic.py`, `prayer_dst.py`, the prayer tables, the icons and font, the builder
-  and `static-website/sakina/` itself
+  and `static-website/alsakina/` itself
 - every 1 December, so next year is already baked when it starts
 - by hand, from **Actions → Sakina static website → Run workflow**
 
@@ -2015,10 +2015,10 @@ After it commits, `git pull` before pushing again.
 **Adding a city:** a folder with a `city.ini` and a relative symlink to its table, then push:
 
 ```bash
-mkdir static-website/sakina/hamburg
+mkdir static-website/alsakina/hamburg
 ln -s "../../../scheduler-official-touch-screen-with-raspberry-pi-4/config/prayers-config/هامبورغ.csv" \
-      static-website/sakina/hamburg/prayer-times.csv
-printf '[city]\nplace = هامبورغ\ndaylight_saving = true\ntimezone = Europe/Berlin\n' > static-website/sakina/hamburg/city.ini
+      static-website/alsakina/hamburg/prayer-times.csv
+printf '[city]\nplace = هامبورغ\ndaylight_saving = true\ntimezone = Europe/Berlin\n' > static-website/alsakina/hamburg/city.ini
 printf 'هامبورغ.csv = Europe/Berlin\n' >> scheduler-official-touch-screen-with-raspberry-pi-4/config/prayers-config/zones.ini
 ```
 
@@ -2035,13 +2035,13 @@ repo, then:
 | production branch | `main` |
 | framework preset | None |
 | build command | *(empty)* |
-| build output directory | `static-website/sakina/<city>/public` |
-| build watch paths → include | `static-website/sakina/<city>/public/*` |
+| build output directory | `static-website/alsakina/<city>/public` |
+| build watch paths → include | `static-website/alsakina/<city>/public/*` |
 
 The watch path keeps a push that changes nothing of a city's site from redeploying it.
 
 For `https://alsakina.pages.dev` the same, with project name `alsakina`, output directory
-`static-website/sakina/all/public` and watch path `static-website/sakina/all/public/*`.
+`static-website/alsakina/all/public` and watch path `static-website/alsakina/all/public/*`.
 A `.pages.dev` name is global (`sakina` itself is someone else's); if a name is taken,
 Cloudflare gives the project a suffixed address instead - change `site_url` or `ALL_URL`
 in `build.py` to match.
@@ -2065,8 +2065,8 @@ an app already added to a phone from it keeps working only while it is served.
 | `tools/build_static_site.py` | the public build |
 | `tools/static_site_sw.js` | the offline copy's service worker, filled in by the build |
 | `applications/services/web_ui/public_sites.json` | which prayer table has which public site |
-| `static-website/sakina/build.py` | builds every city site |
-| `.github/workflows/sakina-static-website.yml` | rebuilds and commits them |
+| `static-website/alsakina/build.py` | builds every city site |
+| `.github/workflows/alsakina-static-website.yml` | rebuilds and commits them |
 | `tools/tests/test_static_website.py` | their tests |
 | `tools/tests/test_web_ui.py` | the tests |
 

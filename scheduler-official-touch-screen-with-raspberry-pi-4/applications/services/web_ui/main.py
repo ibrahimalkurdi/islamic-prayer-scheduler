@@ -92,7 +92,7 @@ FONTS = {
 APPLY_TIMEOUT_SECONDS = 300
 
 # The city sites on the public host, by the prayer table each is built from. Written by
-# static-website/sakina/build.py. A device whose table is one of these offers the app from
+# static-website/alsakina/build.py. A device whose table is one of these offers the app from
 # its city's site; any other device simply does not.
 PUBLIC_SITES = os.path.join(HERE, "public_sites.json")
 PRAYER_SOURCE_KEY = "prayer_csv_source_label"

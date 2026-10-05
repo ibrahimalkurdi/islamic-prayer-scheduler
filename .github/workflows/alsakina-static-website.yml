@@ -1,6 +1,6 @@
 name: Sakina static website
 
-# Rebuilds static-website/sakina/<city>/public/ and commits it to main. Cloudflare Pages
+# Rebuilds static-website/alsakina/<city>/public/ and commits it to main. Cloudflare Pages
 # serves each city's public/ as it stands, so this is the only place a site is built.
 #
 # Runs when anything the build reads changes, every 1 December so next year is baked
@@ -23,9 +23,9 @@ on:
       - "tools/tests/test_static_website.py"
       - "tools/tests/test_site_js.*"
       - "tools/tests/test_prayer_logic.py"
-      - "static-website/sakina/**"
-      - "!static-website/sakina/*/public/**"
-      - ".github/workflows/sakina-static-website.yml"
+      - "static-website/alsakina/**"
+      - "!static-website/alsakina/*/public/**"
+      - ".github/workflows/alsakina-static-website.yml"
   schedule:
     - cron: "0 3 1 12 *"   # 03:00 UTC on 1 December, every year
   workflow_dispatch:
@@ -34,7 +34,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: sakina-static-website
+  group: alsakina-static-website
   cancel-in-progress: false
 
 jobs:
@@ -58,17 +58,17 @@ jobs:
           python3 tools/tests/test_static_website.py
 
       - name: Build
-        run: python3 static-website/sakina/build.py
+        run: python3 static-website/alsakina/build.py
 
       - name: Commit
         run: |
-          git add static-website/sakina/*/public
+          git add static-website/alsakina/*/public
           if git diff --cached --quiet; then
             echo "The sites are already up to date."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "static website: rebuild sakina ($(date -u +%Y-%m-%d))"
+          git commit -m "static website: rebuild alsakina ($(date -u +%Y-%m-%d))"
           git pull --rebase origin main
           git push origin HEAD:main

@@ -130,7 +130,7 @@ try:
     listed = dict(zones["zones"])
     shipped = sorted(n for n in os.listdir(presets) if n.endswith(".csv"))
     chk("every city file that ships is in zones.ini", sorted(listed), shipped)
-    sites = os.path.join(REPO, "static-website", "sakina")
+    sites = os.path.join(REPO, "static-website", "alsakina")
     for city in sorted(os.listdir(sites)):
         ini = os.path.join(sites, city, "city.ini")
         if not os.path.isfile(ini):

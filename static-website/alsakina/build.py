@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build every city's site into <city>/public/.
 
-    static-website/sakina/build.py            this year and next
-    static-website/sakina/build.py --year 2027
+    static-website/alsakina/build.py            this year and next
+    static-website/alsakina/build.py --year 2027
 
 A city is a folder here holding city.ini and prayer-times.csv. city.ini's timezone is the
 clock the site tells the time in; daylight_saving says whether each year also gets that

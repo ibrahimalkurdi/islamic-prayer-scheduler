@@ -31,7 +31,7 @@ The output is two apps from the same pages:
                   (Cloudflare Pages and Netlify read it). It has its own manifest and
                   icon, so it installs as an app of its own beside the public one.
 
-Given the other cities' built sites (link_cities, which static-website/sakina/build.py
+Given the other cities' built sites (link_cities, which static-website/alsakina/build.py
 runs), a copy also carries their years, and its pages offer every city in place of its
 own - only what the phone shows, never what a device is set to.
 

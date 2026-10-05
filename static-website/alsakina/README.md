@@ -19,7 +19,7 @@ build.py                  builds every city, this year and next, copies every ci
                           between them, and writes the devices' web_ui/public_sites.json
 ```
 
-`public/` is rebuilt and committed by `.github/workflows/sakina-static-website.yml` on any
+`public/` is rebuilt and committed by `.github/workflows/alsakina-static-website.yml` on any
 push that changes the pages or anything the build reads, and every 1 December.
 
 Adding a city and setting up its Cloudflare project: `ADMIN_MANUAL.md` §18,
