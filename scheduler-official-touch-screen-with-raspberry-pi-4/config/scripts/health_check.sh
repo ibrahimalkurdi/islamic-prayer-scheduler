@@ -143,6 +143,16 @@ else
     fail "a Python file under applications/ does not compile"
 fi
 
+# 8. The clock module's battery, on devices fitted with one. A warning, never a failure:
+#    an empty coin cell is a part to replace, not a release to roll back.
+rtc_state="$(cd "$APP_DIR" && python3 -m shared.rtc_battery --no-clear 2>/dev/null)"
+case "$rtc_state" in
+    ok)    pass "clock battery: no power loss detected this boot" ;;
+    empty) echo "  WARN  clock battery is empty - the time was lost when the power went off; replace it" >&2 ;;
+    unknown) [[ $QUIET -eq 1 ]] || echo "  SKIP  clock battery (cannot read the clock module over i2c)" ;;
+    *)     [[ $QUIET -eq 1 ]] || echo "  SKIP  clock battery (no clock module fitted)" ;;
+esac
+
 if [[ $failures -eq 0 ]]; then
     [[ $QUIET -eq 1 ]] || echo "healthy"
     exit 0

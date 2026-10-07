@@ -38,6 +38,8 @@ from shared.wifi import WifiMonitor
 # by path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wifi_dialog import WifiDialog
+from rtc_battery_dialog import RtcBatteryDialog
+from shared import rtc_battery
 from shared.mute import (
     SCHEDULER_DIR, MUTE_FLAG_FILE, PLAYER_SCRIPT_FILE, MUTE_DURATION_MINUTES,
     AUDIO_SINK, AUDIO_MUTE_CMD, AUDIO_STATE_CMD, AUDIO_CMD_TIMEOUT,
@@ -1050,6 +1052,7 @@ class AdhanCounter(QWidget):
         # Opened after a while with no network at all, under the same switch as the banner.
         self.wifi = WifiMonitor()
         self.wifi_dialog = None
+        self.rtc_battery_dialog = None
 
         # Timer
         self.timer = QTimer()
@@ -1068,6 +1071,9 @@ class AdhanCounter(QWidget):
         QTimer.singleShot(SETTINGS_PREWARM_SECONDS * 1000, self.prewarm_settings)
         self.showFullScreen()
         self.update_countdown()
+        # With the countdown, not seconds after it: a notice that comes late is one the
+        # person has already looked away from.
+        self.check_rtc_battery()
 
     # -------------------------
     # View switching
@@ -1298,6 +1304,18 @@ class AdhanCounter(QWidget):
         elif visible and self.wifi.watch.connected():
             self.wifi_dialog.hide()
 
+    def check_rtc_battery(self):
+        """Once per start: «حسنًا» closes the notice for this run only, and the next
+        start of the app opens it again; «تم تبديل البطارية» ends it."""
+        if rtc_battery.battery_state() != rtc_battery.EMPTY:
+            return
+        if self.rtc_battery_dialog is None:
+            self.rtc_battery_dialog = RtcBatteryDialog(
+                self, on_replaced=rtc_battery.clear_pending)
+        self.rtc_battery_dialog.setGeometry(self.rect())
+        self.rtc_battery_dialog.show()
+        self.rtc_battery_dialog.raise_()
+
     def tick(self):
         self.sync_mute_state()
         # Nothing downstream caches the times - daily_times reads prayersByDate on
@@ -1489,6 +1507,8 @@ class AdhanCounter(QWidget):
         super().resizeEvent(event)
         if getattr(self, "wifi_dialog", None) is not None:
             self.wifi_dialog.setGeometry(self.rect())
+        if getattr(self, "rtc_battery_dialog", None) is not None:
+            self.rtc_battery_dialog.setGeometry(self.rect())
         if not getattr(self, "_ready", False) or getattr(self, "_refitting", False):
             return
         self._refitting = True

@@ -11,3 +11,5 @@ avahi-daemon
 # The device's own copy of the manual (config/scripts/device_manual.sh).
 qpdf
 python3-segno
+# Reads the clock module's battery flag (applications/shared/rtc_battery.py).
+i2c-tools
