@@ -4,7 +4,7 @@
 window.DATA = "/data/{year}.json";
 window.DEVICE = false;
 window.PLACE = "برلين";
-window.VERSION = "1.6.1";
+window.VERSION = "1.6.2";
 window.TIMEZONE = "Europe/Berlin";
 window.CITY = "berlin";
 window.CITIES = [
