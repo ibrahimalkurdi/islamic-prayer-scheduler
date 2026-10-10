@@ -318,14 +318,15 @@ fill it for you:
 1. Open the Scheduler Settings app. The **"ملف مواقيت الصلاة الحالي"** section shows the
    reference file, when it was last updated, and which source it came from.
 2. Tap **"تغيير ملف مواقيت الصلاة"** to pick a different source. The dropdown lists:
-   - files found on the Desktop — including any **Al Awail** export named `<city>-<year>.csv`
-     (e.g. `damascus-2026.csv`), which is converted automatically on selection;
+   - files found on the Desktop — including any **Al Awail** export (e.g. `damascus-2026.csv`)
+     or **Aladhan** calendar export (e.g. `lagos-2026.csv`) named `<city>-<year>.csv`,
+     which is converted automatically on selection;
    - or, via the browse toggle, the ready-made presets in `config/prayers-config/`.
 3. If the reference file is missing or invalid when the app starts, this picker appears
    first and must be completed before the settings screen opens.
 
 Picking a new source **overwrites** the reference file. If it may contain hand edits, the
-app asks for confirmation first. Raw Al Awail exports are archived to
+app asks for confirmation first. Raw Al Awail and Aladhan exports are archived to
 `config/prayers-config/raw-imports/` when imported.
 
 ## Sunrise (الشروق) notification

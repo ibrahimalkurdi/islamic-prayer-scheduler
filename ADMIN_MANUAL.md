@@ -1952,6 +1952,7 @@ Cloudflare Pages. Added to a phone's home screen it carries the Sakina icon (`st
 | `damascus` | `https://alsakina-damascus.pages.dev` |
 | `berlin` | `https://alsakina-berlin.pages.dev` |
 | `aachen` | `https://alsakina-aachen.pages.dev` |
+| `lagos` | `https://alsakina-lagos.pages.dev` |
 | `all` | `https://alsakina.pages.dev` — no city of its own, see below |
 
 ```
@@ -1974,8 +1975,8 @@ while the two disagree.
 baked separately through the same `prayer_dst.py` functions a device runs in January: the
 clock changes baked into the table are stripped and that year's real ones applied from
 tzdata for `timezone`, so a table carrying the wrong dates still produces the right site.
-With `false` the table is used as it stands. Berlin and Aachen are `true`; Damascus is
-`false`.
+With `false` the table is used as it stands. Berlin and Aachen are `true`; Damascus and
+Lagos are `false`.
 
 `timezone` is also the clock the site tells the time in, whatever `daylight_saving` says:
 the Damascus site opened on a phone in Germany highlights by Damascus time, not the phone's.

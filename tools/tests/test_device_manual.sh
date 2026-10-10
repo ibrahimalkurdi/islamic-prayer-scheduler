@@ -81,5 +81,17 @@ mv "$SCHED/applications/manual_cover/cover.json" "$WORK/"
 run louay > "$WORK/log" 2>&1
 chk "a tree without the cover data is skipped, exit 0" "$?" "0"
 
+echo "5. no keyring prompt on the screen"
+mv "$WORK/cover.json" "$SCHED/applications/manual_cover/"
+cat > "$WORK/fake-chromium" <<STUB
+#!/bin/bash
+echo "\$@" > "$WORK/chromium-args"
+STUB
+chmod +x "$WORK/fake-chromium"
+rm -f "$OUT"
+run louay CHROMIUM="$WORK/fake-chromium" > "$WORK/log" 2>&1
+chk "chromium keeps away from the desktop keyring" \
+    "$(grep -c -- "--password-store=basic" "$WORK/chromium-args")" "1"
+
 echo
 [ "$fail" -eq 0 ] && echo "all passed" || { echo "FAILED"; exit 1; }

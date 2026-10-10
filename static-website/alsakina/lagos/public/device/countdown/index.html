@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>الوقت المتبقي للصلاة</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="../icon-32.png" sizes="32x32">
+<link rel="icon" href="../icon-256.png" sizes="256x256">
+<link rel="apple-touch-icon" href="../icon-256.png">
+<link rel="manifest" href="../manifest.webmanifest">
+<meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-title" content="السكينة">
+</head>
+<body class="full">
+
+<main class="counter" id="counter">
+    <button class="corner mute-corner hidden" id="mute" type="button"
+            aria-label="كتم الصوت"></button>
+    <a class="corner back-corner" href="../" aria-label="اوقات الصلاة">→</a>
+
+    <div class="notice" id="notice"></div>
+    <div class="name" id="name"></div>
+    <div class="digits" id="digits">--:--</div>
+    <div class="mute-state" id="mute-state"></div>
+
+    <div class="note hidden speaker-note" id="speaker-note"></div>
+    <div class="note bad hidden error-line" id="error"></div>
+</main>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+/* Drawn rather than set as text. The touch screen uses the speaker codepoints U+1F50A and
+   U+1F507 from Noto Sans Symbols2, which is monochrome and takes the page colour; a
+   browser renders those same codepoints as colour emoji that ignore `color`, so they
+   could never go red when muted or follow the background. These take currentColor, which
+   is what the corner CSS relies on. */
+const SPEAKER_ON = `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 9v6h4l5 4V5L7 9H3z"/>
+    <path d="M15.5 8.5a5 5 0 0 1 0 7 1 1 0 0 0 1.4 1.4 7 7 0 0 0 0-9.9 1 1 0 0 0-1.4 1.4z"/>
+    <path d="M18.4 5.6a9 9 0 0 1 0 12.8 1 1 0 0 0 1.4 1.4 11 11 0 0 0 0-15.6 1 1 0 1 0-1.4 1.4z"/>
+</svg>`;
+const SPEAKER_OFF = `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 9v6h4l5 4V5L7 9H3z"/>
+    <path d="M16.3 9.3a1 1 0 0 1 1.4 0L19.5 11l1.8-1.8a1 1 0 1 1 1.4 1.4L20.9 12.4l1.8 1.8a1 1 0 0 1-1.4 1.4l-1.8-1.8-1.8 1.8a1 1 0 0 1-1.4-1.4l1.8-1.8-1.8-1.7a1 1 0 0 1 0-1.4z"/>
+</svg>`;
+
+let day = null;
+/* The instant the colour next changes. Until it arrives nothing is fetched - the page
+   only ticks its own digits - which is what keeps an open countdown free on the device. */
+let refreshAt = null;
+
+async function loadDay() {
+    const now = Site.now();
+    day = await Site.dayData(null);
+    refreshAt = null;
+
+    /* Between midnight and Fajr, on a static host: see Site.eveningBefore. */
+    if (!Site.runningPeriod(day, now)) {
+        const carried = await Site.eveningBefore(now);
+        if (carried) day = await Site.dayData(Site.isoDate(Site.parseLocal(carried.start)));
+    }
+}
+
+function nextBoundary(at) {
+    /* The earliest instant, across every period of the day, that is still ahead of us:
+       either a colour change inside a period or the start of the next one. */
+    let soonest = null;
+    for (const period of day.periods) {
+        const moments = period.spans.map((s) => Site.parseLocal(s.from));
+        moments.push(Site.parseLocal(period.start), Site.parseLocal(period.end));
+        for (const moment of moments) {
+            if (moment && moment > at && (!soonest || moment < soonest)) soonest = moment;
+        }
+    }
+    return soonest;
+}
+
+function tick() {
+    if (!day) return;
+    const now = Site.now();
+
+    if (refreshAt && now >= refreshAt) {
+        loadDay().then(paint).catch((e) => Site.fail(e.message));
+        return;
+    }
+    paint(now);
+}
+
+function paint(at) {
+    const now = at instanceof Date ? at : Site.now();
+    const counter = document.querySelector("#counter");
+    const period = Site.runningPeriod(day, now);
+
+    if (!period) {
+        /* loadDay already looked at the evening before, so reaching here means the data
+           really does not cover this moment - a date missing from the device's CSV, for
+           instance. Re-read once a minute rather than on every tick, so a page left open
+           through a gap does not hammer the device. */
+        document.querySelector("#digits").textContent = "--:--";
+        counter.style.backgroundColor = day.countdown.default;
+        counter.style.color = day.countdown.text;
+        document.querySelector("#name").textContent = "";
+        if (!refreshAt || now >= refreshAt) {
+            refreshAt = new Date(now.getTime() + 60000);
+            loadDay().catch(() => {});
+        }
+        return;
+    }
+
+    const end = Site.parseLocal(period.end);
+    const remaining = Math.max(0, Math.floor((end - now) / 1000));
+    const hours = Math.floor(remaining / 3600);
+    const minutes = Math.floor((remaining % 3600) / 60);
+    document.querySelector("#digits").textContent =
+        `${Site.pad(hours)}:${Site.pad(minutes)}`;
+    document.querySelector("#name").textContent = period.display;
+
+    const span = Site.spanAt(period, now);
+    const color = span ? span.color : "beige";
+    /* The counter has no beige: period_state returns it for the ordinary middle of a
+       period, and there the app paints its neutral grey. Text is white throughout, as
+       paint_counter_page styles the page's labels. */
+    counter.style.backgroundColor = day.countdown.fill[color] || day.countdown.default;
+    counter.style.color = day.countdown.text;
+    document.querySelector("#notice").textContent =
+        span && span.makrooh ? day.makrooh_notice : "";
+
+    if (!refreshAt) refreshAt = nextBoundary(now);
+}
+
+/* ---- mute ---- */
+async function paintMute() {
+    if (!window.DEVICE) return;
+    showMute(await Site.json("/api/mute"));
+}
+
+function showMute(state) {
+    const button = document.querySelector("#mute");
+
+    button.innerHTML = state.muted ? SPEAKER_OFF : SPEAKER_ON;
+    button.classList.toggle("muted", !!state.muted);
+    button.setAttribute("aria-label", state.muted ? "إلغاء كتم الصوت" : "كتم الصوت");
+    button.classList.remove("hidden");
+
+    let label = "";
+    if (state.muted && state.flag_until) {
+        label = `الصوت مكتوم حتى ${Site.ltr(Site.clock12(Site.parseLocal(state.flag_until)))}`;
+    } else if (state.muted) {
+        label = "الصوت مكتوم";
+    }
+    if (!state.sink_reachable) {
+        label += (label ? " — " : "") + "تعذّر الوصول إلى مكبر الصوت";
+        /* The reason belongs where whoever can act on it will see it. It is one short
+           line from wpctl, in English, so it goes in the title rather than on the page -
+           and the same line is in logs/web_ui.log. */
+        document.querySelector("#mute-state").title = state.reason || "";
+    } else {
+        document.querySelector("#mute-state").title = "";
+    }
+    document.querySelector("#mute-state").textContent = label;
+}
+
+if (window.DEVICE) {
+    document.querySelector("#mute").addEventListener("click", async () => {
+        const button = document.querySelector("#mute");
+        button.disabled = true;
+        try {
+            await Site.json("/api/mute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+            });
+            await paintMute();
+        } catch (e) {
+            Site.fail(e.message);
+        } finally {
+            button.disabled = false;
+        }
+    });
+    paintMute().catch(() => {});
+    /* The touch screen and a shell can both clear the mute, so the button follows the
+       device rather than its own last tap. Slower than the countdown because it costs a
+       request; the touch screen polls it every two seconds for the same reason. */
+    setInterval(() => paintMute().catch(() => {}), 15000);
+} else if (Site.ownerHost()) {
+    /* The app a device hands out, on the public site. Chrome mutes and unmutes the
+       device from here - Local Network Access, and main.py lets this site call
+       /api/mute. Safari cannot reach an http:// device from an https:// page at all, so
+       there the speaker opens the device's own countdown, where the mute works - with
+       no check first, since Safari could not make one. */
+    const host = Site.ownerHost();
+    const target = Site.devicePage(host, "/countdown/");
+    const away = "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح.";
+    const say = Site.noteSayer("#speaker-note", "speaker-note");
+    const button = document.querySelector("#mute");
+    button.innerHTML = SPEAKER_ON;
+    button.setAttribute("aria-label", "كتم الصوت");
+    button.classList.remove("hidden");
+
+    if (Site.canAskDevice()) {
+        let polling = null;
+        const follow = () => {
+            if (polling) return;
+            polling = setInterval(() => {
+                Site.deviceJson(host, "/api/mute").then(showMute).catch(() => {});
+            }, 15000);
+        };
+        Site.localNetworkAllowed().then((allowed) => {
+            if (!allowed) return;
+            Site.deviceJson(host, "/api/mute").then(showMute).catch(() => {});
+            follow();
+        });
+        button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+                showMute(await Site.deviceJson(host, "/api/mute",
+                                               { method: "POST", body: "{}" }));
+                document.querySelector("#speaker-note").className = "note hidden speaker-note";
+                follow();
+            } catch (e) {
+                /* A device that answers but refused is on a release from before the
+                   app could mute it: its own page still can. */
+                if (await Site.deviceAnswers(host)) location.href = target;
+                else say("bad", away, target, "حاول فتحها على أي حال");
+            } finally {
+                button.disabled = false;
+            }
+        });
+    } else {
+        button.addEventListener("click", () => { location.href = target; });
+    }
+} else {
+    document.querySelector("#mute").remove();
+}
+
+loadDay().then(() => {
+    paint();
+    setInterval(tick, 1000);
+}).catch((e) => Site.fail(e.message));
+</script>
+</body>
+</html>

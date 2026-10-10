@@ -103,9 +103,13 @@ def csv_is_valid_prayer_format(path):
         return False
 
 
+ALADHAN_COLUMNS = ("timings.Fajr", "date.gregorian.month.number")
+
+
 def detect_csv_format(path):
     """Return 'ready' (already Month,Day,... format), 'al_awail' (raw semicolon
-    export, needs 00_al_awail_convert_csv.py), or 'unknown'."""
+    export, needs 00_al_awail_convert_csv.py), 'aladhan' (Aladhan calendar export, needs
+    00_aladhan_convert_csv.py), or 'unknown'."""
     try:
         with open(path, newline="", encoding="utf-8") as f:
             for line in f:
@@ -116,6 +120,9 @@ def detect_csv_format(path):
                     return "ready"
                 if stripped.startswith("Date") and ";" in stripped:
                     return "al_awail"
+                header = [h.strip() for h in stripped.split(",")]
+                if all(column in header for column in ALADHAN_COLUMNS):
+                    return "aladhan"
     except Exception:
         pass
     return "unknown"

@@ -345,14 +345,25 @@ recover_network() {
 # be one more frame that changes nothing.
 REASSOCIATE_AFTER=3600     # 60 minutes
 
-LAST_INBOUND=$(date +%s)
+# Seconds since boot, not the wall clock. A device with no clock module boots on a stale
+# time and jumps forward when it first reaches a time server - on ihms-lr by 170 minutes,
+# mid-update - and a wall-clock silence read that jump as nobody connecting for hours, and
+# dropped the wifi.
+UPTIME_FILE="${UPTIME_FILE:-/proc/uptime}"
+monotonic_now() {
+    local up
+    read -r up _ < "$UPTIME_FILE"
+    echo "${up%%.*}"
+}
+
+LAST_INBOUND=$(monotonic_now)
 LAST_REASSOCIATE=0
 
 # Bounded so that a device nobody touches for a week cannot turn its own log into the
 # thing that fills the card.
 watch_inbound() {
     local now silence
-    now=$(date +%s)
+    now=$(monotonic_now)
 
     if [ "$(inbound_sessions)" -gt 0 ]; then
         LAST_INBOUND=$now
@@ -383,7 +394,7 @@ watch_inbound() {
         fi
         # Not a claim that anyone reached us - it starts the clock again so the ladder
         # above is not re-entered on the next tick.
-        LAST_INBOUND=$(date +%s)
+        LAST_INBOUND=$(monotonic_now)
     fi
 }
 
@@ -401,7 +412,7 @@ while true; do
     else
         # Run recovery if connectivity check fails
         recover_network
-        LAST_INBOUND=$(date +%s)
+        LAST_INBOUND=$(monotonic_now)
         # Cooldown period before returning to 1 minute checks
         sleep 60
     fi

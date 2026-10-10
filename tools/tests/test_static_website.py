@@ -280,8 +280,8 @@ check("city.ini's place wins when it is there",
       sakina_build.place_of(LONELY, {"place": "برلين الغربية"}), "برلين الغربية")
 cities = sorted(name for name in os.listdir(SAKINA)
                 if os.path.isfile(os.path.join(SAKINA, name, "city.ini")))
-check("damascus, berlin and aachen are there",
-      {"damascus", "berlin", "aachen"} <= set(cities), True)
+check("damascus, berlin, aachen and lagos are there",
+      {"damascus", "berlin", "aachen", "lagos"} <= set(cities), True)
 for name in cities:
     folder = os.path.join(SAKINA, name)
     table = os.path.join(folder, "prayer-times.csv")
@@ -315,8 +315,9 @@ def changes_clocks(name):
     return config.getboolean("city", "daylight_saving")
 
 
-check("berlin and aachen change their clocks, damascus does not",
-      [changes_clocks(c) for c in ("berlin", "aachen", "damascus")], [True, True, False])
+check("berlin and aachen change their clocks, damascus and lagos do not",
+      [changes_clocks(c) for c in ("berlin", "aachen", "damascus", "lagos")],
+      [True, True, False, False])
 
 print("7. the devices know which site is theirs")
 shipped = json.load(open(sakina_build.PUBLIC_SITES, encoding="utf-8"))

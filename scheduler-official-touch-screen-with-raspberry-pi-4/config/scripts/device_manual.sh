@@ -52,7 +52,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 "$PYTHON" "$COVER_DIR/make_cover.py" "$WORK/cover.html" "$DEVICE" || skip "the cover could not be written"
 # A profile of its own: the owner may have the browser open, and a shared profile is locked.
+# --password-store=basic: left to itself Chromium asks the desktop keyring for a key at
+# start, and on a device that logs itself in the keyring is locked - so an unlock prompt
+# flashed on the screen during the update until Chromium exited.
 timeout 180 "$CHROMIUM" --headless=new --disable-gpu --allow-file-access-from-files \
+    --password-store=basic \
     --no-pdf-header-footer --virtual-time-budget=5000 --user-data-dir="$WORK/profile" \
     --print-to-pdf="$WORK/cover.pdf" "file://$WORK/cover.html" > /dev/null 2>&1
 [[ -s "$WORK/cover.pdf" && "$(qpdf --show-npages "$WORK/cover.pdf" 2> /dev/null)" == 1 ]] \

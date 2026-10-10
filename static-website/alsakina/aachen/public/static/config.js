@@ -25,5 +25,11 @@ window.CITIES = [
         "place": "دمشق",
         "timezone": "Asia/Damascus",
         "data": "/data/damascus/{year}.json"
+    },
+    {
+        "id": "lagos",
+        "place": "لاغوس",
+        "timezone": "Africa/Lagos",
+        "data": "/data/lagos/{year}.json"
     }
 ];

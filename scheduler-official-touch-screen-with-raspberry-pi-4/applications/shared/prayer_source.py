@@ -1,8 +1,8 @@
 """Which prayer-times file the device runs on, and choosing another.
 
 The schedule is built from one file, the reference file on the Desktop. Choosing a source
-copies a city preset (config/prayers-config/) or converts an Al Awail export (*-YYYY.csv
-on the Desktop) into it. The Settings app and the website both choose through here, so
+copies a city preset (config/prayers-config/) or converts an Al Awail or Aladhan export
+(*-YYYY.csv on the Desktop) into it. The Settings app and the website both choose through here, so
 the two offer the same files and refuse the same ones in the same words.
 """
 
@@ -26,6 +26,11 @@ HASH_KEY = "prayer_csv_manual_hash"
 SOURCE_LABEL_KEY = "prayer_csv_source_label"
 # Beside the city files: the time zone each one's times are for.
 ZONES_FILE = "zones.ini"
+# The raw exports a choice converts, and the script in config/scripts/ that does it.
+CONVERTERS = {
+    "al_awail": "00_al_awail_convert_csv.py",
+    "aladhan": "00_aladhan_convert_csv.py",
+}
 
 HAND_EDITS_WARNING = ("قد يحتوي ملف مواقيت الصلاة الحالي على تعديلات يدوية لم يقم بها التطبيق.\n"
                       "المتابعة الآن ستستبدل محتواه بالكامل بالملف الذي اخترته.")
@@ -58,7 +63,7 @@ def file_hash(path):
 
 
 def desktop_exports(desktop_dir):
-    """Al Awail exports (*-YYYY.csv) copied to the Desktop. The reference file itself is
+    """Al Awail and Aladhan exports (*-YYYY.csv) copied to the Desktop. The reference file itself is
     not one: it is where every choice is copied to, so picking it would change nothing."""
     return sorted(glob.glob(os.path.join(desktop_dir, "*-[0-9][0-9][0-9][0-9].csv")))
 
@@ -87,7 +92,7 @@ def preset_zones(prayers_config_dir):
 
 
 def sources(prayers_config_dir, desktop_dir):
-    """What there is to choose from: the city presets first, then any Al Awail exports."""
+    """What there is to choose from: the city presets first, then any raw exports."""
     return presets(prayers_config_dir) + desktop_exports(desktop_dir)
 
 
@@ -124,20 +129,20 @@ def install(source, reference, scheduler_dir):
     either untouched or, for a conversion that produced a bad file, reported as such."""
     same_file = os.path.abspath(source) == os.path.abspath(reference)
     fmt = detect_csv_format(source)
-    if fmt == "al_awail" and same_file:
+    if fmt in CONVERTERS and same_file:
         # The reference file itself in the raw format: refuse rather than read it while
         # truncating the same path.
         raise SourceError("ملف مواقيت الصلاة الحالي بصيغة غير محولة، الرجاء اختيار ملف آخر")
     try:
         os.makedirs(os.path.dirname(reference), exist_ok=True)
-        if fmt == "al_awail":
+        if fmt in CONVERTERS:
             raw_imports = os.path.join(presets_dir(scheduler_dir), "raw-imports")
             os.makedirs(raw_imports, exist_ok=True)
             # Timestamped, so importing a name already archived keeps the earlier export.
             stem, ext = os.path.splitext(os.path.basename(source))
             shutil.copy2(source, os.path.join(
                 raw_imports, f"{stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}{ext}"))
-            convert = os.path.join(scheduler_dir, "config", "scripts", "00_al_awail_convert_csv.py")
+            convert = os.path.join(scheduler_dir, "config", "scripts", CONVERTERS[fmt])
             result = subprocess.run([sys.executable, convert, source, reference],
                                     capture_output=True, text=True)
             if result.returncode != 0:
