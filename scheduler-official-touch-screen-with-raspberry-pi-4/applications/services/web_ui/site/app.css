@@ -146,6 +146,19 @@ a { color: var(--accent); }
     font-size: 1rem;
     padding: 0 .1rem;
     cursor: pointer;
+    /* The open list is drawn by the browser, on its own white unless told the page is
+       dark - and the names are near-white, so only the highlighted row could be read. */
+    color-scheme: dark;
+}
+
+.city-pick option {
+    background: var(--card);
+    color: var(--text);
+}
+
+.city-pick option:checked {
+    color: var(--accent);
+    font-weight: 700;
 }
 
 .city-pick svg {
