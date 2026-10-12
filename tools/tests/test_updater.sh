@@ -717,5 +717,108 @@ echo "1.0.0" > "$SCH/var/installed_version"
 run_stubbed --now > /dev/null 2>&1
 rm -f "$SCH/var/pre_update_ran" "$SCH/var/post_update_ran"
 
+
+echo "27. every run reports to the fleet page, and a dead page changes nothing"
+# A stand-in for tools/report-worker/: answers every POST with 200 and appends the body.
+REPORTS="$HERE/reports.jsonl"
+rm -f "$REPORTS"
+python3 - "$REPORTS" > "$HERE/report_port" <<'SRV' &
+import http.server, sys
+out = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        with open(out, "ab") as f:
+            f.write(body.strip() + b"\n")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+print(srv.server_port, flush=True)
+srv.serve_forever()
+SRV
+SRV_PID=$!
+for _ in $(seq 50); do [ -s "$HERE/report_port" ] && break; sleep 0.1; done
+conf REPORT_URL "http://127.0.0.1:$(cat "$HERE/report_port")/report"
+KEY_FILE="$SCH/var/update/report.key"
+rm -f "$KEY_FILE"
+
+wait_report() { # $1 how many reports there should be by now
+    for _ in $(seq 150); do
+        [ "$(cat "$REPORTS" 2>/dev/null | wc -l)" -ge "$1" ] && break
+        sleep 0.1
+    done
+    tail -1 "$REPORTS" 2>/dev/null
+}
+report_field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2], ""))' "$1" "$2"; }
+expect_field() { # name, report, field, value
+    local got; got="$(report_field "$2" "$3")"
+    [ "$got" = "$4" ] && echo "  ✓ $1" || { echo "  ✗ $1 - $3 is '$got', wanted '$4'"; fail=1; }
+}
+
+point 1.1.0
+echo "1.0.0" > "$SCH/var/installed_version"
+run_stubbed --now > /dev/null
+r="$(wait_report 1)"
+expect_field "a successful update reports 'updated'" "$r" result updated
+expect_field "with the version it now runs" "$r" installed 1.1.0
+expect_field "under this device's hostname" "$r" hostname "$(hostname)"
+expect_field "and its variant" "$r" variant pi4
+[ "$(stat -c %a "$KEY_FILE" 2>/dev/null)" = "600" ] \
+    && echo "  ✓ the device made its own key, readable by it alone" \
+    || { echo "  ✗ report.key missing or not 600"; fail=1; }
+first_key="$(report_field "$r" key)"
+
+run_stubbed > /dev/null
+r="$(wait_report 2)"
+expect_field "a run with nothing to do still reports, as a heartbeat" "$r" result up_to_date
+expect_field "with the same key as before" "$r" key "$first_key"
+
+cp "$REL/pi4-v1.1.0/scheduler-pi4-1.1.0.tar.gz" /tmp/a.bak
+head -c 2000 /tmp/a.bak > "$REL/pi4-v1.1.0/scheduler-pi4-1.1.0.tar.gz"
+echo "1.0.0" > "$SCH/var/installed_version"
+run_stubbed --now > /dev/null
+r="$(wait_report 3)"
+expect_field "a failed update reports 'error'" "$r" result error
+expect_field "with the reason" "$r" message "checksum mismatch"
+expect_field "and the version it is still on" "$r" installed 1.0.0
+cp /tmp/a.bak "$REL/pi4-v1.1.0/scheduler-pi4-1.1.0.tar.gz"
+run_stubbed --now > /dev/null
+wait_report 4 > /dev/null
+
+conf ENABLED false
+run_stubbed > /dev/null
+r="$(wait_report 5)"
+expect_field "a device with updates switched off says so" "$r" result disabled
+conf ENABLED true
+
+run_stubbed --status > /dev/null
+run_stubbed --list > /dev/null
+sleep 2
+[ "$(wc -l < "$REPORTS")" -eq 5 ] && echo "  ✓ --status and --list report nothing" \
+    || { echo "  ✗ --status or --list sent a report"; fail=1; }
+
+conf REPORT_URL off
+run_stubbed > /dev/null
+sleep 2
+[ "$(wc -l < "$REPORTS")" -eq 5 ] && echo "  ✓ REPORT_URL=off keeps the device quiet" \
+    || { echo "  ✗ a report was sent with REPORT_URL=off"; fail=1; }
+
+kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null
+# A port nobody listens on: the run must end exactly as it would with reporting off.
+conf REPORT_URL "http://127.0.0.1:1/report"
+start=$(date +%s)
+out="$(run_stubbed)"; rc=$?
+took=$(( $(date +%s) - start ))
+[ $rc -eq 0 ] && echo "  ✓ an unreachable fleet page leaves the exit code alone" \
+    || { echo "  ✗ exit code $rc with the fleet page down"; fail=1; }
+expect "and the run's own verdict stands" "$out" "Already on 1.1.0"
+[ $took -lt 10 ] && echo "  ✓ and nobody waits for it (${took}s)" \
+    || { echo "  ✗ the run waited ${took}s on the fleet page"; fail=1; }
+sleep 1
+expect "the failure is logged, not hidden" "$(tail -5 "$SCH/logs/check_updates.log")" \
+    "Could not report to the fleet page"
+conf REPORT_URL off
+rm -f "$REPORTS" "$HERE/report_port"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

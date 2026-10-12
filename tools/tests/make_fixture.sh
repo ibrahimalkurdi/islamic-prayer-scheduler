@@ -190,6 +190,7 @@ sed -e "s|^VARIANT=.*|VARIANT=pi4|" \
     -e "s|^#UPDATE_POINTER_URL=.*|UPDATE_POINTER_URL=\"file://$RELEASES/VERSIONS.json\"|" \
     -e "s|^#UPDATE_API_URL=.*|UPDATE_API_URL=\"file://$RELEASES/index.json\"|" \
     -e "s|^#UPDATE_DOWNLOAD_URL=.*|UPDATE_DOWNLOAD_URL=\"file://$RELEASES\"|" \
+    -e "s|^#REPORT_URL=.*|REPORT_URL=off|" \
     "$SCHEDULER/config/update.conf.example" > "$SCHEDULER/config/update.conf"
 
 # The hardware answer the updater cross-checks against. The tests point

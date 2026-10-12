@@ -65,6 +65,11 @@ CODEBERG_API="https://codeberg.org/api/v1/repos/teleshops/islamic-prayer-schedul
 GITHUB_POINTER_RAW="https://raw.githubusercontent.com/ibrahimalkurdi/islamic-prayer-scheduler/main"
 POINTER_REPO_RAW="${POINTER_REPO_RAW:-$GITHUB_POINTER_RAW}"
 POINTER_REPO_MIRROR="${POINTER_REPO_MIRROR:-$CODEBERG_REPO/raw/branch/main}"
+
+# Where each run says how it went, for the fleet page - tools/report-worker/. "off" in
+# update.conf keeps a device quiet; empty means this default.
+DEFAULT_REPORT_URL="https://scheduler-fleet.teleshops24.workers.dev/report"
+REPORT_URL="${REPORT_URL:-}"
 POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
 UPDATE_POINTER_URL="${UPDATE_POINTER_URL:-}"
 
@@ -194,6 +199,7 @@ UPDATE_API_MIRROR="${UPDATE_API_MIRROR:-}"
 : "${UPDATE_DOWNLOAD_URL:=$GITHUB_DOWNLOAD_URL}"
 : "${POINTER_REPO_RAW:=$GITHUB_POINTER_RAW}"
 : "${POINTER_REPO_MIRROR:=$CODEBERG_REPO/raw/branch/main}"
+: "${REPORT_URL:=$DEFAULT_REPORT_URL}"
 
 # A device following anything but the fleet's own file is the quiet failure mode here -
 # it takes versions nobody rolled out and misses the ones everybody got. POINTER_NAME is
@@ -233,6 +239,8 @@ detect_variant() {
 write_state() {
     # $1 result, $2 message, $3 needs_attention - "keep" leaves the existing one alone,
     # so a run that installs nothing cannot quietly discard a warning still outstanding.
+    REPORT_RESULT="${1:-}"
+    REPORT_MESSAGE="${2:-}"
     python3 - "$STATE_FILE" "$INSTALLED" "${1:-}" "${2:-}" "${3:-}" <<'STATE'
 import json, sys, datetime
 path, installed, result, message, attention = sys.argv[1:6]
@@ -561,6 +569,47 @@ restore_backup() {
 }
 
 # ---------------------------------------------------------------------------
+# Report how this run went
+# ---------------------------------------------------------------------------
+# Every run from here on tells tools/report-worker/ where this device stands, so the
+# fleet can be read on one page. The verdict comes from write_state, which every outcome
+# goes through; a run that ends without one - audio playing - has nothing to say.
+# The key is this device's own, made on its first report: the repo is public, so nothing
+# shipped in it could be a secret. var/ is never replaced, so the key outlives updates.
+REPORT_RESULT=""
+REPORT_MESSAGE=""
+REPORT_KEY_FILE="$UPDATE_DIR/report.key"
+
+send_report() {
+    [[ -n "$REPORT_RESULT" && -n "$REPORT_URL" && "$REPORT_URL" != "off" ]] || return 0
+    if [[ ! -s "$REPORT_KEY_FILE" ]]; then
+        (umask 077; head -c 32 /dev/urandom | base64 > "$REPORT_KEY_FILE") || return 0
+    fi
+    local payload
+    payload="$(python3 - "$(hostname)" "$(cat "$REPORT_KEY_FILE")" "$INSTALLED" \
+        "${TARGET:-}" "$REPORT_RESULT" "$REPORT_MESSAGE" "${VARIANT:-$(detect_variant)}" <<'REPORT'
+import json, sys, datetime
+keys = ["hostname", "key", "installed", "target", "result", "message", "variant"]
+body = dict(zip(keys, sys.argv[1:8]))
+body["at"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+print(json.dumps(body))
+REPORT
+)" || return 0
+    # Detached, so a slow or blocked host never holds up cron or the Settings dialog, and
+    # with every stream closed so whoever reads this script's output is not kept waiting.
+    (
+        if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+                -H "Content-Type: application/json" --data-binary @- \
+                "$REPORT_URL" <<< "$payload" > /dev/null 2>>"$LOG_FILE"; then
+            log "Reported '$REPORT_RESULT' to the fleet page"
+        else
+            log "Could not report to the fleet page - the update itself is unaffected"
+        fi
+    ) < /dev/null > /dev/null 2>&1 &
+}
+trap send_report EXIT
+
+# ---------------------------------------------------------------------------
 # --rollback
 # ---------------------------------------------------------------------------
 if [[ "$MODE" == "rollback" ]]; then
@@ -601,6 +650,7 @@ esac
 
 if [[ "$MODE" == "cron" && "${ENABLED,,}" != "true" ]]; then
     log "Updates are disabled on this device (ENABLED=$ENABLED)"
+    REPORT_RESULT="disabled"
     exit 0
 fi
 

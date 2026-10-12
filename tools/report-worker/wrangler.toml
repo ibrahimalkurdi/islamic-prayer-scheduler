@@ -1,0 +1,8 @@
+name = "scheduler-fleet"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# Filled in from `npx wrangler kv namespace create DEVICES` - see README.md.
+[[kv_namespaces]]
+binding = "DEVICES"
+id = "232805d8edd74635ac5b9ef17706816d"

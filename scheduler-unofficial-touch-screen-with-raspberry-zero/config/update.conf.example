@@ -73,3 +73,10 @@ EXTRA_EXCLUDE=
 #UPDATE_POINTER_MIRROR=
 #UPDATE_API_MIRROR=
 #UPDATE_DOWNLOAD_MIRROR=
+
+# Where this device says how each update run went, for the fleet page (see
+# tools/report-worker/README.md). Empty means the built-in address. "off" keeps this
+# device from reporting at all. The device's own key is var/update/report.key - delete it
+# and use "forget" on the fleet page to give a re-flashed card its hostname back.
+#   REPORT_URL=off
+#REPORT_URL=
