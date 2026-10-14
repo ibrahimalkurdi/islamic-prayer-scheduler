@@ -1,6 +1,6 @@
 # Fleet page
 
-**https://scheduler-fleet.teleshops24.workers.dev** - sign in with any user name and
+**https://fleet.alsakina.workers.dev** - sign in with any user name and
 `ADMIN_PASSWORD`.
 
 Every device reports here after each update run (`check_updates.sh`, cron and the
@@ -24,7 +24,7 @@ cd tools/report-worker
 npx wrangler login
 npx wrangler kv namespace create DEVICES     # paste the printed id into wrangler.toml
 npx wrangler secret put ADMIN_PASSWORD       # a long random password
-npx wrangler deploy                          # prints https://scheduler-fleet.<you>.workers.dev
+npx wrangler deploy                          # prints https://fleet.<you>.workers.dev
 ```
 
 Put the printed URL plus `/report` into `DEFAULT_REPORT_URL` in both variants'

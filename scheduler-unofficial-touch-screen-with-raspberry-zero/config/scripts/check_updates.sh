@@ -65,7 +65,7 @@ POINTER_REPO_MIRROR="${POINTER_REPO_MIRROR:-$CODEBERG_REPO/raw/branch/main}"
 
 # Where each run says how it went, for the fleet page - tools/report-worker/. "off" in
 # update.conf keeps a device quiet; empty means this default.
-DEFAULT_REPORT_URL="https://scheduler-fleet.teleshops24.workers.dev/report"
+DEFAULT_REPORT_URL="https://fleet.alsakina.workers.dev/report"
 REPORT_URL="${REPORT_URL:-}"
 POINTER_NAME="${POINTER_NAME:-VERSIONS.json}"
 UPDATE_POINTER_URL="${UPDATE_POINTER_URL:-}"
