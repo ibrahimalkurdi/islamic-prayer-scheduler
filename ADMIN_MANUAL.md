@@ -67,6 +67,7 @@ at it. Rolling the fleet back is the same edit in reverse.
 |---|---|
 | `VERSIONS.json` | **the version pointer** — which version each variant runs. Editing and pushing this is what rolls a release out, or back |
 | `tools/make_release.sh` | builds and verifies one variant's tarball + manifest |
+| `tools/release.sh` | one command for a whole release: version and notes suggested, build, push, GitHub, Codeberg, fleet Worker if changed, optional roll-out |
 | `tools/tests/make_fixture.sh` | builds a throwaway device and release server for testing |
 | `tools/tests/test_updater.sh` | ten refusal/recovery paths, including the pointer and its path rules |
 | `tools/tests/test_state_survives.sh` | proves an update keeps the owner's data |

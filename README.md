@@ -146,6 +146,12 @@ The system is built on two main pillars:
 Devices in the field update themselves from GitHub Releases. Cutting a release and
 rolling it out are two separate steps, on purpose.
 
+**The short way:** `tools/release.sh` does both steps below. It suggests the next version
+and release notes from `git log`, asks once, then builds, pushes, publishes to GitHub and
+Codeberg, and deploys the fleet Worker (`npx wrangler`) only when its code changed since
+the last release. It ends by asking whether to roll out; say no to try one device first,
+then run `tools/release.sh --rollout pi4 <version>`.
+
 **1. Build and publish the release.** On a clean tree, from the repo root:
 
 ```bash
