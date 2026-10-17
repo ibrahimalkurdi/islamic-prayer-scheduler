@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QFileDialog,
     QProgressBar,
+    QSlider,
     QStyle,
     QStyleOptionComboBox,
     QStylePainter,
@@ -82,6 +83,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from shared import audio_lists
 from shared import audio_upload
+from shared import brightness
 from shared import internet_status
 from shared import os_timezone
 from shared import prayer_source
@@ -457,7 +459,7 @@ class PrayerSourceDialog(QDialog):
         self.note = QLabel(
             f"سيتم نسخ المواقيت التي تختارها إلى الملف «{isolated(reference)}» على سطح "
             "المكتب، ويمكنك تعديله إن لزم. بعد الاختيار أو التعديل اضغط "
-            "«حفظ وتفعيل الإعدادات»."
+            "«حفظ وتطبيق الإعدادات»."
         )
         self.note.setObjectName("prayerSourceNote")
         self.note.setWordWrap(True)
@@ -732,6 +734,21 @@ class ControlApp(QMainWindow):
         # title.setStyleSheet("font-size: 42px; font-weight: bold;")
         main_layout.addWidget(title)
 
+        # ---------------- Sections that act at once ----------------
+        # Each has its own button; the save button below keeps only what is in its box.
+        if brightness.device() is not None:
+            main_layout.addWidget(self.build_brightness_section())
+
+        # ---------------- Updates Section ----------------
+        # Empty until a version list is first opened: what has been published is not
+        # knowable without asking, and both lists are filled from the one answer.
+        self.update_published_versions = []
+        self.update_versions_fetched_at = None
+        self.update_rollback_backup = ""
+        main_layout.addWidget(self.build_updates_section())
+        main_layout.addWidget(self.build_audio_upload_section())
+        main_layout.addWidget(self.build_os_timezone_section())
+
         # ---------------- Prayer Source Section ----------------
         self.prayer_source_frame = self.create_section_frame(
             "ملف مواقيت الصلاة الحالي", font_family="Amiri", font_size=22, bold=True
@@ -764,21 +781,15 @@ class ControlApp(QMainWindow):
 
         main_layout.addWidget(self.prayer_source_frame)
 
-        # ---------------- OS Time Zone Section ----------------
-        main_layout.addWidget(self.build_os_timezone_section())
-        main_layout.addWidget(self.build_internet_warning_section())
-        main_layout.addWidget(self.build_audio_upload_section())
-
-        # ---------------- Updates Section ----------------
-        # Empty until a version list is first opened: what has been published is not
-        # knowable without asking, and both lists are filled from the one answer.
-        self.update_published_versions = []
-        self.update_versions_fetched_at = None
-        self.update_rollback_backup = ""
-        main_layout.addWidget(self.build_updates_section())
+        # ---------------- Saved Box ----------------
+        # Everything the save button keeps, with the save and reset buttons at its foot.
+        saved_box = self.build_saved_box()
+        saved_layout = saved_box.layout()
+        main_layout.addWidget(saved_box)
+        saved_layout.addWidget(self.build_internet_warning_section())
 
         # ---------------- Prayer Times Section ----------------
-        self.prayer_frame = self.create_section_frame("ضبط الأذان والأذكار", font_family="Amiri", font_size=30, bold=True)
+        self.prayer_frame = self.create_section_frame("الأذان", font_family="Amiri", font_size=30, bold=True)
 
         prayer_layout = self.prayer_frame.layout()
 
@@ -841,8 +852,7 @@ class ControlApp(QMainWindow):
 
             prayer_layout.addWidget(prayer_box)
 
-        # ✅ THIS WAS MISSING
-        main_layout.addWidget(self.prayer_frame)
+        saved_layout.addWidget(self.prayer_frame)
 
 
 
@@ -865,7 +875,7 @@ class ControlApp(QMainWindow):
             "وقت صلاة التهجد قبل صلاة الفجر (دقيقة)"
         )
 
-        main_layout.addWidget(self.tahajjud_frame)
+        saved_layout.addWidget(self.tahajjud_frame)
 
 
         # ---------------- Duha Section ----------------
@@ -887,7 +897,7 @@ class ControlApp(QMainWindow):
             "وقت صلاة الضحى قبل صلاة الظهر (دقيقة)"
         )
 
-        main_layout.addWidget(self.duha_frame)
+        saved_layout.addWidget(self.duha_frame)
 
 
         # ---------------- ATHKAR ALSABAH Section ----------------
@@ -938,7 +948,7 @@ class ControlApp(QMainWindow):
             self.show_athkar_elsabah_mode)
         self.show_athkar_elsabah_mode()
 
-        main_layout.addWidget(self.athkar_elsabah_frame)
+        saved_layout.addWidget(self.athkar_elsabah_frame)
 
 
         # ---------------- ATHKAR ELMASA Section ----------------
@@ -960,7 +970,7 @@ class ControlApp(QMainWindow):
             "وقت أذكار المساء بعد صلاة المغرب (دقيقة)"
         )
 
-        main_layout.addWidget(self.athkar_elmasa_frame)
+        saved_layout.addWidget(self.athkar_elmasa_frame)
 
 
         # ---------------- Quran Section ----------------
@@ -1022,7 +1032,7 @@ class ControlApp(QMainWindow):
         self.quran_audio_list.setEnabled(True)
 
 
-        main_layout.addWidget(self.cron_frame)
+        saved_layout.addWidget(self.cron_frame)
 
 
         # ---------------- Friday Quran (Surat Al-Kahf) Section ----------------
@@ -1061,13 +1071,13 @@ class ControlApp(QMainWindow):
             self.config["Settings"].get(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION))
         friday_quran_form.insertRow(0, "موعد القراءة", self.friday_quran_position_combo)
 
-        main_layout.addWidget(self.friday_quran_frame)
+        saved_layout.addWidget(self.friday_quran_frame)
 
 
         # ---------------- Buttons ----------------
         btn_layout = QVBoxLayout()
         btn_layout.setSpacing(15)
-        apply_btn = QPushButton("حفظ وتفعيل الإعدادت")
+        apply_btn = QPushButton("حفظ وتطبيق الإعدادات")
         apply_btn.setFocusPolicy(Qt.NoFocus) # Fixes the "click twice" issue
         apply_btn.setAttribute(Qt.WA_AcceptTouchEvents) # Optimizes for touch
         reset_btn = QPushButton("إعادة ضبط الإعدادات")
@@ -1112,10 +1122,11 @@ class ControlApp(QMainWindow):
         reset_btn.clicked.connect(self.reset_settings)
         close_btn.clicked.connect(self.close)
 
-        for b in [apply_btn, reset_btn, close_btn]:
+        for b in [apply_btn, reset_btn]:
             btn_layout.addWidget(b)
 
-        main_layout.addLayout(btn_layout)
+        saved_layout.addLayout(btn_layout)
+        main_layout.addWidget(close_btn)
 
         # The no-internet banner sits above the scroll area rather than in it, so it is on
         # screen whichever section is scrolled into view.
@@ -2139,6 +2150,36 @@ class ControlApp(QMainWindow):
                          "لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.\n\n"
                          + (tail or "راجع سجل logs/check_updates.log على الجهاز."))
 
+    def build_saved_box(self):
+        """The box around the sections the save button keeps. Its own style is held to
+        it by name, so the sections inside keep theirs."""
+        box = QFrame()
+        box.setObjectName("savedBox")
+        box.setStyleSheet("""
+            QFrame#savedBox {
+                background-color: #eef7ee;
+                border: 3px solid #4CAF50;
+                border-radius: 12px;
+            }
+        """)
+        box.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(15)
+
+        title = QLabel("إعدادات الأذان والتلاوات")
+        title.setAlignment(Qt.AlignCenter)
+        apply_arabic_font(title, size=32, bold=True)
+        title.setStyleSheet("color: #2e7d32; padding: 6px;")
+        layout.addWidget(title)
+
+        hint = QLabel("تُحفظ هذه الإعدادات معًا بزر «حفظ وتطبيق الإعدادات» في أسفلها.")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet("font-size: 16px; color: #555; padding: 2px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        return box
+
     def build_internet_warning_section(self):
         frame = self.create_section_frame(
             "تنبيه انقطاع الإنترنت", font_family="Amiri", font_size=22, bold=True
@@ -2219,7 +2260,7 @@ class ControlApp(QMainWindow):
 
         hint = QLabel(
             "ملف MP3 فقط، من الجهاز أو من ذاكرة USB موصولة به. يظهر الملف بعد رفعه في "
-            "قائمة ملفات المجلد غير محدد؛ حدّده ثم اضغط «حفظ وتفعيل الإعدادت» ليُشغَّل."
+            "قائمة ملفات المجلد غير محدد؛ حدّده ثم اضغط «حفظ وتطبيق الإعدادات» ليُشغَّل."
         )
         hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
         hint.setWordWrap(True)
@@ -2352,7 +2393,7 @@ class ControlApp(QMainWindow):
         if not success:
             arabic_error(self, "تعذّر تحديث جدول الأذان",
                          "تم حذف الملفات، لكن تعذّر إعادة بناء الجدول بعد إيقاف الحدث.\n"
-                         "اضغط «حفظ وتفعيل الإعدادت» لإعادة المحاولة.")
+                         "اضغط «حفظ وتطبيق الإعدادات» لإعادة المحاولة.")
 
     def upload_audio_file(self):
         folder = self.upload_folder_combo.currentData()
@@ -2396,7 +2437,7 @@ class ControlApp(QMainWindow):
         arabic_info(self, "تم رفع الملف",
                     f"تم رفع «{prayer_source.isolated(saved)}» إلى مجلد "
                     f"«{audio_upload.FOLDER_LABELS.get(self.upload_folder, self.upload_folder)}».\n"
-                    "حدّده في قائمة ملفات المجلد ثم اضغط «حفظ وتفعيل الإعدادت» ليُشغَّل.")
+                    "حدّده في قائمة ملفات المجلد ثم اضغط «حفظ وتطبيق الإعدادات» ليُشغَّل.")
 
     def add_audio_list_item(self, directory, name):
         """The new file in its event's list, unticked and in its sorted place, as the
@@ -2500,6 +2541,85 @@ class ControlApp(QMainWindow):
         self.add_update_row(layout, (change_btn, 1))
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         return frame
+
+    def build_brightness_section(self):
+        """The backlight, shown live while the slider moves and kept only after a yes.
+        A tap on the groove moves it without a press and release, so a short pause after
+        the last move asks too."""
+        frame = self.create_section_frame(
+            "سطوع الشاشة", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
+        self.brightness_kept = brightness.confirmed(MAIN_DIR) or brightness.MAX_PERCENT
+
+        self.brightness_value = QLabel(f"السطوع: {self.brightness_kept}%")
+        self.brightness_value.setStyleSheet("font-size: 18px; padding: 5px; font-weight: bold;")
+        layout.addWidget(self.brightness_value)
+
+        self.brightness_slider = QSlider(Qt.Horizontal)
+        self.brightness_slider.setRange(brightness.MIN_PERCENT, brightness.MAX_PERCENT)
+        self.brightness_slider.setSingleStep(5)
+        self.brightness_slider.setPageStep(10)
+        self.brightness_slider.setValue(self.brightness_kept)
+        self.brightness_slider.setMinimumHeight(50)
+        self.brightness_slider.setStyleSheet("""
+            QSlider::groove:horizontal { height: 12px; background: #cfcfcf; border-radius: 6px; }
+            QSlider::sub-page:horizontal { background: #FF9800; border-radius: 6px; }
+            QSlider::handle:horizontal {
+                background: #4d4d4d; width: 36px; margin: -14px 0; border-radius: 18px;
+            }
+        """)
+        self.brightness_slider.valueChanged.connect(self.preview_brightness)
+        self.brightness_slider.sliderReleased.connect(self.ask_brightness)
+        layout.addWidget(self.brightness_slider)
+
+        self.brightness_ask_timer = QTimer(self)
+        self.brightness_ask_timer.setSingleShot(True)
+        self.brightness_ask_timer.setInterval(800)
+        self.brightness_ask_timer.timeout.connect(self.ask_brightness)
+
+        hint = QLabel("يتغيّر سطوع الشاشة فور تحريك المؤشر، ولا يُحفظ إلا بعد التأكيد.")
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def preview_brightness(self, value):
+        self.brightness_value.setText(f"السطوع: {value}%")
+        try:
+            brightness.write(value)
+        except brightness.BrightnessError as error:
+            self.brightness_ask_timer.stop()
+            self.set_brightness_slider(self.brightness_kept)
+            arabic_error(self, "سطوع الشاشة", str(error))
+            return
+        if not self.brightness_slider.isSliderDown():
+            self.brightness_ask_timer.start()
+
+    def ask_brightness(self):
+        self.brightness_ask_timer.stop()
+        value = self.brightness_slider.value()
+        if value == self.brightness_kept:
+            return
+        if arabic_confirm(self, "سطوع الشاشة",
+                          brightness.question(self.brightness_kept, value)):
+            try:
+                self.brightness_kept = brightness.save(MAIN_DIR, value)
+            except OSError as error:
+                arabic_error(self, "سطوع الشاشة", f"تعذّر حفظ السطوع: {error}")
+            return
+        self.set_brightness_slider(self.brightness_kept)
+        try:
+            brightness.write(self.brightness_kept)
+        except brightness.BrightnessError as error:
+            arabic_error(self, "سطوع الشاشة", str(error))
+
+    def set_brightness_slider(self, value):
+        self.brightness_slider.blockSignals(True)
+        self.brightness_slider.setValue(value)
+        self.brightness_slider.blockSignals(False)
+        self.brightness_value.setText(f"السطوع: {value}%")
 
     def os_timezone_label(self):
         """The clock's zone by its Arabic country and city, as the lists below name it;

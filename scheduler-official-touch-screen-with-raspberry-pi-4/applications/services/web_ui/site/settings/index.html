@@ -26,14 +26,19 @@
     <p id="working-text">جارٍ حفظ الإعدادات وتطبيقها...</p>
 </div>
 
-<form id="form"></form>
-
-<div class="bar">
-    <button id="save">حفظ وتطبيق الإعدادات</button>
-    <button id="reset" class="warn hidden">إعادة ضبط الإعدادات</button>
-</div>
-
+<div id="screen"></div>
 <div id="updates"></div>
+<div id="instant"></div>
+
+<fieldset class="saved">
+    <legend>إعدادات الأذان والتلاوات</legend>
+    <p class="sub">تُحفظ هذه الإعدادات معًا بزر «حفظ وتطبيق الإعدادات» في أسفلها.</p>
+    <form id="form"></form>
+    <div class="bar">
+        <button id="save">حفظ وتطبيق الإعدادات</button>
+        <button id="reset" class="warn hidden">إعادة ضبط الإعدادات</button>
+    </div>
+</fieldset>
 
 <script src="/static/config.js"></script>
 <script src="/static/app.js"></script>
@@ -43,6 +48,17 @@
    /api/settings. A release that adds an audio folder shows up with no change to this
    page. */
 const SECTIONS = [
+    {
+        legend: "الأذان",
+        fields: [
+            { enable: "enable_prayer_fajr", audio: "fajr_audio_checked", label: "الفجر" },
+            { enable: "enable_prayer_sunrise", audio: "sunrise_audio_checked", label: "الشروق" },
+            { enable: "enable_prayer_dhuhr", audio: "dhuhr_audio_checked", label: "الظهر" },
+            { enable: "enable_prayer_asr", audio: "asr_audio_checked", label: "العصر" },
+            { enable: "enable_prayer_maghrib", audio: "maghrib_audio_checked", label: "المغرب" },
+            { enable: "enable_prayer_isha", audio: "isha_audio_checked", label: "العشاء" },
+        ],
+    },
     {
         legend: "النوافل والأذكار",
         fields: [
@@ -70,17 +86,6 @@ const SECTIONS = [
               position: "friday_quran_position", audio: "friday_quran_audio_checked",
               label: "سورة الكهف يوم الجمعة",
               hint: "عدد الدقائق قبل أو بعد صلاة الجمعة" },
-        ],
-    },
-    {
-        legend: "الأذان",
-        fields: [
-            { enable: "enable_prayer_fajr", audio: "fajr_audio_checked", label: "الفجر" },
-            { enable: "enable_prayer_sunrise", audio: "sunrise_audio_checked", label: "الشروق" },
-            { enable: "enable_prayer_dhuhr", audio: "dhuhr_audio_checked", label: "الظهر" },
-            { enable: "enable_prayer_asr", audio: "asr_audio_checked", label: "العصر" },
-            { enable: "enable_prayer_maghrib", audio: "maghrib_audio_checked", label: "المغرب" },
-            { enable: "enable_prayer_isha", audio: "isha_audio_checked", label: "العشاء" },
         ],
     },
 ];
@@ -190,19 +195,23 @@ function buildField(field) {
     return wrap;
 }
 
+/* The sections that act at once come first, each with its own button, and the ones the
+   save button keeps sit together in the box it is at the bottom of. «تحديثات البرنامج»
+   is between the two halves of the first lot and fills #updates by itself. */
 function buildForm() {
+    const screen = document.querySelector("#screen");
+    const instant = document.querySelector("#instant");
     const form = document.querySelector("#form");
+    screen.textContent = "";
+    instant.textContent = "";
     form.textContent = "";
 
-    for (const section of SECTIONS) {
-        const set = el("fieldset", {}, [el("legend", { textContent: section.legend })]);
-        for (const field of section.fields) set.appendChild(buildField(field));
-        form.appendChild(set);
-    }
-    if (state.audio_folders) form.appendChild(audioManage());
-
-    const extra = el("fieldset", {}, [el("legend", { textContent: "مواقيت الصلاة" })]);
-    extra.appendChild(el("div", { id: "source" }));
+    if (state.brightness) screen.appendChild(screenBrightness());
+    if (state.audio_folders) instant.appendChild(audioManage());
+    if ("os_timezone" in state && (state.timezones || []).length) instant.appendChild(osTimezone());
+    const times = el("fieldset", {}, [el("legend", { textContent: "مواقيت الصلاة" })]);
+    times.appendChild(el("div", { id: "source" }));
+    instant.appendChild(times);
 
     /* Offered only where the device reports it: a device from before the warning
        refuses a key it does not know, and this copy of the page can be newer than it. */
@@ -210,11 +219,16 @@ function buildForm() {
         const warn = el("input", { type: "checkbox", id: "enable_internet_warning",
                                    checked: !!state.values.enable_internet_warning });
         warn.dataset.bool = "enable_internet_warning";
-        extra.appendChild(el("label", {}, [warn,
-            document.createTextNode("تنبيه على شاشة الجهاز عند انقطاع الإنترنت")]));
+        form.appendChild(el("fieldset", {}, [
+            el("legend", { textContent: "تنبيه انقطاع الإنترنت" }),
+            el("label", {}, [warn,
+                document.createTextNode("تنبيه على شاشة الجهاز عند انقطاع الإنترنت")])]));
     }
-    form.appendChild(extra);
-    if ("os_timezone" in state && (state.timezones || []).length) form.appendChild(osTimezone());
+    for (const section of SECTIONS) {
+        const set = el("fieldset", {}, [el("legend", { textContent: section.legend })]);
+        for (const field of section.fields) set.appendChild(buildField(field));
+        form.appendChild(set);
+    }
     renderSource();
 }
 
@@ -438,6 +452,67 @@ function osTimezone() {
     change.addEventListener("click", () => changeOsTimezone(picker.city.value, offer, change));
     set.appendChild(el("div", { className: "bar" }, [change]));
     set.appendChild(offer);
+    return set;
+}
+
+/* The touch screen's backlight, also apart from the save button. Moving the slider shows
+   each value on the device at once; letting go asks, and only a yes keeps it. A no - or a
+   phone that goes quiet, which the device gives a minute - puts back the value from before. */
+function screenBrightness() {
+    const info = state.brightness;
+    const set = el("fieldset", {}, [el("legend", { textContent: "سطوع الشاشة" })]);
+    set.appendChild(el("p", { className: "sub", textContent:
+        "يتغيّر سطوع شاشة الجهاز فور تحريك المؤشر، ولا يُحفظ إلا بعد التأكيد." }));
+    const shown = el("output", { textContent: `${info.percent}%` });
+    const slider = el("input", { type: "range", id: "brightness", min: info.min,
+                                 max: info.max, step: 5, value: info.percent });
+    slider.style.width = "100%";
+    set.appendChild(el("label", {}, [document.createTextNode("السطوع: "), shown]));
+    set.appendChild(slider);
+
+    const post = (body) => api("/api/brightness", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let wanted = null;
+    let sending = null;
+    let preview = null;
+    /* Only the latest value is sent, one request at a time, so a fast drag over a slow
+       wifi does not queue up every step it passed. */
+    async function send() {
+        while (wanted !== null) {
+            const percent = wanted;
+            wanted = null;
+            try {
+                preview = await post({ percent });
+            } catch (e) {
+                show("error", e.message);
+            }
+        }
+        sending = null;
+    }
+    slider.addEventListener("input", () => {
+        shown.textContent = `${slider.value}%`;
+        wanted = Number(slider.value);
+        if (!sending) sending = send();
+    });
+    slider.addEventListener("change", async () => {
+        if (sending) await sending;
+        const percent = Number(slider.value);
+        try {
+            if (percent !== info.saved && preview
+                    && window.confirm(preview.confirm)) {
+                const kept = await post({ percent, confirmed: true });
+                info.saved = kept.saved;
+                show("ok", `تم ضبط سطوع الشاشة على ${kept.saved}%.`);
+            } else {
+                await post({ cancel: true });
+                slider.value = info.saved;
+                shown.textContent = `${info.saved}%`;
+            }
+        } catch (e) {
+            show("error", e.message);
+        }
+        preview = null;
+    });
     return set;
 }
 

@@ -536,6 +536,18 @@ fieldset {
 
 legend { padding: 0 .4rem; font-size: 1.15rem; }
 
+/* The box the save button keeps: the sections in it are cards on its own colour, and
+   it stands apart from the ones above that act at once. */
+fieldset.saved {
+    background: transparent;
+    border: 2px solid var(--accent);
+    padding: .75rem .75rem .25rem;
+}
+
+fieldset.saved > legend { font-size: 1.3rem; color: var(--accent); }
+
+fieldset.saved fieldset { margin-bottom: .75rem; }
+
 /* A label is its text and its control side by side, and on a narrow phone the control
    has to be allowed to drop under the text instead of pushing the line off the screen -
    "عدد الدقائق قبل صلاة الفجر:" plus a number field is already wider than 360px. */

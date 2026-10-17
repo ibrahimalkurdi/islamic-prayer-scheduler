@@ -15,8 +15,8 @@ import importlib.util
 import os
 from datetime import date as date_cls, datetime, time, timedelta
 
-from shared import (audio_lists, audio_upload, os_timezone, prayer_logic, prayer_source,
-                    settings_defaults, settings_rules)
+from shared import (audio_lists, audio_upload, brightness, os_timezone, prayer_logic,
+                    prayer_source, settings_defaults, settings_rules)
 
 # The colours the touch screen paints, by the names period_state returns. Sent to the
 # browser rather than written into the CSS so that changing one in the GUI changes the
@@ -270,6 +270,7 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
         "timezones": [[country, [[city, zone] for city, zone in cities]]
                       for country, _code, cities in table],
         "os_timezone": os_timezone.current(),
+        "brightness": brightness.status(scheduler_dir),
         "times": today_times(scheduler_dir, desktop_dir),
     }
 

@@ -15,6 +15,9 @@ chk() { # name, condition-output, expected
 
 # Start from 1.0.0 with nothing pinned, whatever earlier tests left behind.
 echo "1.0.0" > "$SCH/var/installed_version"
+# The screen's brightness and the countdown clock are the owner's choices, kept in var/.
+echo "40" > "$SCH/var/brightness"
+echo "on" > "$SCH/var/countdown_clock"
 python3 - "$SCH/config/update.conf" <<'P'
 import re, sys
 path = sys.argv[1]
@@ -43,6 +46,8 @@ chk "prayer map kept (config)" \
     "$(grep -c '12:34' "$SCH/config/prayer_times_map.py")" "1"
 chk "prayer map kept (inside the replaced app directory)" \
     "$(grep -c '12:34' "$SCH/applications/desktop/prayer_times_gui/prayer_times_map.py")" "1"
+chk "screen brightness kept" "$(cat "$SCH/var/brightness" 2>/dev/null)" "40"
+chk "countdown clock kept on" "$(cat "$SCH/var/countdown_clock" 2>/dev/null)" "on"
 
 echo
 echo "The payload's template user was rewritten before anything was copied:"

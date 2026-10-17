@@ -162,14 +162,14 @@ COUNTDOWN_BG_RED = "#990000"      # the 20 minutes before the next athan
 COUNTDOWN_BG_MAKROOH = "#EF6C00"
 
 # --- Window buttons ----------------------------------------------------------
-# A row of five in the top-left corner: close, fullscreen, view, mute, settings. Centred
-# text on the notice line is shrunk until it clears them.
+# A row of six in the top-left corner: close, fullscreen, view, mute, settings, clock.
+# The notice line and the internet banner sit in the strip right of them.
 WINDOW_BUTTON_LEFT = 10               # x of the first button
 WINDOW_BUTTON_PITCH = 48              # x step between buttons
 WINDOW_BUTTON_WIDTH = 48
 WINDOW_BUTTON_HEIGHT = 50
 WINDOW_BUTTON_FONT_PX = 20
-WINDOW_BUTTONS_RIGHT_EDGE = 258       # what the notice has to stay clear of
+WINDOW_BUTTONS_RIGHT_EDGE = 306       # what the notice has to stay clear of
 # Each glyph sits at a different height inside its own line box, so the four are
 # nudged individually to put their ink on one line. Measured, not guessed: the
 # centres were 35.5 / 35.0 / 37.5 / 36.0 before these offsets.
@@ -195,6 +195,29 @@ MUTE_UNTIL_HEIGHT = 26
 MUTE_UNTIL_PX = 15
 MUTE_UNTIL_TEXT = "الصوت مكتوم حتى"
 MUTED_TEXT = "الصوت مكتوم"
+
+# --- Clock -------------------------------------------------------------------
+# The time of day in a box in the top-right corner, switched on and off with 🕒 at the end
+# of the button row. The choice is kept on the device in var/, which updates leave alone,
+# so it survives a restart; no file means off, the countdown as it has always looked.
+CLOCK_FLAG_FILE = os.path.join(SCHEDULER_DIR, "var", "countdown_clock")
+CLOCK_GLYPH = "\U0001F552"
+CLOCK_ICON_Y = 13
+CLOCK_ICON_SIZE = 19
+# Two sizes. At the top it is large: the prayer name's ink starts at
+# COUNTDOWN_NAME_INK_TOP_RATIO of the height, y=79 on the 800x480 screen, so the box has
+# the strip above it at any width. Pushed down by the internet banner it sits beside the
+# name instead, and has to be narrow: the name's ink is at most
+# COUNTDOWN_NAME_WIDTH_RATIO of the width, centred, so only right of x=660 is free.
+CLOCK_MARGIN = 10
+CLOCK_TOP = 4
+CLOCK_PADDING = 6
+# (box height, digits px, AM/PM px)
+CLOCK_LARGE = (72, 56, 24)
+CLOCK_COMPACT = (48, 26, 14)
+CLOCK_FONT = "DejaVu Sans"
+CLOCK_PRESSED_BG = "rgba(0, 0, 0, 0.22)"
+CLOCK_PRESSED_BORDER = "rgba(0, 0, 0, 0.45)"
 
 
 # The device is asked how it stands rather than trusted to still be as it was left, so
@@ -339,13 +362,54 @@ def fit_countdown_font(available_width, available_height):
 
 
 def fit_notice_font(text, available_width):
-    """Largest size whose centred text starts to the right of the window buttons."""
+    """Largest size whose text fits the strip it is centred in. The strip, not the whole
+    page: centred on the page, the notice had to clear the six window buttons on both
+    sides and came out at the smallest size."""
     for size in range(COUNTDOWN_NOTICE_MAX_PT, COUNTDOWN_NOTICE_MIN_PT - 1, -1):
         font = QFont(COUNTDOWN_NAME_FONT, size, QFont.Bold)
-        width = QFontMetrics(font).horizontalAdvance(text)
-        if (available_width - width) / 2 >= WINDOW_BUTTONS_RIGHT_EDGE:
+        if QFontMetrics(font).horizontalAdvance(text) <= available_width:
             return font
     return QFont(COUNTDOWN_NAME_FONT, COUNTDOWN_NOTICE_MIN_PT, QFont.Bold)
+
+
+def clock_shown():
+    return os.path.exists(CLOCK_FLAG_FILE)
+
+
+def set_clock_shown(shown):
+    """False when the choice could not be kept; the clock still follows the tap."""
+    try:
+        if shown:
+            os.makedirs(os.path.dirname(CLOCK_FLAG_FILE), exist_ok=True)
+            with open(CLOCK_FLAG_FILE, "w", encoding="ascii") as handle:
+                handle.write("on\n")
+        elif os.path.exists(CLOCK_FLAG_FILE):
+            os.remove(CLOCK_FLAG_FILE)
+    except OSError:
+        return False
+    return True
+
+
+def clock_markup(when, size):
+    """The hour large and AM/PM small, kept left to right inside this right-to-left window."""
+    _, digits_px, mark_px = size
+    digits, mark = clock_12h(when).strip().split(" ")
+    return (f'<div dir="ltr" style="white-space:nowrap">'
+            f'<span style="font-size:{digits_px}px">{digits}</span>'
+            f'<span style="font-size:{mark_px}px"> {mark}</span></div>')
+
+
+def clock_box_width(size):
+    """Wide enough for the widest time, 12:59 PM, at one of the clock's sizes."""
+    _, digits_px, mark_px = size
+    digits = QFont(CLOCK_FONT)
+    digits.setPixelSize(digits_px)
+    digits.setBold(True)
+    mark = QFont(CLOCK_FONT)
+    mark.setPixelSize(mark_px)
+    mark.setBold(True)
+    return (QFontMetrics(digits).horizontalAdvance("12:59")
+            + QFontMetrics(mark).horizontalAdvance(" PM") + 2 * CLOCK_PADDING + 4)
 
 
 
@@ -934,8 +998,8 @@ class AdhanCounter(QWidget):
 
         self.counter_page.setLayout(self.layout)
 
-        # Sits over the page, spanning its full width so the text stays centred on the
-        # page; fit_notice_font keeps it narrow enough to clear the window buttons.
+        # Sits over the page in the strip right of the window buttons, centred in it;
+        # update_countdown places it and fit_notice_font sizes it to fit.
         # Placed, not laid out - see COUNTDOWN_VIEW_TOP_RATIO.
         self.prayerName.setParent(self.counter_page)
 
@@ -993,6 +1057,31 @@ class AdhanCounter(QWidget):
         self.settings_btn.clicked.connect(self.open_settings)
         self.settings_btn.show()
 
+        # Shows and hides the clock. Pressed in while the clock is up, so the button says
+        # which way it is without the clock having to be looked for.
+        self.clock_btn = QPushButton(CLOCK_GLYPH, self)
+        self.clock_btn.setCheckable(True)
+        self.clock_btn.setGeometry(*window_button_box(5, CLOCK_ICON_Y))
+        self.clock_btn.clicked.connect(self.toggle_clock)
+        self.clock_btn.show()
+
+        # On the countdown page itself, so it goes with it to the daily list and stays
+        # under the wifi picker and the battery notice, which cover the whole window.
+        self.clock = QLabel("", self.counter_page)
+        self.clock.setObjectName("clockBox")
+        self.clock.setTextFormat(Qt.RichText)
+        self.clock.setAlignment(Qt.AlignCenter)
+        self.clock.setLayoutDirection(Qt.LeftToRight)
+        self.clock.setAttribute(Qt.WA_TransparentForMouseEvents)
+        clock_font = QFont(CLOCK_FONT)
+        clock_font.setBold(True)
+        self.clock.setFont(clock_font)
+        self.clock.setStyleSheet(
+            "#clockBox { background: rgba(0, 0, 0, 0.30); color: white; border-radius: 8px;"
+            f" border: 2px solid rgba(255, 255, 255, 0.55); padding: 0px {CLOCK_PADDING}px; }}")
+        self.clock_btn.setChecked(clock_shown())
+        self.clock.setVisible(self.clock_btn.isChecked())
+
         self.mute_until = QLabel("", self)
         self.mute_until.setGeometry(WINDOW_BUTTON_LEFT, MUTE_UNTIL_TOP,
                                     WINDOW_BUTTONS_RIGHT_EDGE - WINDOW_BUTTON_LEFT,
@@ -1028,7 +1117,7 @@ class AdhanCounter(QWidget):
         self.paint_window_buttons("black")
 
         for button in (self.exit_btn, self.fullscreen_btn, self.view_btn,
-                       self.mute_btn, self.settings_btn):
+                       self.mute_btn, self.settings_btn, self.clock_btn):
             button.raise_()
             # Subpixel antialiasing tints thin strokes orange on one edge and blue on
             # the other. On the speaker's sound waves that is strong enough to read as
@@ -1085,6 +1174,64 @@ class AdhanCounter(QWidget):
             button.setStyleSheet(style)
         self.page_button_color = color
         self.paint_mute_button()
+        self.paint_clock_button()
+
+    # -------------------------
+    # Clock
+    # -------------------------
+    def paint_clock_button(self):
+        color = self.page_button_color
+        self.clock_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: 2px solid transparent;"
+            f" border-radius: 8px; font-size: {CLOCK_ICON_SIZE}px; color: {color}; }}"
+            f" QPushButton:checked {{ background: {CLOCK_PRESSED_BG};"
+            f" border: 2px inset {CLOCK_PRESSED_BORDER}; }}")
+        icon_font = QFont(SYMBOL_FONT)
+        icon_font.setStyleStrategy(QFont.PreferAntialias | QFont.NoSubpixelAntialias)
+        self.clock_btn.setFont(icon_font)
+
+    def toggle_clock(self):
+        shown = self.clock_btn.isChecked()
+        set_clock_shown(shown)
+        self.clock.setVisible(shown)
+        self.update_clock(datetime.now())
+        self.update_countdown()
+
+    def clock_size(self):
+        """Large at the top; compact under the internet banner, beside the prayer name."""
+        if self.internet_banner.isVisible() and self.stack.currentWidget() is self.counter_page:
+            return CLOCK_COMPACT
+        return CLOCK_LARGE
+
+    def clock_geometry(self):
+        """Top-right, or under the internet banner while that takes the top strip."""
+        width = self.width() or 800
+        size = self.clock_size()
+        top = CLOCK_TOP
+        if size is CLOCK_COMPACT:
+            top = self.internet_banner.geometry().bottom() + 1 + CLOCK_MARGIN // 2
+        box_width = clock_box_width(size)
+        return (width - CLOCK_MARGIN - box_width, top, box_width, size[0])
+
+    def update_clock(self, now):
+        if not self.clock_btn.isChecked():
+            return
+        markup = clock_markup(now, self.clock_size())
+        if self.clock.text() != markup:
+            self.clock.setText(markup)
+        geometry = self.clock_geometry()
+        if self.clock.geometry().getRect() != geometry:
+            self.clock.setGeometry(*geometry)
+        self.clock.raise_()
+
+    def notice_strip(self):
+        """Where the makrooh notice is centred: right of the window buttons, and left of
+        the clock when the clock is up."""
+        width = self.width() or 800
+        right = width - INTERNET_BANNER_MARGIN
+        if self.clock_btn.isChecked():
+            right = self.clock_geometry()[0] - INTERNET_BANNER_MARGIN
+        return WINDOW_BUTTONS_RIGHT_EDGE, max(0, right - WINDOW_BUTTONS_RIGHT_EDGE)
 
     # -------------------------
     # Mute handling
@@ -1202,11 +1349,13 @@ class AdhanCounter(QWidget):
             self.stack.setCurrentWidget(self.daily_page)
             self.view_btn.setText("◷")
             self.view_btn.setGeometry(*window_button_box(2, VIEW_ICON_Y_DAILY))
+            self.clock_btn.hide()
             self.paint_window_buttons(PAGE_TEXT)
         else:
             self.stack.setCurrentWidget(self.counter_page)
             self.view_btn.setText("☰")
             self.view_btn.setGeometry(*window_button_box(2, VIEW_ICON_Y_COUNTER))
+            self.clock_btn.show()
             self.paint_window_buttons("black")
             self.update_countdown()
 
@@ -1237,6 +1386,7 @@ class AdhanCounter(QWidget):
         if message is None or picker_open or (on_counter and self.title.isVisible()):
             self.internet_banner.hide()
             self.internet_close.hide()
+            self.update_clock(datetime.now())
             return
         text, background = message
         width = self.width() or 800
@@ -1284,6 +1434,7 @@ class AdhanCounter(QWidget):
             self.internet_close.raise_()
         else:
             self.internet_close.hide()
+        self.update_clock(datetime.now())
 
     def close_internet_banner(self):
         self.internet.dismiss()
@@ -1358,6 +1509,7 @@ class AdhanCounter(QWidget):
 
     def update_countdown(self):
         now = datetime.now()
+        self.update_clock(now)
         prev_p, next_p, prev_t, next_t = get_prev_next_prayer(now)
 
         if not next_t or not prev_t:
@@ -1469,11 +1621,13 @@ class AdhanCounter(QWidget):
         # An empty label still claims a line box, which would leave a gap where the old
         # static title used to sit.
         self.title.setVisible(bool(title_text))
-        self.title.setGeometry(0, COUNTDOWN_NOTICE_TOP, width, COUNTDOWN_NOTICE_HEIGHT)
+        strip_left, strip_width = self.notice_strip()
+        self.title.setGeometry(strip_left, COUNTDOWN_NOTICE_TOP, strip_width,
+                               COUNTDOWN_NOTICE_HEIGHT)
         # One cap for every state: the notice is out of the layout, so it no longer
         # competes with the name for height and the name need not shrink for it.
         if title_text:
-            self.title.setFont(fit_notice_font(title_text, width))
+            self.title.setFont(fit_notice_font(title_text, strip_width))
         self.countdown.setFont(fit_countdown_font(width, height))
         self.layout.setContentsMargins(
             COUNTDOWN_SIDE_MARGIN, round(height * COUNTDOWN_VIEW_TOP_RATIO),

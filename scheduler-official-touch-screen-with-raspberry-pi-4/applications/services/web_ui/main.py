@@ -33,8 +33,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # applications/, so "from shared import ..." works however the service was started.
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
-from shared import (audio_lists, audio_upload, device_info, mute as mute_lib,  # noqa: E402
-                    os_timezone, prayer_logic, prayer_source, updates)
+from shared import (audio_lists, audio_upload, brightness, device_info,  # noqa: E402
+                    mute as mute_lib, os_timezone, prayer_logic, prayer_source, updates)
 import api  # noqa: E402
 
 DEFAULT_PORT = 80
@@ -120,7 +120,8 @@ PUBLIC_APP_ORIGIN = public_app_origins()
 PUBLIC_APP_PATHS = ("/api/mute", "/api/device", "/api/settings", "/api/apply",
                     "/api/prayer-source", "/api/reset", "/api/update",
                     "/api/update/versions", "/api/update/auto", "/api/audio",
-                    "/api/audio/check", "/api/audio/delete", "/api/os-timezone")
+                    "/api/audio/check", "/api/audio/delete", "/api/os-timezone",
+                    "/api/brightness")
 
 # The two jobs that outlive a request and restart this very service on the way: an update,
 # and the setup a reset runs. A child of this process would be killed with it - systemd
@@ -132,6 +133,9 @@ JOB_START_TIMEOUT_SECONDS = 15
 # The version list comes from the network, slower than the app's 10 s limit for a call
 # to the device - so it is fetched in the background and the page asks again.
 VERSIONS_FRESH_SECONDS = 60
+# A brightness shown from a phone that then goes quiet - the page closed, the wifi gone -
+# goes back on its own rather than staying until the next boot.
+BRIGHTNESS_PREVIEW_SECONDS = 60
 
 
 class Device:
@@ -154,6 +158,9 @@ class Device:
         self._versions_lock = threading.Lock()
         self._fonts = {}
         self._icons = {}
+        self.brightness_lock = threading.Lock()
+        self.brightness_before = None
+        self.brightness_timer = None
 
     def font(self, name):
         """One of FONTS, out of the zip, read once and kept."""
@@ -245,6 +252,27 @@ class Device:
         except (OSError, subprocess.SubprocessError) as error:
             return str(error)
         return "" if result.returncode == 0 else (result.stderr or result.stdout).strip()
+
+    def brightness_lapse(self):
+        """A preview nobody confirmed: back to the value from before it."""
+        with self.brightness_lock:
+            before, self.brightness_before = self.brightness_before, None
+            self.brightness_timer = None
+        if before is None:
+            return
+        try:
+            brightness.write(before)
+        except brightness.BrightnessError as error:
+            print(f"brightness: could not go back to {before}%: {error}", flush=True)
+
+    def restore_brightness(self):
+        try:
+            value = brightness.restore(self.scheduler_dir, brightness.RESTORE_WAIT_SECONDS)
+        except brightness.BrightnessError as error:
+            print(f"brightness: {error}", flush=True)
+            return
+        if value is not None:
+            print(f"brightness: restored {value}%", flush=True)
 
     def job_running(self, unit):
         try:
@@ -385,6 +413,9 @@ class Handler(BaseHTTPRequestHandler):
                     force=bool(query.get("refresh"))))
             if path == "/api/reset":
                 return self.send_json({"running": self.device.job_running(RESET_UNIT)})
+            if path == "/api/brightness":
+                return self.send_json(brightness.status(self.device.scheduler_dir)
+                                      or {"available": False})
             return self.fail(404, "not found")
         except Exception as error:  # a broken page must not take the service down
             self.log_message("error on %s: %s", path, error)
@@ -431,6 +462,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_audio_delete_post()
             if path == "/api/os-timezone":
                 return self.api_os_timezone_post()
+            if path == "/api/brightness":
+                return self.api_brightness_post()
             return self.fail(404, "not found")
         except Exception as error:
             self.log_message("error on %s: %s", path, error)
@@ -675,6 +708,45 @@ class Handler(BaseHTTPRequestHandler):
         self.log_message("os timezone: %s, rebooting", zone)
         self.send_json({"rebooting": True, "zone": zone})
 
+    def api_brightness_post(self):
+        """{"percent": n} shows n on the screen at once and keeps it only for
+        BRIGHTNESS_PREVIEW_SECONDS; {"percent": n, "confirmed": true} keeps it;
+        {"cancel": true} goes back to the value from before the first preview."""
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        device = self.device
+        try:
+            with device.brightness_lock:
+                if device.brightness_timer is not None:
+                    device.brightness_timer.cancel()
+                    device.brightness_timer = None
+                if device.brightness_before is None:
+                    device.brightness_before = brightness.confirmed(device.scheduler_dir)
+                before = device.brightness_before
+                if body.get("cancel"):
+                    if before is not None:
+                        brightness.write(before)
+                    device.brightness_before = None
+                    self.log_message("brightness: back to %s%%", before)
+                elif body.get("confirmed"):
+                    value = brightness.save(device.scheduler_dir,
+                                            brightness.write(body.get("percent")))
+                    device.brightness_before = None
+                    self.log_message("brightness: %s%% -> %s%%", before, value)
+                else:
+                    value = brightness.write(body.get("percent"))
+                    device.brightness_timer = threading.Timer(
+                        BRIGHTNESS_PREVIEW_SECONDS, device.brightness_lapse)
+                    device.brightness_timer.daemon = True
+                    device.brightness_timer.start()
+                    return self.send_json(dict(brightness.status(device.scheduler_dir),
+                                               saved=before, before=before,
+                                               confirm=brightness.question(before, value)))
+        except brightness.BrightnessError as error:
+            return self.fail(400, str(error))
+        self.send_json(brightness.status(device.scheduler_dir) or {"available": False})
+
     def api_reset_post(self):
         if self.device.job_running(RESET_UNIT):
             return self.fail(409, "جارٍ إعادة الضبط")
@@ -847,7 +919,8 @@ def main():
     parser.add_argument("--desktop-dir", default=os.path.join(home, "Desktop"))
     args = parser.parse_args()
 
-    server, _ = build_server(args.scheduler_dir, args.desktop_dir, args.port, args.bind)
+    server, device = build_server(args.scheduler_dir, args.desktop_dir, args.port, args.bind)
+    threading.Thread(target=device.restore_brightness, daemon=True).start()
     address = local_ip() or args.bind
     print(f"Prayer scheduler website on http://{socket.gethostname()}.local"
           f"{'' if args.port == 80 else ':' + str(args.port)}"

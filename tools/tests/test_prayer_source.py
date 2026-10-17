@@ -58,7 +58,7 @@ dialog = gui.PrayerSourceDialog(None, current_source=BERLIN)
 chk("opens on the city in use", dialog.combo.currentData(), BERLIN)
 chk("the yellow note names the file the choice is copied into",
     "إدخال-مواقيت-الصلاة-للمستخدم.csv" in dialog.note.text(), True)
-chk("and says to save", "حفظ وتفعيل الإعدادات" in dialog.note.text(), True)
+chk("and says to save", "حفظ وتطبيق الإعدادات" in dialog.note.text(), True)
 chk("beside «استعادة مواقيت المدينة», what it copies where",
     ("برلين.csv" in dialog.restore_note.text(), dialog.restore_btn.isEnabled()), (True, True))
 chk("file names are kept whole inside the Arabic", "⁨برلين.csv⁩" in dialog.restore_note.text(), True)

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -55,6 +56,14 @@ for sub in ("config/scripts", "config/prayers-config", "config/fonts/arabic-font
             "audio/friday_quran", "audio/shorooq", "audio/dhuhr", "audio/asr",
             "audio/maghrib", "audio/isha"):
     os.makedirs(os.path.join(SCHEDULER, sub), exist_ok=True)
+
+# A backlight of its own, so nothing here can dim the screen of the machine running it.
+BACKLIGHT = os.path.join(ROOT, "backlight", "10-0045")
+os.makedirs(BACKLIGHT)
+for name, value in (("max_brightness", "255"), ("brightness", "255")):
+    with open(os.path.join(BACKLIGHT, name), "w", encoding="ascii") as handle:
+        handle.write(value + "\n")
+os.environ["SCHEDULER_BACKLIGHT_ROOT"] = os.path.dirname(BACKLIGHT)
 
 # The real icons, not stand-ins: the server reads them out of config/icons/ rather than
 # from site/, so a fixture that invented its own would prove the route and not the file.
@@ -1336,9 +1345,8 @@ check_true("and it is there", os.path.isfile(os.path.join(SCHEDULER, "audio", "d
                                                           "usb-recitation.mp3")))
 gui = open(os.path.join(APPLICATIONS, "desktop", "scheduler_settings_gui", "main.py"),
            encoding="utf-8").read()
-check_true("the Settings app offers it beside the internet warning",
-           "main_layout.addWidget(self.build_internet_warning_section())\n"
-           "        main_layout.addWidget(self.build_audio_upload_section())" in gui)
+check_true("the Settings app offers it among the sections that act at once",
+           "main_layout.addWidget(self.build_audio_upload_section())" in gui)
 check_true("with a picker for a file on the device", "QFileDialog.getOpenFileName(" in gui
            and "audio_upload.copy(" in gui)
 for needle in ("إدارة الملفات الصوتية", "رفع ملف", "حذف ملفات", "/api/audio/check",
@@ -1529,6 +1537,103 @@ check_true("the Settings app offers it in place of the daylight-saving choice",
            and "os_timezone.change(self.zone, TIMEZONE_COUNTRIES, MAIN_DIR, DESKTOP_DIR, self.preset)" in gui)
 check_true("and the page has no daylight-saving choice left",
            "enable_daylight_saving" not in settings_html and "dst_country" not in settings_html)
+
+print("20g. the screen's brightness is shown at once and kept only once confirmed")
+from shared import brightness as brightness_lib  # noqa: E402
+
+
+def backlight():
+    return int(open(os.path.join(BACKLIGHT, "brightness"), encoding="ascii").read())
+
+
+def saved_brightness():
+    try:
+        return open(os.path.join(SCHEDULER, "var", "brightness"), encoding="ascii").read()
+    except OSError:
+        return None
+
+
+check("the page is told the brightness", json.loads(get("/api/settings")[1])["brightness"],
+      {"percent": 100, "saved": 100, "min": 10, "max": 100})
+status, body = post("/api/brightness", {"percent": 20})
+check("a preview changes the screen at once", backlight(), 51)
+check("and asks with both values", body.get("confirm"),
+      "هل تريد تغيير سطوع الشاشة من 100% إلى 20%؟")
+check("but keeps nothing yet", (saved_brightness(), body.get("saved")), (None, 100))
+post("/api/brightness", {"percent": 90})
+check("a second preview still asks from the value before the first",
+      post("/api/brightness", {"percent": 90})[1].get("confirm"),
+      "هل تريد تغيير سطوع الشاشة من 100% إلى 90%؟")
+post("/api/brightness", {"cancel": True})
+check("no puts it back", backlight(), 255)
+check("and keeps nothing", saved_brightness(), None)
+post("/api/brightness", {"percent": 20})
+status, body = post("/api/brightness", {"percent": 20, "confirmed": True})
+check("yes keeps it", (status, body.get("saved"), saved_brightness()), (200, 20, "20\n"))
+check("the next question starts from the kept value",
+      post("/api/brightness", {"percent": 60})[1].get("confirm"),
+      "هل تريد تغيير سطوع الشاشة من 20% إلى 60%؟")
+post("/api/brightness", {"cancel": True})
+check("and no goes back to it", backlight(), 51)
+post("/api/brightness", {"percent": 0})
+check("never dark enough to lose the screen", backlight(), 26)
+post("/api/brightness", {"cancel": True})
+check("a value that is not a number is refused",
+      post("/api/brightness", {"percent": "bright"})[0], 400)
+web.BRIGHTNESS_PREVIEW_SECONDS = 0.2
+post("/api/brightness", {"percent": 80})
+deadline = time.monotonic() + 5
+while backlight() != 51 and time.monotonic() < deadline:
+    time.sleep(0.05)
+check("a preview nobody answers goes back on its own", backlight(), 51)
+web.BRIGHTNESS_PREVIEW_SECONDS = 60
+with open(os.path.join(BACKLIGHT, "brightness"), "w", encoding="ascii") as handle:
+    handle.write("255\n")
+device.restore_brightness()
+check("the kept value is written back at start, as after a boot", backlight(), 51)
+check("a stranger's page may not change it",
+      post("/api/brightness", {"percent": 50}, origin="http://evil.example")[0], 403)
+check_true("the handed-out app may", "/api/brightness" in web.PUBLIC_APP_PATHS)
+for needle in ("سطوع الشاشة", "/api/brightness", 'type: "range"', "window.confirm(preview.confirm)"):
+    check_true(f"the page offers {needle}", needle in settings_html)
+check_true("the Settings app offers it too, with the same question",
+           "self.build_brightness_section()" in gui and "QSlider" in gui
+           and "brightness.question(self.brightness_kept, value)" in gui)
+os.environ["SCHEDULER_BACKLIGHT_ROOT"] = os.path.join(ROOT, "no-backlight")
+check("a device without a backlight shows no slider",
+      json.loads(get("/api/settings")[1])["brightness"], None)
+os.environ["SCHEDULER_BACKLIGHT_ROOT"] = os.path.dirname(BACKLIGHT)
+
+print("20h. what acts at once comes first; what the save button keeps is boxed with it")
+build = settings_html[settings_html.index("function buildForm()"):
+                      settings_html.index("function folderSelect(")]
+order = ["screenBrightness()", "audioManage()", "osTimezone()", '"مواقيت الصلاة"',
+         '"تنبيه انقطاع الإنترنت"', "for (const section of SECTIONS)"]
+check_true("brightness, sound files, time zone, prayer times, then the warning and the rest",
+           [build.index(needle) for needle in order]
+           == sorted(build.index(needle) for needle in order))
+check("the saved sections are the athan, then the nawafil, then the Quran",
+      re.findall(r'legend: "([^"]+)"', settings_html), ["الأذان", "النوافل والأذكار", "القرآن الكريم"])
+page_order = ['id="screen"', 'id="updates"', 'id="instant"', '<fieldset class="saved">',
+              'id="form"', 'id="save"', 'id="reset"', "</fieldset>"]
+check_true("updates sits between brightness and the rest, and save and reset close the box",
+           [settings_html.index(needle) for needle in page_order]
+           == sorted(settings_html.index(needle) for needle in page_order))
+check_true("the box is titled", "<legend>إعدادات الأذان والتلاوات</legend>" in settings_html)
+gui_build = gui[gui.index('        main_layout.addWidget(title)'):gui.index("main_layout.addWidget(close_btn)")]
+gui_order = ["self.build_brightness_section()", "self.build_updates_section()",
+             "self.build_audio_upload_section()", "self.build_os_timezone_section()",
+             "main_layout.addWidget(self.prayer_source_frame)", "main_layout.addWidget(saved_box)",
+             "saved_layout.addWidget(self.build_internet_warning_section())",
+             "saved_layout.addWidget(self.prayer_frame)", "saved_layout.addWidget(self.tahajjud_frame)",
+             "saved_layout.addWidget(self.cron_frame)", "saved_layout.addWidget(self.friday_quran_frame)",
+             "saved_layout.addLayout(btn_layout)"]
+check_true("the Settings app has the same order, save and reset inside the box",
+           [gui_build.index(needle) for needle in gui_order]
+           == sorted(gui_build.index(needle) for needle in gui_order))
+check_true("and the same title", 'QLabel("إعدادات الأذان والتلاوات")' in gui)
+check_true("and only the close button outside it",
+           "for b in [apply_btn, reset_btn]:" in gui)
 
 print("21. a request for nothing in particular is a 404, not a crash")
 for path in ("/nope", "/api/nope", "/api/day/extra"):
