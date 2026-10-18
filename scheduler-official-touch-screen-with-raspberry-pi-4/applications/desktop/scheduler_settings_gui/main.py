@@ -125,6 +125,18 @@ UPDATE_CONTROL_WIDTH = 430
 # Marks the one entry in the rollback list that is a real restore rather than a download.
 ROLLBACK_LOCAL_LABEL = "نسخة محفوظة"
 
+# A section's style is held to the section by name: a bare QFrame rule also reaches every
+# QLabel in it, since a label is a frame too, and drew a box around each one. The sections
+# that act at once are outlined darker, to stand apart from the saved box below them.
+SECTION_BORDER = "1px solid #ddd"
+INSTANT_SECTION_BORDER = "2px solid #555"
+TITLE_BACKGROUND = "#b3b3b3"
+
+
+def section_style(border):
+    return ("QFrame#section { background-color: #f9f9f9; border: %s; border-radius: 10px; }"
+            % border)
+
 # prayer_dst.py owns the daylight-saving rules and the generated-file naming; import it
 # rather than restating either here.
 sys.path.insert(0, SCRIPTS_DIR)
@@ -780,6 +792,10 @@ class ControlApp(QMainWindow):
         self.add_update_row(source_layout, (change_source_btn, 1))
 
         main_layout.addWidget(self.prayer_source_frame)
+        for i in range(main_layout.count()):
+            section = main_layout.itemAt(i).widget()
+            if section is not None and section.objectName() == "section":
+                section.setStyleSheet(section_style(INSTANT_SECTION_BORDER))
 
         # ---------------- Saved Box ----------------
         # Everything the save button keeps, with the save and reset buttons at its foot.
@@ -807,10 +823,10 @@ class ControlApp(QMainWindow):
             prayer_title = QLabel(labels["section"])
             apply_arabic_font(prayer_title, size=24, bold=True)
             prayer_title.setStyleSheet("""
-                background-color: #dcdcdc;       /* Light gray background */
+                background-color: %s;
                 padding: 8px;
                 border-radius: 6px;
-            """)
+            """ % TITLE_BACKGROUND)
             box_layout.addWidget(prayer_title)
 
             chk = QCheckBox(labels["enable"])
@@ -2225,7 +2241,7 @@ class ControlApp(QMainWindow):
     def audio_part_label(self, text):
         lbl = QLabel(text)
         lbl.setStyleSheet("font-size: 21px; font-weight: bold; color: #1f5f8b; "
-                          "border: none; border-bottom: 2px solid #1f5f8b; padding: 4px 2px;")
+                          "border: none; padding: 4px 2px;")
         return lbl
 
     def build_audio_upload_section(self):
@@ -2804,13 +2820,8 @@ class ControlApp(QMainWindow):
     def create_section_frame(self, title, font_family="Amiri", font_size=12, bold=True):
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #f9f9f9;
-                border: 1px solid #ddd;
-                border-radius: 10px;
-            }
-        """)
+        frame.setObjectName("section")
+        frame.setStyleSheet(section_style(SECTION_BORDER))
 
         layout = QVBoxLayout()
         layout.setContentsMargins(7, 7, 7, 7)
@@ -2829,10 +2840,10 @@ class ControlApp(QMainWindow):
 
         # Keep visual styling separate
         lbl.setStyleSheet("""
-            background-color: #e0e0e0;    /* Light gray background */
+            background-color: %s;
             padding: 10px;
             border-radius: 8px;
-        """)
+        """ % TITLE_BACKGROUND)
         lbl.setAlignment(Qt.AlignCenter)
 
         layout.addWidget(lbl)
@@ -2893,21 +2904,16 @@ class ControlApp(QMainWindow):
         title_label = QLabel(title_text)
         apply_arabic_font(title_label, family=font_family, size=font_size, bold=bold)
         title_label.setStyleSheet("""
-            background-color: #dcdcdc;       /* Light gray background */
+            background-color: %s;
             padding: 8px;
             border-radius: 6px;
-        """)
+        """ % TITLE_BACKGROUND)
 
         # Create the frame
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #f9f9f9;
-                border: 1px solid #ddd;
-                border-radius: 10px;
-            }
-        """)
+        frame.setObjectName("section")
+        frame.setStyleSheet(section_style(SECTION_BORDER))
         layout = QVBoxLayout()
         layout.setContentsMargins(7, 7, 7, 7)
         layout.setSpacing(7)
@@ -2924,8 +2930,9 @@ class ControlApp(QMainWindow):
     def create_sub_section_frame(self):
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
+        frame.setObjectName("subSection")
         frame.setStyleSheet("""
-            QFrame {
+            QFrame#subSection {
                 background-color: #ffffff;
                 border: 1px solid #ccc;
                 border-radius: 8px;

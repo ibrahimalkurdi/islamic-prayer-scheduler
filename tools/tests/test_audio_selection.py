@@ -119,6 +119,24 @@ gui.QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (source, ""))
 errors = []
 gui.arabic_error = lambda parent, title, text: errors.append(text)
 combo = w.upload_folder_combo
+from PyQt5.QtWidgets import QLabel
+parts = [l for l in combo.parentWidget().findChildren(QLabel) if l.text() in ("رفع ملف", "حذف ملفات")]
+chk("the two part headings carry no line that reads as a box edge",
+    [("border-bottom" in l.styleSheet(), "border: none" in l.styleSheet()) for l in parts],
+    [(False, True), (False, True)])
+from PyQt5.QtWidgets import QFrame
+sections = w.findChildren(QFrame, "section")
+saved = w.findChild(QFrame, "savedBox")
+instant = [f for f in sections if not saved.isAncestorOf(f)]
+chk("the five sections that act at once are outlined dark grey",
+    (len(instant), all(gui.INSTANT_SECTION_BORDER in f.styleSheet() for f in instant)), (5, True))
+chk("the sections in the saved box keep the light outline",
+    all(gui.SECTION_BORDER in f.styleSheet() for f in sections if saved.isAncestorOf(f)), True)
+chk("and a section's style reaches no label inside it",
+    [f.objectName() for f in w.findChildren(QFrame)
+     if f.styleSheet().lstrip().startswith("QFrame {")], [])
+chk("every section title wears the one darker grey",
+    all(gui.TITLE_BACKGROUND in f.layout().itemAt(0).widget().styleSheet() for f in sections), True)
 chk("the folders are offered by name",
     combo.itemText(combo.findData("duha")), "صلاة الضحى (duha)")
 w.upload_audio_file()
