@@ -63,6 +63,13 @@ open(path, "w", encoding="utf-8").write(new)
 PY
 }
 
+# Fast-forward only: a release built on a main that has gone its own way from origin's would
+# be refused at the push, after the tag and the build already exist.
+sync_main() {
+    git pull -q --ff-only origin main \
+        || { echo "ERROR: main cannot fast-forward to origin/main - sort that out first" >&2; return 1; }
+}
+
 ask() {
     local prompt="$1" default="$2" answer
     read -r -p "$prompt" answer
@@ -95,6 +102,7 @@ main() {
         || { echo "ERROR: working tree is dirty - commit or stash first" >&2; git status --short >&2; exit 1; }
     [[ "$(git rev-parse --abbrev-ref HEAD)" == main ]] \
         || { echo "ERROR: releases go out from main" >&2; exit 1; }
+    sync_main || exit 1
 
     if [[ "$mode" == rollout ]]; then
         [[ -n "$version" ]] || usage

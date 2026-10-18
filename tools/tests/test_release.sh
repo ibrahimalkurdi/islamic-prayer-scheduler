@@ -69,5 +69,21 @@ set_pointer VERSIONS.json zero 1.0.1 2> /dev/null
 chk "the short form is edited too" "$(python3 -c 'import json; print(json.load(open("VERSIONS.json"))["zero"])')" "1.0.1"
 set_pointer VERSIONS.json nope 1.0.0 2> /dev/null; chk "an unknown variant fails" "$?" "1"
 
+echo "== pull"
+ORIGIN="$(mktemp -d)"; OTHER="$(mktemp -d)"
+trap 'rm -rf "$REPO" "$ORIGIN" "$OTHER"' EXIT
+git init -q --bare -b main "$ORIGIN"
+git remote add origin "$ORIGIN"
+git push -q origin main
+git clone -q "$ORIGIN" "$OTHER"
+(cd "$OTHER" && git config user.email t@example.com && git config user.name t \
+    && echo x > pushed.txt && git add -A && git commit -qm "Pushed from elsewhere" && git push -q)
+sync_main; chk "a pull that fast-forwards succeeds" "$?" "0"
+chk "and brings the other commit in" "$(git log -1 --format=%s)" "Pushed from elsewhere"
+(cd "$OTHER" && echo y >> pushed.txt && git commit -qam "Second from elsewhere" && git push -q)
+c a.txt "Local only"
+sync_main 2> /dev/null; chk "a main that has gone its own way stops the release" "$?" "1"
+chk "and nothing is merged" "$(git log -1 --format=%s)" "Local only"
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || { echo "FAILURES ABOVE"; exit 1; }
