@@ -38,8 +38,12 @@ from PyQt5.QtWidgets import (
     QStyle,
     QStyleOptionComboBox,
     QStylePainter,
+    QScroller,
+    QAbstractItemView,
+    QAbstractButton,
+    QListView,
 )
-from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, QObject, QEvent, QPoint, QRect
 from PyQt5.QtGui import QFont, QFontMetrics, QIcon
 
 # ---------- ADD THIS ----------
@@ -131,6 +135,22 @@ ROLLBACK_LOCAL_LABEL = "نسخة محفوظة"
 SECTION_BORDER = "1px solid #ddd"
 INSTANT_SECTION_BORDER = "2px solid #555"
 TITLE_BACKGROUND = "#b3b3b3"
+
+# The upload and delete buttons stay grey until there is something for them to act on: a
+# folder to upload into, or a file ticked to delete. They still answer a press before
+# that, with what is missing. (normal, hover, pressed)
+AUDIO_BUTTON_IDLE = ("#4d4d4d", "#3d3d3d", "#2b2b2b")
+AUDIO_UPLOAD_READY = ("#198754", "#157347", "#0f5132")
+AUDIO_DELETE_READY = ("#b3261e", "#9a1f19", "#7f1913")
+
+
+def audio_button_style(colours):
+    normal, hover, pressed = colours
+    return (f"QPushButton {{ background-color: {normal}; color: white; font-size: 18px;"
+            " font-weight: bold; border-radius: 7px; padding: 8px; }"
+            f"QPushButton:hover {{ background-color: {hover}; }}"
+            f"QPushButton:pressed {{ background-color: {pressed}; }}"
+            "QPushButton:disabled { background-color: #9e9e9e; }")
 
 
 def section_style(border):
@@ -367,7 +387,232 @@ def arabic_confirm(parent, title, text):
     arabic_messagebox_buttons(msg)
     return msg.exec_() == QMessageBox.Yes
 
-class FetchingComboBox(QComboBox):
+# Every list here opens below its box, with a scroll bar, rather than over it with the
+# chosen entry under the finger and arrows that scroll the list when touched. Set on each
+# list, not once on the app: an app-wide style sheet takes over how every widget is
+# drawn, and the labels lost the app's Arabic font to it.
+COMBO_STYLE = "font-size: 18px; padding: 5px; combobox-popup: 0;"
+
+# Qt's own: what tells a double tap from two taps, and the release of the tap that opened
+# a list from one that chooses in it. Not desktop-settings-aware (see the app's start),
+# the app was left with -1 under qt5ct.
+DOUBLE_CLICK_INTERVAL_MS = 400
+
+
+def finger_scroll(view):
+    """A list scrolls under a swiping finger, and only a tap that stays put reaches its
+    entries. Without it a swipe was a tap: it chose, or ticked, the entry it lifted on."""
+    view.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+    QScroller.grabGesture(view.viewport(), QScroller.LeftMouseButtonGesture)
+    if DEBUG_LOG is not None:
+        QScroller.scroller(view.viewport()).stateChanged.connect(
+            lambda state, v=view: debug_log(f"{widget_name(v)} scroll {scroller_state(state)}"))
+
+
+# --debug: every tap, what it landed on and what came of it, in logs/settings_debug.log,
+# to find out afterwards what a finger did that the screen did not show.
+DEBUG_LOG_FILE = os.path.join(MAIN_DIR, "logs", "settings_debug.log")
+DEBUG_LOG = None
+
+
+def debug_log(message):
+    if DEBUG_LOG is not None:
+        DEBUG_LOG.write(f"{datetime.now():%Y-%m-%d %H:%M:%S.%f}"[:-3] + f" {message}\n")
+
+
+def scroller_state(state):
+    return {QScroller.Inactive: "ended", QScroller.Pressed: "pressed",
+            QScroller.Dragging: "dragging", QScroller.Scrolling: "coasting"}.get(state, str(state))
+
+
+def widget_name(widget):
+    while widget is not None:
+        if widget.objectName() and not widget.objectName().startswith("qt_"):
+            return widget.objectName()
+        widget = widget.parentWidget()
+    return "?"
+
+
+def describe_target(widget, pos):
+    what = type(widget).__name__
+    view = widget.parentWidget() if widget.objectName() == "qt_scrollarea_viewport" else widget
+    if isinstance(view, QAbstractItemView):
+        index = view.indexAt(view.viewport().mapFrom(widget, pos) if view is widget else pos)
+        what = f"list {widget_name(view)} entry " + (repr(index.data()) if index.isValid() else "none")
+        if view.property("open_list"):
+            what = "open " + what
+    elif isinstance(widget, QComboBox):
+        what = f"menu {widget_name(widget)} showing {widget.currentText()!r}"
+    elif isinstance(widget, QAbstractButton):
+        what = f"button {widget.text()!r}"
+    else:
+        what += f" {widget_name(widget)}"
+    return what
+
+
+class InputLog(QObject):
+    KINDS = {QEvent.MouseButtonPress: "press", QEvent.MouseButtonRelease: "release",
+             QEvent.MouseButtonDblClick: "double", QEvent.TouchBegin: "touch down",
+             QEvent.TouchEnd: "touch up", QEvent.TouchCancel: "touch cancel"}
+
+    def __init__(self):
+        super().__init__()
+        self.moves = 0
+        self.down_at = None
+        self.last_logged = None
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if not isinstance(obj, QWidget):
+            return False
+        if kind == QEvent.MouseMove and event.buttons():
+            self.moves += 1
+        elif kind in self.KINDS:
+            if kind in (QEvent.TouchBegin, QEvent.TouchEnd, QEvent.TouchCancel):
+                points = event.touchPoints()
+                where = points[0].screenPos().toPoint() if points else None
+                local = obj.mapFromGlobal(where) if where is not None else None
+            else:
+                where, local = event.globalPos(), event.pos()
+            extra = ""
+            if kind == QEvent.MouseButtonPress:
+                self.moves, self.down_at = 0, where
+            elif kind == QEvent.MouseButtonRelease and self.down_at is not None and where is not None:
+                extra = (f" after {self.moves} moves, {abs(where.x() - self.down_at.x())}"
+                         f"x{abs(where.y() - self.down_at.y())}px from the press")
+            # Qt hands an event nobody took to each parent in turn; the first is the one hit.
+            seen = (kind, event.timestamp(), where.x() if where is not None else None,
+                    where.y() if where is not None else None)
+            if seen == self.last_logged:
+                return False
+            self.last_logged = seen
+            spot = f" at {where.x()},{where.y()}" if where is not None else ""
+            target = describe_target(obj, local) if local is not None else type(obj).__name__
+            debug_log(f"{self.KINDS[kind]}{spot} on {target}{extra}")
+        return False
+
+
+def start_debug_log(app, path=DEBUG_LOG_FILE):
+    global DEBUG_LOG
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    DEBUG_LOG = open(path, "a", encoding="utf-8", buffering=1)
+    debug_log(f"=== Settings started in debug mode, pid {os.getpid()}")
+    app.debug_filter = InputLog()
+    app.installEventFilter(app.debug_filter)
+
+
+class TouchComboBox(QComboBox):
+    """A list that opens when the finger lifts, not when it lands. Opened on the press,
+    the release that follows belongs to the list: a tap held longer than a double-click
+    closed it again at once, or chose whatever entry lay under the finger. Opened on the
+    release, there is no release left to do either.
+
+    The open list is drawn inside the app's own window, not in a window of its own as Qt
+    draws it. The panel's taps reach the app as a mouse that labwc makes of the finger,
+    and in a window of its own the list got them at the wrong spot: a tap on an entry
+    landed beside the list, which closed it on the old choice. It scrolls under a swiping
+    finger, and only a tap that stays put chooses."""
+
+    LIST_STYLE = ("QListView { background: white; border: 1px solid #555; }"
+                  " QListView::item { padding: 6px 5px; }"
+                  " QListView::item:selected { background: #308cc6; color: white; }")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.list_view = None
+        self.eat_release = False
+
+    def build_list(self, host):
+        view = QListView(host)
+        view.setProperty("open_list", True)
+        view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        view.setStyleSheet(self.LIST_STYLE)
+        view.clicked.connect(self.choose)
+        view.hide()
+        finger_scroll(view)
+        return view
+
+    def showPopup(self):
+        host = self.window()
+        if self.list_view is None or self.list_view.parentWidget() is not host:
+            self.list_view = self.build_list(host)
+        view = self.list_view
+        view.setObjectName(widget_name(self))
+        view.setModel(self.model())
+        view.setModelColumn(self.modelColumn())
+        view.setFont(self.font())
+        view.setLayoutDirection(self.layoutDirection())
+        view.ensurePolished()
+        rows = min(self.count(), self.maxVisibleItems())
+        height = sum(view.sizeHintForRow(row) for row in range(rows)) + 2 * view.frameWidth()
+        box = QRect(self.mapTo(host, QPoint(0, 0)), self.size())
+        below, above = host.height() - box.bottom() - 1, box.top()
+        if height > below and above > below:
+            height = min(height, above)
+            top = box.top() - height
+        else:
+            height = min(height, below)
+            top = box.bottom() + 1
+        view.setGeometry(box.left(), top, box.width(), height)
+        current = self.model().index(self.currentIndex(), self.modelColumn(), self.rootModelIndex())
+        view.setCurrentIndex(current)
+        view.scrollTo(current, QAbstractItemView.PositionAtCenter)
+        debug_log(f"menu {widget_name(self)} opens its list, showing {self.currentText()!r}")
+        view.show()
+        view.raise_()
+        QApplication.instance().installEventFilter(self)
+
+    def hidePopup(self):
+        if self.list_view is None or not self.list_view.isVisible():
+            return
+        if not self.eat_release:
+            QApplication.instance().removeEventFilter(self)
+        self.list_view.hide()
+        debug_log(f"menu {widget_name(self)} closes its list, showing {self.currentText()!r}")
+
+    def choose(self, index):
+        self.hidePopup()
+        self.setCurrentIndex(index.row())
+        self.activated[int].emit(index.row())
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.MouseButtonRelease and self.eat_release:
+            self.eat_release = False
+            QApplication.instance().removeEventFilter(self)
+            return True
+        if (not self.list_view.isVisible() or not isinstance(obj, QWidget)
+                or obj is self.list_view or self.list_view.isAncestorOf(obj)):
+            return False
+        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick, QEvent.Wheel):
+            debug_log(f"a tap beside the open list of {widget_name(self)} only closes it")
+            self.eat_release = kind != QEvent.Wheel
+            self.hidePopup()
+            return True
+        if kind == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.hidePopup()
+            return True
+        return False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self.mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            event.accept()
+            if self.rect().contains(event.pos()):
+                self.showPopup()
+        else:
+            super().mouseReleaseEvent(event)
+
+
+class FetchingComboBox(TouchComboBox):
     """A list that asks before it opens, so its contents are fetched on the tap that
     wants them. before_popup returning False keeps it shut."""
 
@@ -380,7 +625,7 @@ class FetchingComboBox(QComboBox):
             super().showPopup()
 
 
-class RightAlignedComboBox(QComboBox):
+class RightAlignedComboBox(TouchComboBox):
     """A list whose chosen entry sits at the right edge of the box, against the label it
     answers. Qt draws it beside the arrow, which in a box wider than the entry - one
     sized for the longest of ~175 country names - leaves it at the far left."""
@@ -463,7 +708,7 @@ class PrayerSourceDialog(QDialog):
 
         self.combo = RightAlignedComboBox()
         self.combo.setLayoutDirection(Qt.RightToLeft)
-        self.combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        self.combo.setStyleSheet(COMBO_STYLE)
         self.combo.setFixedHeight(45)
         layout.addWidget(self.combo)
 
@@ -938,9 +1183,9 @@ class ControlApp(QMainWindow):
 
         # A fixed time or minutes after Fajr, chosen above the value it qualifies, the
         # same way Surat Al-Kahf's before/after sits above its minutes.
-        self.athkar_elsabah_mode_combo = QComboBox()
+        self.athkar_elsabah_mode_combo = TouchComboBox()
         self.athkar_elsabah_mode_combo.setLayoutDirection(Qt.RightToLeft)
-        self.athkar_elsabah_mode_combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        self.athkar_elsabah_mode_combo.setStyleSheet(COMBO_STYLE)
         self.athkar_elsabah_mode_combo.setFixedHeight(45)
         # As wide as its longest choice, not the row: stretched, the choice it shows lands
         # at the far end of the box, away from the label it answers.
@@ -1073,9 +1318,9 @@ class ControlApp(QMainWindow):
 
         # Before-or-after sits above the number it qualifies: on its own "60 minutes" says
         # nothing, and the pair is really one setting.
-        self.friday_quran_position_combo = QComboBox()
+        self.friday_quran_position_combo = TouchComboBox()
         self.friday_quran_position_combo.setLayoutDirection(Qt.RightToLeft)
-        self.friday_quran_position_combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        self.friday_quran_position_combo.setStyleSheet(COMBO_STYLE)
         self.friday_quran_position_combo.setFixedHeight(45)
         # As wide as its longest choice, not the row: stretched, the choice it shows lands
         # at the far end of the box, away from the label it answers.
@@ -1239,6 +1484,21 @@ class ControlApp(QMainWindow):
 
         # --- Initial calculation ---
         self.update_all_time_labels()
+        if DEBUG_LOG is not None:
+            self.watch_for_debug()
+
+    def watch_for_debug(self):
+        for name, widget in vars(self).items():
+            if isinstance(widget, (QComboBox, QListWidget)) and not widget.objectName():
+                widget.setObjectName(name)
+        for combo in self.findChildren(QComboBox):
+            combo.currentIndexChanged.connect(
+                lambda _, c=combo: debug_log(f"menu {widget_name(c)} chose {c.currentText()!r}"))
+        for audio_list in self.findChildren(QListWidget):
+            audio_list.itemChanged.connect(
+                lambda item, l=audio_list: debug_log(
+                    f"list {widget_name(l)} {'ticked' if item.checkState() == Qt.Checked else 'unticked'}"
+                    f" {item.text()!r}"))
 
 
     # ---------------- Helpers ----------------
@@ -2229,7 +2489,7 @@ class ControlApp(QMainWindow):
     def audio_folder_combo(self):
         combo = RightAlignedComboBox()
         combo.setLayoutDirection(Qt.RightToLeft)
-        combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        combo.setStyleSheet(COMBO_STYLE)
         combo.setFixedHeight(45)
         combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -2258,20 +2518,9 @@ class ControlApp(QMainWindow):
         self.upload_btn = QPushButton("اختيار الملف الصوتي ورفعه")
         self.upload_btn.setFixedHeight(50)
         self.upload_btn.setCursor(Qt.PointingHandCursor)
-        self.upload_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4d4d4d;
-                color: white;
-                font-size: 18px;
-                font-weight: bold;
-                border-radius: 7px;
-                padding: 8px;
-            }
-            QPushButton:hover { background-color: #3d3d3d; }
-            QPushButton:pressed { background-color: #2b2b2b; }
-            QPushButton:disabled { background-color: #9e9e9e; }
-        """)
         self.upload_btn.clicked.connect(self.upload_audio_file)
+        self.upload_folder_combo.currentIndexChanged.connect(self.paint_upload_button)
+        self.paint_upload_button()
         self.add_update_row(layout, (self.upload_btn, 1))
 
         hint = QLabel(
@@ -2290,6 +2539,7 @@ class ControlApp(QMainWindow):
         layout.addWidget(self.remove_folder_combo, alignment=Qt.AlignLeading)
 
         self.remove_list = QListWidget()
+        finger_scroll(self.remove_list)
         self.remove_list.setFixedHeight(220)
         self.remove_list.setLayoutDirection(Qt.RightToLeft)
         self.remove_list.setStyleSheet("""
@@ -2301,26 +2551,14 @@ class ControlApp(QMainWindow):
             }
         """)
         layout.addWidget(self.remove_list)
-        self.fill_remove_list()
 
         self.remove_btn = QPushButton("حذف الملفات المحددة")
         self.remove_btn.setFixedHeight(50)
         self.remove_btn.setCursor(Qt.PointingHandCursor)
-        self.remove_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #b3261e;
-                color: white;
-                font-size: 18px;
-                font-weight: bold;
-                border-radius: 7px;
-                padding: 8px;
-            }
-            QPushButton:hover { background-color: #9a1f19; }
-            QPushButton:pressed { background-color: #7f1913; }
-            QPushButton:disabled { background-color: #9e9e9e; }
-        """)
         self.remove_btn.clicked.connect(self.delete_audio_files)
+        self.remove_list.itemChanged.connect(self.paint_remove_button)
         self.add_update_row(layout, (self.remove_btn, 1))
+        self.fill_remove_list()
 
         remove_hint = QLabel(
             "يُحذف الملف من الجهاز نهائيًا. إن كان محددًا للتشغيل أُزيل من قائمة المجلد، "
@@ -2332,22 +2570,35 @@ class ControlApp(QMainWindow):
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         return frame
 
+    def paint_upload_button(self, *_):
+        ready = bool(self.upload_folder_combo.currentData())
+        self.upload_btn.setStyleSheet(
+            audio_button_style(AUDIO_UPLOAD_READY if ready else AUDIO_BUTTON_IDLE))
+
+    def paint_remove_button(self, *_):
+        ready = any(self.remove_list.item(i).checkState() == Qt.Checked
+                    for i in range(self.remove_list.count()))
+        self.remove_btn.setStyleSheet(
+            audio_button_style(AUDIO_DELETE_READY if ready else AUDIO_BUTTON_IDLE))
+
     def fill_remove_list(self, *_):
+        """Hidden until a folder is chosen: before that there is nothing to tick, and an
+        empty box under the menu reads as one that belongs to nothing."""
         self.remove_list.clear()
+        self.paint_remove_button()
         folder = self.remove_folder_combo.currentData()
+        self.remove_list.setVisible(bool(folder))
         if not folder:
-            text = "اختر المجلد لعرض ملفاته."
-        else:
-            names = audio_lists.available_audio(audio_lists.audio_dir(MAIN_DIR, folder))
-            for name in names:
-                item = QListWidgetItem(name)
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Unchecked)
-                self.remove_list.addItem(item)
-            if names:
-                return
-            text = "لا توجد ملفات صوتية في هذا المجلد"
-        item = QListWidgetItem(text)
+            return
+        names = audio_lists.available_audio(audio_lists.audio_dir(MAIN_DIR, folder))
+        for name in names:
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.remove_list.addItem(item)
+        if names:
+            return
+        item = QListWidgetItem("لا توجد ملفات صوتية في هذا المجلد")
         item.setFlags(Qt.NoItemFlags)
         self.remove_list.addItem(item)
 
@@ -2518,7 +2769,7 @@ class ControlApp(QMainWindow):
             title = self.create_bold_label(label)
             combo = RightAlignedComboBox()
             combo.setLayoutDirection(Qt.RightToLeft)
-            combo.setStyleSheet("font-size: 18px; padding: 5px;")
+            combo.setStyleSheet(COMBO_STYLE)
             combo.setFixedHeight(45)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
             combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -2701,7 +2952,7 @@ class ControlApp(QMainWindow):
         layout.addWidget(text)
         self.os_prayer_combo = RightAlignedComboBox()
         self.os_prayer_combo.setLayoutDirection(Qt.RightToLeft)
-        self.os_prayer_combo.setStyleSheet("font-size: 18px; padding: 5px;")
+        self.os_prayer_combo.setStyleSheet(COMBO_STYLE)
         self.os_prayer_combo.setFixedHeight(45)
         for name in offered:
             self.os_prayer_combo.addItem(name, name)
@@ -3503,6 +3754,9 @@ if __name__ == "__main__":
     QApplication.setDesktopSettingsAware(False)
     app = QApplication(sys.argv)
     app.setFont(QFont("Amiri"))
+    app.setDoubleClickInterval(DOUBLE_CLICK_INTERVAL_MS)
+    if "--debug" in sys.argv:
+        start_debug_log(app)
     # The task list on the panel does not read the window icon set above: on Wayland it is
     # handed a window's app_id and nothing else, and for an XWayland window that app_id is
     # the WM_CLASS Qt derives from argv[0] - "main.py", which is also what the countdown

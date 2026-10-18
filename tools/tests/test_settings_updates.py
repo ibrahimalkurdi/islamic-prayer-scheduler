@@ -37,10 +37,9 @@ def chk(name, got, want):
 print("1. opening a version list fetches it, newest-first")
 chk("there is no fetch button any more", hasattr(w, "update_refresh_btn"), False)
 chk("nothing is fetched before a list is opened", w.update_version_combo.count(), 1)
-from PyQt5.QtWidgets import QComboBox
 opened = []
-real_show = QComboBox.showPopup
-QComboBox.showPopup = lambda self: opened.append(self)
+real_show = m.TouchComboBox.showPopup
+m.TouchComboBox.showPopup = lambda self: opened.append(self)
 real_load = w.load_available_versions
 loads = []
 def counting_load():
@@ -66,7 +65,7 @@ w.update_rollback_combo.showPopup()
 chk("offline, no backup: the rollback list stays shut too",
     opened, [w.update_rollback_combo] if w.update_rollback_backup else [])
 w.load_available_versions = real_load
-QComboBox.showPopup = real_show
+m.TouchComboBox.showPopup = real_show
 w.update_version_combo.hidePopup(); w.update_rollback_combo.hidePopup()
 items = [w.update_version_combo.itemData(i) for i in range(w.update_version_combo.count())]
 chk("placeholder then versions", items[0], "")

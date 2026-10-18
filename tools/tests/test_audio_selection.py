@@ -142,7 +142,103 @@ chk("the folders are offered by name",
 w.upload_audio_file()
 chk("nothing is copied before a folder is chosen",
     (os.path.exists(os.path.join(DUHA_DIR, "new-duha.mp3")), len(errors)), (False, 1))
+w.resize(800, 480); w.show(); app.processEvents()
+def tap_point_covered(box):
+    box.showPopup(); app.processEvents()
+    popup = box.list_view
+    covered = _QRect(popup.mapToGlobal(popup.rect().topLeft()), popup.size()).contains(
+        box.mapToGlobal(box.rect().center()))
+    box.hidePopup(); app.processEvents()
+    return covered
+from PyQt5.QtWidgets import QStyle, QStyleOptionComboBox, QScrollArea
+from PyQt5.QtCore import QRect as _QRect
+w.findChild(QScrollArea).ensureWidgetVisible(combo); app.processEvents()
+for name, box in (("upload", combo), ("delete", w.remove_folder_combo)):
+    w.findChild(QScrollArea).ensureWidgetVisible(box); app.processEvents()
+    option = QStyleOptionComboBox(); box.initStyleOption(option)
+    chk(f"the {name} folder list drops down instead of opening over its box",
+        box.style().styleHint(QStyle.SH_ComboBox_Popup, option, box), 0)
+    chk(f"so a tap's release on the {name} box chooses nothing", tap_point_covered(box), False)
+from PyQt5.QtWidgets import QComboBox
+over = [b for b in w.findChildren(QComboBox) if b.style().styleHint(
+    QStyle.SH_ComboBox_Popup, QStyleOptionComboBox(), b)]
+chk("and no list anywhere in Settings opens over its box", [b.currentText() for b in over], [])
+chk("the app keeps no style sheet of its own, which would take the labels' font",
+    app.styleSheet(), "")
+chk("every list in Settings opens when the finger lifts",
+    [b.currentText() for b in w.findChildren(QComboBox) if not isinstance(b, gui.TouchComboBox)], [])
+from PyQt5.QtTest import QTest
+w.findChild(QScrollArea).ensureWidgetVisible(combo); app.processEvents()
+QTest.mousePress(combo, Qt.LeftButton, Qt.NoModifier, combo.rect().center())
+QTest.qWait(700)
+chk("a finger held on the folder box opens nothing yet", combo.list_view.isVisible(), False)
+QTest.mouseRelease(combo, Qt.LeftButton, Qt.NoModifier, combo.rect().center())
+QTest.qWait(50)
+chk("lifting it opens the list, and it stays open", combo.list_view.isVisible(), True)
+chk("drawn inside the Settings window, not in a window of its own, where the panel's taps "
+    "landed beside the entries", (combo.list_view.window() is w, combo.list_view.isWindow()),
+    (True, False))
+chk("its scroll bar shown when needed, not switched off",
+    combo.list_view.verticalScrollBarPolicy(), Qt.ScrollBarAsNeeded)
+entry = combo.list_view.visualRect(combo.model().index(combo.findData("duha"), 0)).center()
+QTest.mousePress(combo.list_view.viewport(), Qt.LeftButton, Qt.NoModifier, entry)
+QTest.qWait(900)
+QTest.mouseRelease(combo.list_view.viewport(), Qt.LeftButton, Qt.NoModifier, entry)
+QTest.qWait(50)
+chk("a held tap on an entry chooses it and closes the list",
+    (combo.currentData(), combo.list_view.isVisible()), ("duha", False))
+combo.setCurrentIndex(0)
+w.paint_upload_button()
+QTest.mouseClick(combo, Qt.LeftButton, Qt.NoModifier, combo.rect().center()); QTest.qWait(50)
+chk("it opens again", combo.list_view.isVisible(), True)
+pressed = []
+w.upload_btn.pressed.connect(lambda: pressed.append(1))
+w.findChild(QScrollArea).ensureWidgetVisible(w.upload_btn); app.processEvents()
+if combo.list_view.isVisible():
+    QTest.mouseClick(w.upload_btn, Qt.LeftButton, Qt.NoModifier, w.upload_btn.rect().center())
+QTest.qWait(50)
+chk("a tap beside it only closes it: nothing chosen, the button under the finger untouched",
+    (combo.list_view.isVisible(), combo.currentIndex(), pressed), (False, 0, []))
+QTest.mouseClick(combo, Qt.LeftButton, Qt.NoModifier, combo.rect().center()); QTest.qWait(50)
+QTest.mouseClick(combo, Qt.LeftButton, Qt.NoModifier, combo.rect().center()); QTest.qWait(50)
+chk("a tap on its own box closes it and does not open it again", combo.list_view.isVisible(), False)
+QTest.mouseClick(w.upload_btn, Qt.LeftButton, Qt.NoModifier, w.upload_btn.rect().center())
+chk("and taps after that reach what they land on", pressed, [1])
+w.upload_btn.pressed.disconnect()
+
+from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtCore import QEvent as _QEvent, QPoint
+def finger(kind, widget, point, held=Qt.LeftButton):
+    app.sendEvent(widget, QMouseEvent(kind, QPoint(point), widget.mapToGlobal(QPoint(point)),
+                                      Qt.LeftButton, held, Qt.NoModifier))
+from PyQt5.QtWidgets import QWidget
+long_page = QWidget(); long_page.resize(800, 480)
+long_list = gui.TouchComboBox(long_page); long_list.setStyleSheet(gui.COMBO_STYLE)
+long_list.addItems([f"entry {i}" for i in range(30)]); long_list.setGeometry(400, 20, 300, 45)
+long_page.show(); app.processEvents()
+QTest.mouseClick(long_list, Qt.LeftButton, Qt.NoModifier, long_list.rect().center()); QTest.qWait(50)
+view = long_list.list_view.viewport()
+start = view.rect().center() + QPoint(0, view.height() // 3)
+finger(_QEvent.MouseButtonPress, view, start); QTest.qWait(30)
+for step in range(1, 13):
+    finger(_QEvent.MouseMove, view, start - QPoint(0, step * 15)); QTest.qWait(25)
+finger(_QEvent.MouseButtonRelease, view, start - QPoint(0, 180), Qt.NoButton); QTest.qWait(1500)
+chk("a swipe up an open list too long for the screen scrolls it, chooses nothing, stays open",
+    (long_list.list_view.verticalScrollBar().value() > 0, long_list.currentIndex(),
+     long_list.list_view.isVisible()), (True, 0, True))
+below = long_list.list_view.indexAt(view.rect().center())
+chk("bringing entries below into reach", below.row() > long_list.maxVisibleItems() // 2, True)
+chk("with a scroll bar to show there are more",
+    long_list.list_view.verticalScrollBar().isVisible(), True)
+QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, view.rect().center()); QTest.qWait(300)
+chk("and a tap that stays put chooses the one under it",
+    (long_list.currentIndex(), long_list.list_view.isVisible()), (below.row(), False))
+long_page.close()
+w.hide()
+chk("the upload button is grey before a folder is chosen",
+    gui.AUDIO_BUTTON_IDLE[0] in w.upload_btn.styleSheet(), True)
 combo.setCurrentIndex(combo.findData("duha"))
+chk("and green once one is", gui.AUDIO_UPLOAD_READY[0] in w.upload_btn.styleSheet(), True)
 w.upload_audio_file()
 w.upload_worker.wait()
 app.processEvents()
@@ -175,8 +271,18 @@ w.duha_chk.setChecked(True)
 tick(w.duha_audio_list, {"one.mp3"})
 chk("saved with one ticked", w.save_settings(show_message=False), True)
 combo = w.remove_folder_combo
-chk("nothing listed before a folder is chosen", w.remove_list.item(0).flags(), Qt.NoItemFlags)
+chk("no list before a folder is chosen, but the delete button is there, grey, like upload's",
+    (w.remove_list.isHidden(), w.remove_list.count(), w.remove_btn.isHidden(),
+     gui.AUDIO_BUTTON_IDLE[0] in w.remove_btn.styleSheet()), (True, 0, False, True))
 combo.setCurrentIndex(combo.findData("duha"))
+chk("the list appears once one is", w.remove_list.isHidden(), False)
+chk("the delete button is grey with nothing ticked",
+    gui.AUDIO_BUTTON_IDLE[0] in w.remove_btn.styleSheet(), True)
+w.remove_list.item(0).setCheckState(Qt.Checked)
+chk("red once a file is ticked", gui.AUDIO_DELETE_READY[0] in w.remove_btn.styleSheet(), True)
+w.remove_list.item(0).setCheckState(Qt.Unchecked)
+chk("and grey again when it is unticked",
+    gui.AUDIO_BUTTON_IDLE[0] in w.remove_btn.styleSheet(), True)
 chk("the folder's files are listed to tick",
     [w.remove_list.item(i).text() for i in range(w.remove_list.count())],
     ["new-duha.mp3", "one.mp3", "two.mp3"])
@@ -203,6 +309,7 @@ chk("gone from the event's list too",
     ["new-duha.mp3"])
 chk("and from the delete list",
     [w.remove_list.item(i).text() for i in range(w.remove_list.count())], ["new-duha.mp3"])
+chk("with the button grey again", gui.AUDIO_BUTTON_IDLE[0] in w.remove_btn.styleSheet(), True)
 written = configparser.ConfigParser(interpolation=None)
 written.read(SETTINGS_INI_FILE, encoding="utf-8")
 chk("unticked in config.ini, and the event switched off there",
@@ -212,6 +319,15 @@ chk("and on the screen", (w.duha_chk.isChecked(), w.config["Settings"]["duha_aud
     (False, ""))
 chk("the schedule is rebuilt for it", applied, [True])
 chk("the owner is told", "فتم إيقافه" in (infos[-1] if infos else ""), True)
+os.remove(os.path.join(DUHA_DIR, "new-duha.mp3"))
+w.fill_remove_list()
+chk("an empty folder says so", [w.remove_list.item(i).text() for i in range(w.remove_list.count())],
+    ["لا توجد ملفات صوتية في هذا المجلد"])
+combo.setCurrentIndex(0)
+chk("and choosing no folder hides the list again, not the button",
+    (w.remove_list.isHidden(), w.remove_btn.isHidden()), (True, False))
+open(os.path.join(DUHA_DIR, "new-duha.mp3"), "w").close()
+combo.setCurrentIndex(combo.findData("duha"))
 if os.environ.get("DELETE_SAMPLE"):
     combo.setCurrentIndex(combo.findData("duha"))
     for name in ("one.mp3", "two.mp3"):
@@ -224,6 +340,53 @@ if os.environ.get("DELETE_SAMPLE"):
     w.remove_btn.parentWidget().grab().save(os.environ["DELETE_SAMPLE"])
 with open(SETTINGS_INI_FILE, "w", encoding="utf-8") as f:
     f.write(saved_ini)
+for name in os.listdir(DUHA_DIR):
+    os.remove(os.path.join(DUHA_DIR, name))
+
+print("6. a finger swipes the list of files to delete without ticking any")
+for i in range(20):
+    open(os.path.join(DUHA_DIR, f"recitation-{i:02}.mp3"), "w").close()
+w.resize(800, 480); w.show(); app.processEvents()
+w.remove_folder_combo.setCurrentIndex(w.remove_folder_combo.findData("duha"))
+w.fill_remove_list()
+w.findChild(QScrollArea).ensureWidgetVisible(w.remove_list); app.processEvents()
+files = w.remove_list.viewport()
+start = files.rect().center() + QPoint(0, files.height() // 3)
+finger(_QEvent.MouseButtonPress, files, start); QTest.qWait(30)
+for step in range(1, 13):
+    finger(_QEvent.MouseMove, files, start - QPoint(0, step * 12)); QTest.qWait(25)
+finger(_QEvent.MouseButtonRelease, files, start - QPoint(0, 144), Qt.NoButton); QTest.qWait(1500)
+ticked = [w.remove_list.item(i).text() for i in range(w.remove_list.count())
+          if w.remove_list.item(i).checkState() == Qt.Checked]
+chk("the swipe scrolls the files and ticks none",
+    (w.remove_list.verticalScrollBar().value() > 0, ticked), (True, []))
+under = w.remove_list.indexAt(files.rect().center())
+QTest.mouseClick(files, Qt.LeftButton, Qt.NoModifier, files.rect().center()); QTest.qWait(300)
+chk("a tap that stays put still reaches the file under it", w.remove_list.currentRow(), under.row())
+
+print("7. --debug writes down every tap, what it landed on and what came of it")
+debug_path = os.path.join(tempfile.mkdtemp(), "settings_debug.log")
+gui.start_debug_log(app, debug_path)
+w.watch_for_debug()
+upload = w.upload_folder_combo
+upload.setCurrentIndex(0)
+w.findChild(QScrollArea).ensureWidgetVisible(upload); app.processEvents()
+QTest.mouseClick(upload, Qt.LeftButton, Qt.NoModifier, upload.rect().center()); QTest.qWait(50)
+entry = upload.list_view.visualRect(upload.model().index(upload.findData("duha"), 0)).center()
+QTest.mouseClick(upload.list_view.viewport(), Qt.LeftButton, Qt.NoModifier, entry); QTest.qWait(300)
+logged = open(debug_path, encoding="utf-8").read()
+for needle in ("Settings started in debug mode", "release at", "on menu upload_folder_combo",
+               "menu upload_folder_combo opens its list", "on open list upload_folder_combo entry",
+               "'صلاة الضحى (duha)'", "menu upload_folder_combo chose 'صلاة الضحى (duha)'",
+               "menu upload_folder_combo closes its list"):
+    chk(f"the log has: {needle}", needle in logged, True)
+chk("each tap once, on the widget it hit, not again on every parent it passed up to",
+    len([line for line in logged.splitlines() if " release at " in line]), 2)
+w.remove_list.item(0).setCheckState(Qt.Checked)
+chk("and a tick in a list", "list remove_list ticked 'recitation-00.mp3'"
+    in open(debug_path, encoding="utf-8").read(), True)
+gui.DEBUG_LOG.close(); gui.DEBUG_LOG = None
+app.removeEventFilter(app.debug_filter)
 for name in os.listdir(DUHA_DIR):
     os.remove(os.path.join(DUHA_DIR, name))
 
