@@ -101,6 +101,62 @@ a { color: var(--accent); }
     fill: currentColor;
 }
 
+/* The speaker among them, a button rather than a link. A long press opens the volume, so
+   the phone's own text selection and callout are kept off it. */
+button.icon-link {
+    padding: 0;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
+}
+
+/* Muted reads as an alarm, not as a state: the same red the touch screen uses. */
+.icon-link.muted {
+    color: #dc3545;
+    border-color: #dc3545;
+}
+
+/* When the sound comes back, under the row the speaker is in. */
+.mute-state {
+    margin: -.5rem 0 .8rem;
+    color: #f87171;
+    font-size: .9rem;
+}
+
+/* And when a volume set for a while goes back, under it. */
+.volume-state {
+    margin: -.5rem 0 .8rem;
+    color: var(--muted);
+    font-size: .9rem;
+}
+
+.mute-state:not(.hidden) + .volume-state { margin-top: -.6rem; }
+
+.volume-row {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    margin: .6rem 0 .9rem;
+}
+
+.volume-row input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--accent);
+}
+
+.volume-row output {
+    min-width: 3.2rem;
+    font-variant-numeric: tabular-nums;
+    direction: ltr;
+}
+
+.volume-keep {
+    justify-content: center;
+}
+
 /* Offered on the device only, under the list: a thing done once, not every visit. */
 .install {
     margin-top: 1.4rem;
@@ -305,9 +361,9 @@ a { color: var(--accent); }
 /* ---- countdown ----
    The counter is the whole screen, the way it is on the touch screen: nothing else is
    on this page, so there is no reason for it to sit in a column with margins. The back
-   link and the mute button are corner overlays on the card itself, which is also where
-   the app puts them - see window_button_box() and paint_mute_button() in
-   prayer_times_gui/main.py. */
+   link is a corner overlay on the card itself, which is also where the app puts its
+   buttons - see window_button_box() in prayer_times_gui/main.py. The speaker is on the
+   daily list. */
 body.full {
     padding: 0;
     max-width: none;
@@ -366,20 +422,7 @@ body.full {
     min-height: 1.6em;
 }
 
-/* When the sound comes back, right under the speaker - where the touch screen shows it,
-   under its own speaker. */
-.counter .mute-state {
-    position: absolute;
-    /* Below the speaker at its muted size: its top, its padding, the glyph. */
-    top: calc(.6rem + .7rem + clamp(2.2rem, 8vw, 3rem));
-    inset-inline-end: .6rem;
-    max-width: min(20rem, calc(100% - 1.2rem));
-    text-align: end;
-    font-size: clamp(.75rem, min(3.4vw, 2.6vh), 1.1rem);
-    opacity: .75;
-}
-
-/* The two corner controls. `color: inherit` is the point: the counter's text colour is
+/* The corner control. `color: inherit` is the point: the counter's text colour is
    set from the period, so the glyph follows the background exactly as the app's
    page_button_color does. */
 .corner {
@@ -400,42 +443,6 @@ body.full {
 .corner:hover, .corner:focus-visible { opacity: 1; }
 
 .back-corner { inset-inline-start: .6rem; }
-
-.mute-corner {
-    inset-inline-end: .6rem;
-    display: inline-flex;
-    align-items: center;
-}
-
-.mute-corner svg {
-    width: clamp(1.9rem, 7vw, 2.6rem);
-    height: clamp(1.9rem, 7vw, 2.6rem);
-    fill: currentColor;
-}
-
-/* Muted reads as an alarm, not as a state: the same red the app uses, and drawn a shade
-   larger because the crossed-out glyph carries less ink than the plain one. */
-.mute-corner.muted {
-    color: #dc3545;
-    opacity: 1;
-}
-
-.mute-corner.muted svg {
-    width: clamp(2.2rem, 8vw, 3rem);
-    height: clamp(2.2rem, 8vw, 3rem);
-}
-
-/* What the app's speaker says when the device is out of reach, right under it. */
-.counter .speaker-note {
-    position: absolute;
-    top: 3.6rem;
-    inset-inline-end: .6rem;
-    max-width: min(20rem, calc(100% - 1.2rem));
-    background: rgba(15, 23, 42, .85);
-    margin: 0;
-    font-size: .9rem;
-    text-align: start;
-}
 
 .counter .error-line {
     position: absolute;
@@ -559,6 +566,13 @@ label {
     margin: .55rem 0;
 }
 
+.clock-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .2rem .45rem;
+}
+
 input[type="number"], input[type="time"], input[type="date"], select {
     background: #0F172A;
     color: var(--text);
@@ -591,6 +605,18 @@ input[type="checkbox"] {
 }
 
 .audio label { font-size: .95rem; margin: .3rem 0; }
+
+/* Beside the daily Quran's time: when its ticked files finish. */
+.ends {
+    display: inline-block;
+    margin-inline-start: .5rem;
+    padding: .25rem .6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #334155;
+    color: #E2E8F0;
+    font-size: .9rem;
+}
 
 /* The parts of one fieldset: «رفع ملف» and «حذف ملفات» under «إدارة الملفات الصوتية». */
 .part { margin: .4rem 0 0; font-size: 1.05rem; color: var(--accent); }
@@ -638,7 +664,7 @@ button.danger { background: transparent; color: #f87171; border-color: #b3505f; 
 
 /* On a device's page opened from the app: how to get back to it, first on the page. In
    the flow rather than over it, so on the countdown it pushes the counter down instead
-   of covering the speaker. */
+   of covering the back link. */
 .back-to-app {
     margin-bottom: 1rem;
     padding: .7rem 1rem;
