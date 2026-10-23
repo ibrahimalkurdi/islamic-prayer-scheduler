@@ -352,6 +352,37 @@ function overlapMessage(pairs, windows) {
         "وغيره لا يُشغَّل إذا بدأ أثناء تشغيل آخر.";
 }
 
+/* Whether the scheduler moves the start off the one chosen, to keep it inside its part
+   of the day, as the touch screen notes it. */
+function startMoved(event, values, start) {
+    if (start == null) return false;
+    if (event === "athkar_elsabah") {
+        const clock = clockMinutes(values.athkar_elsabah_clock);
+        return values.athkar_elsabah_mode !== "after_fajr" && clock !== null && clock !== start;
+    }
+    if (event === "friday_quran" && state.friday_times) {
+        const times = state.friday_times;
+        const offset = values.friday_quran_time || 0;
+        const wanted = values.friday_quran_position === "before"
+            ? times.dhuhr - offset : times.dhuhr + offset;
+        return ((wanted % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES !== start;
+    }
+    return false;
+}
+
+function startText(event, values, start) {
+    let text = clockText(start);
+    if (event === "friday_quran" && state.friday_date) {
+        const [, month, day] = state.friday_date.split("-");
+        text += ` (الجمعة ${Site.ltr(`${day}/${month}`)})`;
+    }
+    if (startMoved(event, values, start)) {
+        text += event === "friday_quran" ? " (تم تعديله ليقع بين الشروق والعصر)"
+                                         : " (تم تعديله ليقع بين الفجر والظهر)";
+    }
+    return text;
+}
+
 function paintEnds() {
     if (!state.times) return;
     const { seconds, unread } = eventSeconds();
@@ -363,7 +394,11 @@ function paintEnds() {
     }
     for (const start of document.querySelectorAll("[data-starts]")) {
         const event = eventOf(start.dataset.starts);
-        start.textContent = starts[event] == null ? "--" : clockText(starts[event]);
+        start.textContent = starts[event] == null ? "--" : startText(event, values, starts[event]);
+        if (event === "athkar_elsabah") {
+            start.parentNode.classList.toggle("hidden", values.athkar_elsabah_mode === "clock"
+                && !startMoved(event, values, starts[event]));
+        }
     }
     for (const box of document.querySelectorAll("[data-ends]")) {
         const event = eventOf(box.dataset.ends);
@@ -457,6 +492,16 @@ function timingChanged() {
     overlapTimer = setTimeout(warnNewOverlaps, OVERLAP_CHECK_MS);
 }
 
+/* A value handed over whole - the phone's time picker closing on it, a choice, a tick, a
+   number field left - is checked at once, as the touch screen's pad checks on «موافق».
+   The picker belongs to the browser and cannot be held open for the check, so the warning
+   comes as it closes rather than after a wait. Typing is still left to settle first. */
+function timingCommitted() {
+    paintEnds();
+    if (restoringTiming) return;
+    warnNewOverlaps();
+}
+
 /* The sections that act at once come first, each with its own button, and the ones the
    save button keeps sit together in the box it is at the bottom of. «تحديثات البرنامج»
    is between the two halves of the first lot and fills #updates by itself. */
@@ -519,7 +564,7 @@ function buildForm() {
         const set = el("fieldset", {}, [el("legend", { textContent: section.legend })]);
         for (const field of section.fields) set.appendChild(buildField(field));
         set.addEventListener("input", timingChanged);
-        set.addEventListener("change", timingChanged);
+        set.addEventListener("change", timingCommitted);
         form.appendChild(set);
         timingSets.push(set);
     }
@@ -948,6 +993,7 @@ async function changeSource(choice) {
         state.prayer_source = fresh.prayer_source;
         state.times = fresh.times;
         state.friday_times = fresh.friday_times;
+        state.friday_date = fresh.friday_date;
         renderSource();
         working(false);
         if (applied.state === "ok") show("ok", `تم اختيار «${isolate(answer.chosen)}» وتطبيقه.`);
@@ -1109,6 +1155,7 @@ document.querySelector("#save").addEventListener("click", async () => {
             state.prayer_source = fresh.prayer_source;
             state.times = fresh.times;
             state.friday_times = fresh.friday_times;
+        state.friday_date = fresh.friday_date;
             renderSource();
         }
         const payload = collect();
