@@ -275,6 +275,7 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
         "brightness": brightness.status(scheduler_dir),
         "times": today_times(scheduler_dir, desktop_dir),
         "friday_times": today_times(scheduler_dir, desktop_dir, next_friday()),
+        "friday_date": next_friday().isoformat(),
     }
 
 

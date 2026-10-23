@@ -582,7 +582,7 @@ check_true("the settings page shows when every event ends, beside a time of day 
            and ".ends {" in get("/static/app.css")[1].decode("utf-8"))
 check_true("following the times and the ticks as they change, and warning of an overlap",
            'set.addEventListener("input", timingChanged);' in settings_src
-           and 'set.addEventListener("change", timingChanged);' in settings_src
+           and 'set.addEventListener("change", timingCommitted);' in settings_src
            and "window.alert(" in settings_src)
 check_true("closing the overlap warning puts the form back, as on the touch screen",
            '"أُعيدت الإعدادات إلى آخر أوقات لا تتداخل."' in settings_src
@@ -610,6 +610,10 @@ check_true("an update warning is worded as the touch screen words it, sending no
            'attention.includes("setup")' in settings_src
            and "وستُعاد المحاولة تلقائيًا عند فحص التحديث التالي." in settings_src
            and "attentionText(status.needs_attention)" in settings_src)
+check_true("a value handed over whole - the phone's picker closing on it - is checked at once, "
+           "while typing still settles first",
+           "function timingCommitted() {" in settings_src
+           and "overlapTimer = setTimeout(warnNewOverlaps, OVERLAP_CHECK_MS);" in settings_src)
 check_true("and a save made before the check had its turn runs it first",
            "if (overlapTimer !== null && warnNewOverlaps()) return;" in settings_src)
 check_true("a tap on a time field opens the phone's picker, and the end box is outside its label",
@@ -619,6 +623,36 @@ check_true("a tap on a time field opens the phone's picker, and the end box is o
 friday = settings["friday_times"]
 check_true("the coming Friday's times too, for Surat Al-Kahf",
            isinstance(friday, dict) and friday["dhuhr"] == 12 * 60)
+import datetime as _datetime
+check_true("with that Friday's date, for the start line, as the touch screen shows it",
+           _datetime.date.fromisoformat(settings["friday_date"]).weekday() == 4)
+if _shutil.which("node"):
+    helpers = (settings_src[settings_src.index("function clockMinutes"):
+                            settings_src.index("function formValues")]
+               + settings_src[settings_src.index("function startMoved"):
+                              settings_src.index("function paintEnds")])
+    script = ("const Site = { ltr: (t) => '[' + t + ']' }; const DAY_MINUTES = 1440;\n"
+              "const clockText = (m) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;\n"
+              "const state = { friday_date: '2026-10-30',"
+              " friday_times: { sunrise: 390, dhuhr: 720, asr: 930 } };\n" + helpers +
+              "\nconsole.log(JSON.stringify(["
+              "startText('athkar_elsabah', { athkar_elsabah_mode: 'clock',"
+              " athkar_elsabah_clock: '04:00' }, 301),"
+              "startText('athkar_elsabah', { athkar_elsabah_mode: 'clock',"
+              " athkar_elsabah_clock: '09:45' }, 585),"
+              "startText('friday_quran', { friday_quran_position: 'after',"
+              " friday_quran_time: 60 }, 780),"
+              "startText('friday_quran', { friday_quran_position: 'after',"
+              " friday_quran_time: 300 }, 929)]));")
+    lines = json.loads(_subprocess.run(["node", "-e", script], capture_output=True,
+                                       text=True).stdout)
+    check("a start the scheduler moves says so, and Surat Al-Kahf's carries its Friday, "
+          "word for word as on the touch screen", lines,
+          ["5:01 (تم تعديله ليقع بين الفجر والظهر)", "9:45", "13:00 (الجمعة [30/10])",
+           "15:29 (الجمعة [30/10]) (تم تعديله ليقع بين الشروق والعصر)"])
+check_true("and a fixed Athkar Elsabah's start line shows only while it is moved",
+           'start.parentNode.classList.toggle("hidden", values.athkar_elsabah_mode === "clock"'
+           in settings_src)
 check_true("today's times are offered for the rules",
            settings["times"]["dhuhr"] == 12 * 60)
 # The fixture's config.ini predates the choice, which is every device on its first boot

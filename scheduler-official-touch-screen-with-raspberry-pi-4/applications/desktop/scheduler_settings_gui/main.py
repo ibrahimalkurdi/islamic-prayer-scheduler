@@ -1682,19 +1682,23 @@ class ControlApp(QMainWindow):
         self.overlap_timer.setSingleShot(True)
         self.overlap_timer.setInterval(OVERLAP_CHECK_MS)
         self.overlap_timer.timeout.connect(self.warn_new_overlaps)
+        self.commit_timer = QTimer(self)
+        self.commit_timer.setSingleShot(True)
+        self.commit_timer.setInterval(0)
+        self.commit_timer.timeout.connect(self.warn_new_overlaps)
         timing = [self.cron_hour_spin, self.cron_min_spin, self.tahajjud_spin, self.duha_spin,
                   self.athkar_elsabah_spin, self.athkar_elsabah_hour_spin,
                   self.athkar_elsabah_min_spin, self.athkar_elmasa_spin, self.friday_quran_spin]
         for spin in timing:
             spin.valueChanged.connect(self.timing_changed)
         for combo in (self.athkar_elsabah_mode_combo, self.friday_quran_position_combo):
-            combo.currentIndexChanged.connect(self.timing_changed)
+            combo.currentIndexChanged.connect(self.timing_committed)
         for chk in [*self.prayer_checkboxes.values(), self.tahajjud_chk, self.duha_chk,
                     self.athkar_elsabah_chk, self.athkar_elmasa_chk, self.cron_chk,
                     self.friday_quran_chk]:
-            chk.stateChanged.connect(self.timing_changed)
+            chk.stateChanged.connect(self.timing_committed)
         for audio_list, _directory in self.event_audio.values():
-            audio_list.itemChanged.connect(self.timing_changed)
+            audio_list.itemChanged.connect(self.timing_committed)
         self.timing_spins = timing
         self.timing_combos = [self.athkar_elsabah_mode_combo, self.friday_quran_position_combo]
         self.timing_checks = [*self.prayer_checkboxes.values(), self.tahajjud_chk, self.duha_chk,
@@ -2863,10 +2867,19 @@ class ControlApp(QMainWindow):
         if not self.restoring_timing:
             self.overlap_timer.start()
 
+    def timing_committed(self, *_):
+        """A choice made in one tap is checked as soon as it is made, as the website does,
+        once the tap has finished."""
+        self.paint_end_times()
+        if not self.restoring_timing:
+            self.overlap_timer.stop()
+            self.commit_timer.start()
+
     def verify_timing(self):
         """The overlap check at once, rather than when the typing has settled. False when
         it warned and put the form back."""
         self.overlap_timer.stop()
+        self.commit_timer.stop()
         return not self.warn_new_overlaps()
 
     def timing_snapshot(self):
@@ -2898,6 +2911,7 @@ class ControlApp(QMainWindow):
         finally:
             self.restoring_timing = False
         self.overlap_timer.stop()
+        self.commit_timer.stop()
         self.last_valid_duha = self.duha_spin.value()
         self.last_valid_athkar_elsabah = self.athkar_elsabah_spin.value()
         self.update_all_time_labels()
@@ -3703,6 +3717,7 @@ class ControlApp(QMainWindow):
             self.friday_quran_audio_list, "friday_quran_audio_checked")
         if hasattr(self, "overlap_timer"):
             self.overlap_timer.stop()
+            self.commit_timer.stop()
             self.known_overlaps = self.current_overlaps()
             self.good_timing = self.timing_snapshot()
 
@@ -3943,8 +3958,9 @@ class ControlApp(QMainWindow):
 
         try:
             # 3. Validations
-            if self.overlap_timer.isActive():
+            if self.overlap_timer.isActive() or self.commit_timer.isActive():
                 self.overlap_timer.stop()
+                self.commit_timer.stop()
                 if self.warn_new_overlaps():
                     self.unlock_button()
                     return

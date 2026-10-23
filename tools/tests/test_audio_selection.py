@@ -540,7 +540,11 @@ w.athkar_elsabah_chk.setChecked(False); w.warn_new_overlaps()
 w.cron_hour_spin.setValue(8); w.warn_new_overlaps()
 chk("a change that meets nothing is kept, and becomes the one to go back to",
     (len(warned), w.cron_hour_spin.value()), (2, 8))
-w.athkar_elsabah_chk.setChecked(True); w.warn_new_overlaps()
+w.athkar_elsabah_chk.setChecked(True)
+chk("a tick is checked as soon as the tap is over, not after a wait",
+    (w.commit_timer.isActive(), w.overlap_timer.isActive()), (True, False))
+from PyQt5.QtTest import QTest
+QTest.qWait(20)
 chk("switching an event on into an overlap is undone too",
     (len(warned), w.athkar_elsabah_chk.isChecked(), w.cron_hour_spin.value()), (3, False, 8))
 w.cron_hour_spin.setValue(6); w.warn_new_overlaps()
@@ -568,8 +572,8 @@ pad_key("5"); pad_key("موافق")
 chk("a time that meets nothing closes it", (len(warned), w.number_pad.isVisible(),
                                             w.cron_hour_spin.value()), (5, False, 5))
 w.apply_config_to_ui()
-chk("reloading the saved settings does not warn about them", (w.overlap_timer.isActive(),
-                                                                len(warned)), (False, 5))
+chk("reloading the saved settings does not warn about them",
+    (w.overlap_timer.isActive(), w.commit_timer.isActive(), len(warned)), (False, False, 5))
 for directory, name in ((ATHKAR_DIR, "zz-athkar.mp3"), (QURAN_DIR, "zz-long.mp3")):
     os.remove(os.path.join(directory, name))
 if made_athkar_dir:
