@@ -32,6 +32,12 @@ ROLLBACK_DIR="$UPDATE_DIR/rollback"
 STATE_FILE="$UPDATE_DIR/state.json"
 POINTER_FILE="$UPDATE_DIR/pointer.json"
 INSTALLED_VERSION_FILE="$VAR_DIR/installed_version"
+SYSTEM_APPLY="/usr/local/sbin/scheduler-apply-system"
+INIT_STAMP_FILE="$VAR_DIR/init_ran_for"
+# Written when a release's setup did not finish, naming the release; cleared when setup
+# next completes, by this script or by init.sh run from the desktop.
+INIT_PENDING_FILE="$VAR_DIR/init_pending"
+SETUP_RETRY_NOTE="it is retried automatically at the next update check"
 UPDATE_CONF="$CONFIG_DIR/update.conf"
 LOG_FILE="$MAIN_DIR/logs/check_updates.log"
 LOCK_FILE="$VAR_DIR/player.lock"
@@ -236,19 +242,64 @@ detect_variant() {
     esac
 }
 
+# Runs init.sh for a release that asks for setup. Stamped when it finishes, so it runs
+# once per release; otherwise left pending, for the next check to try again.
+run_setup() {
+    if SCHEDULER_INIT_NO_UPDATE_CHECK=1 bash "$SCRIPTS_DIR/init.sh" \
+            < /dev/null >> "$LOG_FILE" 2>&1; then
+        echo "$1" > "$INIT_STAMP_FILE"
+        rm -f "$INIT_PENDING_FILE"
+        return 0
+    fi
+    echo "$1" > "$INIT_PENDING_FILE"
+    return 1
+}
+
+# A night with no release to install still finishes the setup an earlier one left
+# undone - the helper's root work, and init.sh - so a failure at 02:00 (no network for a
+# package, a busy desktop) mends itself instead of waiting for a person or the next
+# release. False while any of it still does not finish.
+finish_pending_setup() {
+    local finished=0
+    sudo -n "$SYSTEM_APPLY" --check > /dev/null 2>&1
+    if [[ $? -eq 10 ]]; then
+        log "System setup left over from the last update - running it again..."
+        if sudo -n "$SYSTEM_APPLY" >> "$LOG_FILE" 2>&1; then
+            log "  done"
+        else
+            log "ERROR: system setup still did not finish"
+            finished=1
+        fi
+    fi
+    if [[ -f "$INIT_PENDING_FILE" ]]; then
+        local pending
+        pending="$(head -n 1 "$INIT_PENDING_FILE" | tr -d '[:space:]')"
+        log "Setup for ${pending:-the last update} did not finish - running it again..."
+        if run_setup "$pending"; then
+            log "  done"
+        else
+            log "ERROR: setup still did not finish"
+            finished=1
+        fi
+    fi
+    return $finished
+}
+
 write_state() {
     # $1 result, $2 message, $3 needs_attention - "keep" leaves the existing one alone,
-    # so a run that installs nothing cannot quietly discard a warning still outstanding.
+    # so a run that installs nothing cannot quietly discard a warning still outstanding;
+    # "clear_setup" does the same except for a setup warning, once setup has finished.
     REPORT_RESULT="${1:-}"
     REPORT_MESSAGE="${2:-}"
     python3 - "$STATE_FILE" "$INSTALLED" "${1:-}" "${2:-}" "${3:-}" <<'STATE'
 import json, sys, datetime
 path, installed, result, message, attention = sys.argv[1:6]
-if attention == "keep":
+if attention in ("keep", "clear_setup"):
     try:
-        attention = json.load(open(path)).get("needs_attention", "")
+        kept = json.load(open(path)).get("needs_attention", "")
     except Exception:
-        attention = ""
+        kept = ""
+    attention = "" if attention == "clear_setup" and "setup" in kept else kept
 json.dump({
     "installed": installed,
     "result": result,
@@ -725,7 +776,11 @@ fi
 
 if [[ "$TARGET" == "$INSTALLED" ]]; then
     log "Already on $TARGET - nothing to do"
-    write_state "up_to_date" "" "keep"
+    if finish_pending_setup; then
+        write_state "up_to_date" "" "clear_setup"
+    else
+        write_state "up_to_date" "" "keep"
+    fi
     exit 0
 fi
 
@@ -1142,7 +1197,6 @@ if [[ -n "$NOT_BACKED_UP" ]]; then
     ATTENTION="not backed up, cannot be rolled back: $NOT_BACKED_UP"
     log "NOTE: $ATTENTION"
 fi
-SYSTEM_APPLY="/usr/local/sbin/scheduler-apply-system"
 sudo -n "$SYSTEM_APPLY" --check > /dev/null 2>&1
 case $? in
     0)
@@ -1153,7 +1207,7 @@ case $? in
         if sudo -n "$SYSTEM_APPLY" >> "$LOG_FILE" 2>&1; then
             log "  done"
         else
-            ATTENTION="system setup failed - open «تثبيت مكونات النظام» on the desktop"
+            ATTENTION="system setup failed - $SETUP_RETRY_NOTE"
             log "ERROR: $ATTENTION"
         fi
         ;;
@@ -1200,7 +1254,6 @@ fi
 # clobbering a state file it has never heard of. So the release's own copy is the only
 # one that can be trusted to be this release's.
 NEEDS_INIT_FILE="$STAGING_DIR/config/needs_init"
-INIT_STAMP_FILE="$VAR_DIR/init_ran_for"
 if [[ -f "$NEEDS_INIT_FILE" ]]; then
     # Comments skipped, because this file is edited by hand when a release is cut and a
     # line saying what it is for is worth more than the byte it costs.
@@ -1211,15 +1264,13 @@ if [[ -f "$NEEDS_INIT_FILE" ]]; then
         # SCHEDULER_INIT_NO_UPDATE_CHECK stops the two scripts calling each other: the
         # last thing init.sh does is check for updates, and being started *by* the
         # updater is the one time that must not happen.
-        if SCHEDULER_INIT_NO_UPDATE_CHECK=1 bash "$SCRIPTS_DIR/init.sh" \
-                < /dev/null >> "$LOG_FILE" 2>&1; then
-            echo "$needs_init" > "$INIT_STAMP_FILE"
+        if run_setup "$needs_init"; then
             log "  done"
         else
             # Not fatal, and deliberately not stamped: the files landed and the services
-            # below still get their chance, and an unstamped device tries again on the
+            # below still get their chance, and finish_pending_setup tries again on the
             # next run rather than carrying the gap forward silently.
-            ATTENTION="setup did not finish - open «تثبيت مكونات النظام» on the desktop"
+            ATTENTION="setup did not finish - $SETUP_RETRY_NOTE"
             log "ERROR: $ATTENTION"
         fi
     fi

@@ -642,7 +642,99 @@ else
     echo "  ✓ a release that already had its setup run does not get it twice"
 fi
 
+echo "25b. setup that does not finish is tried again by itself, and its warning goes"
+# At 02:00 cron has none of the desktop session's environment, and on 2026-10-19 that
+# stopped setup at the PipeWire restart on every device updated overnight. The warning
+# it left sent people to the desktop icon, and stayed until the next release, because
+# a night with nothing to install never looked at setup again.
+cat > "$STUB/systemctl" <<'STUBEOF'
+#!/bin/bash
+[[ "$1" == "--user" ]] && exit 1
+exit 0
+STUBEOF
+cat > "$STUB/sudo" <<STUBEOF
+#!/bin/bash
+while [[ "\$1" == -* ]]; do shift; done
+[[ "\$1" == "/usr/local/sbin/scheduler-apply-system" ]] || exit 1
+[[ "\$2" == "--check" ]] && exit 0
+[[ -f "$SCH/var/fail_helper" ]] && exit 1
+exit 0
+STUBEOF
+chmod +x "$STUB/systemctl" "$STUB/sudo"
+rm -f "$SCH/var/init_ran_for" "$SCH/var/init_pending" "$SCH/var/fail_helper"
+echo "1.0.0" > "$SCH/var/installed_version"
+point 1.1.0
+out="$(run_stubbed --cron)"
+want="$(sed -n 's/.*asks for setup to be run (\([^)]*\)).*/\1/p' <<< "$out" | head -n 1)"
+if [[ -n "$want" && "$(head -n 1 "$SCH/var/init_ran_for" 2>/dev/null)" == "$want" \
+      && ! -f "$SCH/var/init_pending" ]]; then
+    echo "  ✓ a PipeWire that cannot be restarted from cron no longer stops setup"
+else
+    echo "  ✗ setup still stops when PipeWire cannot be restarted"; fail=1
+fi
+expect "and says so instead" "$(cat "$LOG")" "WARNING: PipeWire was not restarted"
+
 rm -f "$SCH/var/init_ran_for"
+touch "$SCH/var/fail_helper"
+echo "1.0.0" > "$SCH/var/installed_version"
+out="$(run_stubbed --cron)"
+attention="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["needs_attention"])' \
+    "$SCH/var/update/state.json")"
+expect "setup that fails leaves a warning that it is retried automatically" \
+    "$attention" "setup did not finish - it is retried automatically"
+if grep -q "تثبيت مكونات النظام" <<< "$attention"; then
+    echo "  ✗ and still sends people to the desktop icon"; fail=1
+else
+    echo "  ✓ not one sending people to the desktop icon"
+fi
+if [[ "$(head -n 1 "$SCH/var/init_pending" 2>/dev/null)" == "$want" \
+      && "$(head -n 1 "$SCH/var/init_ran_for" 2>/dev/null)" != "$want" ]]; then
+    echo "  ✓ it is left pending, not stamped done"
+else
+    echo "  ✗ the failed setup was not left pending"; fail=1
+fi
+
+out="$(run_stubbed --cron)"
+expect "the next night, with nothing to install, tries it again" "$out" \
+    "did not finish - running it again"
+attention="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["needs_attention"])' \
+    "$SCH/var/update/state.json")"
+if [[ -n "$attention" && -f "$SCH/var/init_pending" ]]; then
+    echo "  ✓ while it still fails, the warning stays"
+else
+    echo "  ✗ the warning went while setup still fails"; fail=1
+fi
+
+rm -f "$SCH/var/fail_helper"
+out="$(run_stubbed --cron)"
+attention="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["needs_attention"])' \
+    "$SCH/var/update/state.json")"
+if [[ -z "$attention" && ! -f "$SCH/var/init_pending" \
+      && "$(head -n 1 "$SCH/var/init_ran_for" 2>/dev/null)" == "$want" ]]; then
+    echo "  ✓ once it finishes, it is stamped done and the warning is gone"
+else
+    echo "  ✗ setup finished but the warning or the pending mark stayed ($attention)"; fail=1
+fi
+
+out="$(run_stubbed --cron)"
+if grep -q "running it again" <<< "$out"; then
+    echo "  ✗ it ran setup again after it had finished"; fail=1
+else
+    echo "  ✓ and is not run again the night after"
+fi
+
+# Finished from the desktop icon instead: init.sh records it itself.
+echo "$want" > "$SCH/var/init_pending"
+rm -f "$SCH/var/init_ran_for"
+HOME="$DEV" PATH="$STUB:$PATH" SCHEDULER_INIT_NO_UPDATE_CHECK=1 timeout 120 \
+    bash "$SCH/config/scripts/init.sh" < /dev/null > /dev/null 2>&1
+if [[ ! -f "$SCH/var/init_pending" && "$(head -n 1 "$SCH/var/init_ran_for" 2>/dev/null)" == "$want" ]]; then
+    echo "  ✓ setup finished from the desktop counts too"
+else
+    echo "  ✗ setup run from the desktop left it pending"; fail=1
+fi
+
+rm -f "$SCH/var/init_ran_for" "$SCH/var/init_pending" "$SCH/var/fail_helper"
 rm -rf "$STUB"
 
 echo "26. a release can bring steps of its own, and is rolled back if they fail"

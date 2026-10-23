@@ -454,8 +454,16 @@ fi
 # After the helper, not before it: the conf it installs is the one these should come up
 # reading. Run as this user rather than through root(), because the sockets wpctl talks
 # to belong to this user's session - root's pipewire is not the one playing the athan.
+#
+# The nightly update runs this from cron, which has none of the session's environment, so
+# the address of this user's session is supplied when it is missing. Not fatal: the
+# conf is installed either way, and PipeWire reads it at its next start.
 echo "Restarting PipeWire audio..."
-systemctl --user restart pipewire pipewire-pulse
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+if ! systemctl --user restart pipewire pipewire-pulse; then
+    echo "WARNING: PipeWire was not restarted - it reads the new config at its next start"
+fi
 
 #######################################
 # Bluetooth auto-reconnect helper
@@ -597,6 +605,12 @@ bash "$SCRIPTS_DIR/device_manual.sh" || echo "Device manual was not written"
 # --now normally ignores ENABLED, because pressing a button is a decision to update. This
 # is not a button, so ENABLED is honoured here: a device deliberately held back must stay
 # held back when someone re-runs setup on it.
+# Setup has finished, so a release whose setup the updater could not finish is done now
+# too - recorded before the update check below, which then clears its warning.
+if [[ -f "$BASE_DIR/var/init_pending" ]]; then
+    mv -f "$BASE_DIR/var/init_pending" "$BASE_DIR/var/init_ran_for"
+fi
+
 UPDATE_ENABLED="$(grep -E "^ENABLED=" "$CONFIG_DIR/update.conf" 2>/dev/null | cut -d= -f2 | tr -d '"')"
 if [[ -n "${SCHEDULER_INIT_NO_UPDATE_CHECK:-}" ]]; then
     # Set by check_updates.sh when a release asks for setup to be run. Without this the

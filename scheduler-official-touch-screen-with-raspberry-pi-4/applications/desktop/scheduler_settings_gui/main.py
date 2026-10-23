@@ -297,6 +297,23 @@ QURAN_END_STYLE = ("background-color: #e4e4e4; color: #333; border: 1px solid #c
                    f" border-radius: 6px; padding: 4px 10px; font-size: {TIME_ROW_FONT};")
 
 
+def attention_text(attention):
+    """A warning the updater left, in Arabic only: the updater writes it in English for its
+    log. Setup it finishes by itself is said to be retried, and only a device without the
+    setup helper is sent to the icon. A name it carries stays as it is, isolated."""
+    def named(prefix):
+        return f"{LTR_ISOLATE}{attention.split(prefix, 1)[1].strip()}{POP_ISOLATE}"
+    if "setup" in attention:
+        return "لم يكتمل إعداد هذا التحديث بعد، وستُعاد المحاولة تلقائيًا عند فحص التحديث التالي."
+    if attention.startswith("systemd unit changed:"):
+        return (f"تغيّرت خدمة النظام {named(':')} في هذا التحديث، ويحتاج تثبيتها إلى إكمال يدوي"
+                " — افتح أيقونة «تثبيت مكونات النظام» من سطح المكتب.")
+    if attention.startswith("not backed up"):
+        return (f"لم تُحفظ نسخة احتياطية من {named(':')}، فلا يمكن التراجع عن هذا التحديث"
+                " في هذه الملفات.")
+    return "يحتاج هذا التحديث إلى مراجعة — راجع سجل التحديث على الجهاز."
+
+
 def duration_text(seconds):
     minutes = round(seconds / 60)
     if minutes < 1:
@@ -2338,10 +2355,7 @@ class ControlApp(QMainWindow):
 
         attention = status.get("needs_attention")
         if attention:
-            self.update_attention_label.setText(
-                "هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة «تثبيت مكونات النظام» من سطح المكتب.\n"
-                f"({attention})"
-            )
+            self.update_attention_label.setText(attention_text(attention))
             self.update_attention_label.show()
         else:
             self.update_attention_label.hide()

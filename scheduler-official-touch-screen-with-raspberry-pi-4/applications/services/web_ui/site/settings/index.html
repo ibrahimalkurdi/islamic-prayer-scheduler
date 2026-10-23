@@ -235,8 +235,12 @@ const EVENT_NAMES = {
     isha: "أذان العشاء", quran: "القرآن الكريم", friday_quran: "سورة الكهف يوم الجمعة",
 };
 const OVERLAP_CHECK_MS = 1500;
+const OVERLAP_RESTORED_TEXT = "أُعيدت الإعدادات إلى آخر أوقات لا تتداخل.";
 let knownOverlaps = new Map();
 let overlapTimer = null;
+let timingSets = [];
+let goodTiming = [];
+let restoringTiming = false;
 
 function eventOf(key) {
     return key.replace(/_audio_checked$/, "");
@@ -395,22 +399,59 @@ function currentOverlaps() {
     return found;
 }
 
+function timingFields() {
+    return timingSets.flatMap((set) => [...set.querySelectorAll("input, select")]);
+}
+
+function timingSnapshot() {
+    return timingFields().map((node) => node.type === "checkbox" ? node.checked : node.value);
+}
+
+/* Puts the form back as the snapshot has it, and lets each field's own listeners redraw
+   what hangs on it - the half of Athkar Elsabah's choice in use, the end boxes. */
+function restoreTiming(snapshot) {
+    restoringTiming = true;
+    try {
+        timingFields().forEach((node, index) => {
+            const value = snapshot[index];
+            if (node.type === "checkbox" ? node.checked === value : node.value === value) return;
+            if (node.type === "checkbox") node.checked = value;
+            else node.value = value;
+            node.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+    } finally {
+        restoringTiming = false;
+    }
+    paintEnds();
+}
+
+/* Warns of a pair that newly plays at once, and when the warning is closed puts the form
+   back to the last times that met nothing. True when it did. */
 function warnNewOverlaps() {
+    clearTimeout(overlapTimer);
+    overlapTimer = null;
     const found = currentOverlaps();
     const fresh = [...found.entries()].filter(([key]) => !knownOverlaps.has(key));
-    knownOverlaps = found;
-    if (!fresh.length) return;
+    if (!fresh.length) {
+        knownOverlaps = found;
+        goodTiming = timingSnapshot();
+        return false;
+    }
     const byDay = new Map();
     for (const [, { pair, windows }] of fresh) {
         if (!byDay.has(windows)) byDay.set(windows, []);
         byDay.get(windows).push(pair);
     }
     window.alert([...byDay].map(([windows, pairs]) => overlapMessage(pairs, windows))
-        .join("\n\n"));
+        .join("\n\n") + "\n\n" + OVERLAP_RESTORED_TEXT);
+    restoreTiming(goodTiming);
+    knownOverlaps = currentOverlaps();
+    return true;
 }
 
 function timingChanged() {
     paintEnds();
+    if (restoringTiming) return;
     clearTimeout(overlapTimer);
     overlapTimer = setTimeout(warnNewOverlaps, OVERLAP_CHECK_MS);
 }
@@ -427,6 +468,24 @@ document.addEventListener("click", (event) => {
     } catch (e) {
     }
 });
+
+/* The same wording the touch screen's Settings uses for a warning the updater left: in
+   Arabic only, as the updater writes it in English for its log. */
+function attentionText(attention) {
+    const named = () => Site.ltr(attention.split(":").slice(1).join(":").trim());
+    if (attention.includes("setup")) {
+        return "لم يكتمل إعداد هذا التحديث بعد، وستُعاد المحاولة تلقائيًا عند فحص التحديث التالي.";
+    }
+    if (attention.startsWith("systemd unit changed:")) {
+        return `تغيّرت خدمة النظام ${named()} في هذا التحديث، ويحتاج تثبيتها إلى إكمال يدوي` +
+            " — افتح أيقونة «تثبيت مكونات النظام» من سطح مكتب الجهاز.";
+    }
+    if (attention.startsWith("not backed up")) {
+        return `لم تُحفظ نسخة احتياطية من ${named()}، فلا يمكن التراجع عن هذا التحديث` +
+            " في هذه الملفات.";
+    }
+    return "يحتاج هذا التحديث إلى مراجعة — راجع سجل التحديث على الجهاز.";
+}
 
 function buildForm() {
     const screen = document.querySelector("#screen");
@@ -454,15 +513,19 @@ function buildForm() {
             el("label", {}, [warn,
                 document.createTextNode("تنبيه على شاشة الجهاز عند انقطاع الإنترنت")])]));
     }
+    timingSets = [];
     for (const section of SECTIONS) {
         const set = el("fieldset", {}, [el("legend", { textContent: section.legend })]);
         for (const field of section.fields) set.appendChild(buildField(field));
         set.addEventListener("input", timingChanged);
         set.addEventListener("change", timingChanged);
         form.appendChild(set);
+        timingSets.push(set);
     }
     clearTimeout(overlapTimer);
+    overlapTimer = null;
     knownOverlaps = currentOverlaps();
+    goodTiming = timingSnapshot();
     paintEnds();
     renderSource();
 }
@@ -1012,6 +1075,8 @@ async function pollApply() {
 
 document.querySelector("#save").addEventListener("click", async () => {
     const button = document.querySelector("#save");
+    /* A change made just before the save has not had its overlap check yet. */
+    if (overlapTimer !== null && warnNewOverlaps()) return;
     button.disabled = true;
     show(null);
     working(true);
@@ -1112,8 +1177,7 @@ const Updates = (() => {
 
         if (status.needs_attention) {
             set.appendChild(el("div", { className: "note warn", textContent:
-                "هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة «تثبيت مكونات النظام» من سطح " +
-                `مكتب الجهاز.\n(${status.needs_attention})` }));
+                attentionText(status.needs_attention) }));
         }
 
         /* A PIN left by an older release, or set over SSH, holds the device just as

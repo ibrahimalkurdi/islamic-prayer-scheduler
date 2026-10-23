@@ -584,6 +584,34 @@ check_true("following the times and the ticks as they change, and warning of an 
            'set.addEventListener("input", timingChanged);' in settings_src
            and 'set.addEventListener("change", timingChanged);' in settings_src
            and "window.alert(" in settings_src)
+check_true("closing the overlap warning puts the form back, as on the touch screen",
+           '"أُعيدت الإعدادات إلى آخر أوقات لا تتداخل."' in settings_src
+           and "restoreTiming(goodTiming);" in settings_src
+           and "goodTiming = timingSnapshot();" in settings_src)
+import shutil as _shutil, subprocess as _subprocess, re as _re
+if _shutil.which("node"):
+    func = settings_src[settings_src.index("function attentionText"):settings_src.index("function buildForm() {")]
+    samples = ["setup did not finish - it is retried automatically at the next update check",
+               "systemd unit changed: scheduler_web_ui.service",
+               "not backed up, cannot be rolled back: default-audio/",
+               "something new the updater says one day"]
+    script = ("const Site = { ltr: (t) => '\\u2066' + t + '\\u2069' };\n" + func +
+              f"\nconsole.log(JSON.stringify({json.dumps(samples)}.map(attentionText)));")
+    shown = json.loads(_subprocess.run(["node", "-e", script], capture_output=True,
+                                       text=True).stdout)
+    check("an update warning on the website is in Arabic only, names aside",
+          [_re.findall(r"[A-Za-z]+", _re.sub("\u2066.*?\u2069", "", t)) for t in shown],
+          [[], [], [], []])
+    check_true("and the names it carries are kept, isolated",
+               "\u2066scheduler_web_ui.service\u2069" in shown[1]
+               and "\u2066default-audio/\u2069" in shown[2])
+check_true("an update warning is worded as the touch screen words it, sending nobody to the icon "
+           "for setup the updater retries",
+           'attention.includes("setup")' in settings_src
+           and "وستُعاد المحاولة تلقائيًا عند فحص التحديث التالي." in settings_src
+           and "attentionText(status.needs_attention)" in settings_src)
+check_true("and a save made before the check had its turn runs it first",
+           "if (overlapTimer !== null && warnNewOverlaps()) return;" in settings_src)
 check_true("a tap on a time field opens the phone's picker, and the end box is outside its label",
            "input.showPicker();" in settings_src
            and 'clockRow = el("div", { className: "clock-row" }, [' in settings_src

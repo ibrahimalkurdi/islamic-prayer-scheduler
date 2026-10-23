@@ -440,4 +440,39 @@ if os.environ.get("ZONE_SAMPLE"):
     app.processEvents()
     w.os_country_combo.parentWidget().grab().save(os.environ["ZONE_SAMPLE"])
 
+print("12. a warning the updater left says what happens next")
+STATE = os.path.join(os.environ["HOME"], "Desktop/scheduler/var/update/state.json")
+saved_state = open(STATE).read() if os.path.exists(STATE) else None
+def shown_attention(attention):
+    with open(STATE, "w") as handle:
+        json.dump({"installed": "1.0.0", "result": "updated", "message": "",
+                   "needs_attention": attention, "at": "2026-10-23T02:00:00"}, handle)
+    w.refresh_update_status()
+    return w.update_attention_label.text() if not w.update_attention_label.isHidden() else ""
+retried = shown_attention("setup did not finish - it is retried automatically at the next update check")
+chk("setup the updater finishes by itself is said to be retried, with no trip to the desktop",
+    ("تلقائيًا" in retried, "تثبيت مكونات النظام" in retried), (True, False))
+chk("a device without the setup helper is still sent to the icon",
+    "تثبيت مكونات النظام" in shown_attention("systemd unit changed: scheduler_web_ui.service"), True)
+chk("and nothing shows once the warning is gone", shown_attention(""), "")
+import re
+latin = lambda text: re.findall(r"[A-Za-z]+", re.sub("\u2066.*?\u2069", "", text))
+samples = {
+    "setup did not finish - it is retried automatically at the next update check": None,
+    "system setup failed - it is retried automatically at the next update check": None,
+    "setup did not finish - open «تثبيت مكونات النظام» on the desktop": None,
+    "systemd unit changed: scheduler_web_ui.service": "scheduler_web_ui.service",
+    "not backed up, cannot be rolled back: default-audio/": "default-audio/",
+    "something new the updater says one day": None,
+}
+for attention, name in samples.items():
+    text = shown_attention(attention)
+    chk(f"in Arabic only, its English left to the log: {attention[:40]}",
+        (latin(text), name is None or f"\u2066{name}\u2069" in text), ([], True))
+if saved_state is None:
+    os.remove(STATE)
+else:
+    with open(STATE, "w") as handle:
+        handle.write(saved_state)
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
