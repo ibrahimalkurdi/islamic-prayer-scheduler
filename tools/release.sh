@@ -127,7 +127,7 @@ main() {
 
     local notes_file
     notes_file="$(mktemp)"
-    trap 'rm -f "$notes_file"' EXIT
+    trap "rm -f $(printf %q "$notes_file")" EXIT
     suggest_notes "$prev_tag" > "$notes_file"
     [[ -s "$notes_file" ]] || echo "- Maintenance release" > "$notes_file"
     echo
