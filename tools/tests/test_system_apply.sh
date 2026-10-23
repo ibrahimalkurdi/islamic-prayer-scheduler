@@ -70,8 +70,31 @@ if [[ "${1:-}" == "-s" ]]; then
 fi
 exit 0
 STUB
+# NetworkManager's profiles live in a file, one "uuid:type:device:ipv6-method" a line, so
+# what the helper changes is really read back on the next run. In place from the start:
+# this machine's own nmcli must never be reached, and the helper would find it on PATH.
+cat > "$BIN/nmcli" <<'STUB'
+#!/bin/bash
+echo "nmcli $*" >> "$CALLS"
+touch "$NM_PROFILES"
+case "$*" in
+    "-t -f UUID,TYPE,DEVICE connection show")
+        cut -d: -f1-3 "$NM_PROFILES" ;;
+    "-g ipv6.method connection show "*)
+        grep "^$5:" "$NM_PROFILES" | cut -d: -f4 ;;
+    "connection modify "*" ipv6.method disabled")
+        [[ -n "${STUB_nmcli_modify_EXIT:-}" ]] && exit "$STUB_nmcli_modify_EXIT"
+        sed -i "s/^\($3:[^:]*:[^:]*\):.*/\1:disabled/" "$NM_PROFILES" ;;
+esac
+exit 0
+STUB
+cat > "$BIN/sysctl" <<'STUB'
+#!/bin/bash
+echo "sysctl $*" >> "$CALLS"
+STUB
 chmod +x "$BIN"/*
 export CALLS="$ROOT/calls.log"
+export NM_PROFILES="$ROOT/nm-profiles"
 export ALREADY_INSTALLED=""
 export SYSTEMCTL_DISABLED=""
 
@@ -505,6 +528,60 @@ chk "a zone timedatectl refuses is a failed run" "$(run --timezone Asia/Damascus
 chk "and no reboot follows it" "$(grep -c 'systemd-run' "$CALLS")" "0"
 chk "nor is /etc/timezone changed" "$(cat "$ROOT/timezone")" "Europe/Berlin"
 rm -f "$BIN/timedatectl" "$BIN/systemd-run"
+
+echo "16. IPv6 is switched off: the sysctl, and every wired and wireless network"
+build
+rm -f "$SCHED/config/packages.txt"
+sed -i "s|^SYSCTL_DIR=.*|SYSCTL_DIR=\"$ROOT/sysctl.d\"|" "$ROOT/apply.sh"
+mkdir -p "$ROOT/sysctl.d"
+cat > "$NM_PROFILES" <<'NM'
+aaaa-wifi:802-11-wireless:wlan0:auto
+bbbb-wifi5:802-11-wireless::auto
+cccc-wired:802-3-ethernet::auto
+dddd-lo:loopback:lo:auto
+eeee-old:802-11-wireless::disabled
+NM
+chk "a release without the sysctl file leaves IPv6 alone" "$(run)" "0"
+chk "and asks NetworkManager nothing" "$(grep -c '^nmcli' "$CALLS")" "0"
+REPO_SYSCTL="$REPO/scheduler-official-touch-screen-with-raspberry-pi-4/config/sysctl/90-disable-ipv6.conf"
+mkdir -p "$SCHED/config/sysctl"
+cp "$REPO_SYSCTL" "$SCHED/config/sysctl/"
+chk "the file the release ships switches off all, default and lo" \
+    "$(grep -c '^net.ipv6.conf.\(all\|default\|lo\).disable_ipv6 = 1$' "$REPO_SYSCTL")" "3"
+chk "with it, there is work to do" "$(run --check)" "10"
+chk "but --check changes nothing" "$(grep -c 'connection modify\|^install .*disable-ipv6\|^sysctl' "$CALLS")" "0"
+chk "a full run succeeds" "$(run)" "0"
+chk "the sysctl file is installed" \
+    "$(grep -c "^install -m 0644 -o root -g root .*90-disable-ipv6.conf $ROOT/sysctl.d/90-disable-ipv6.conf$" "$CALLS")" "1"
+chk "and loaded at once" "$(grep -c "^sysctl -q -p $ROOT/sysctl.d/90-disable-ipv6.conf$" "$CALLS")" "1"
+chk "every wired and wireless network is set to disabled, the inactive ones too" \
+    "$(grep '^nmcli connection modify' "$CALLS" | cut -d' ' -f4 | sort | tr '\n' ' ')" \
+    "aaaa-wifi bbbb-wifi5 cccc-wired "
+chk "loopback is the sysctl's, and one already off is left alone" \
+    "$(grep -c 'modify dddd-lo\|modify eeee-old' "$CALLS")" "0"
+chk "the connection that is up takes it in place, without reconnecting" \
+    "$(grep '^nmcli device' "$CALLS")" "nmcli device reapply wlan0"
+cp "$REPO_SYSCTL" "$ROOT/sysctl.d/"
+# In a tree with nothing else to install: the stubbed install copies nothing, so the demo
+# unit above would always look pending.
+ONLY_IPV6="$ROOT/only-ipv6"
+mkdir -p "$ONLY_IPV6/config/sysctl"
+cp "$REPO_SYSCTL" "$ONLY_IPV6/config/sysctl/"
+sed -e "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$ONLY_IPV6\"|" \
+    -e "s|^SYSCTL_DIR=.*|SYSCTL_DIR=\"$ROOT/sysctl.d\"|" "$SRC" > "$ROOT/apply-ipv6.sh"
+PATH="$BIN:$PATH" bash "$ROOT/apply-ipv6.sh" --check > /dev/null 2>&1
+chk "once done, a nightly check finds nothing to do" "$?" "0"
+echo "ffff-new:802-11-wireless::auto" >> "$NM_PROFILES"
+chk "a network added on the screen since is work again" "$(run --check)" "10"
+run > /dev/null
+chk "and only it is changed" "$(grep '^nmcli connection modify' "$CALLS" | cut -d' ' -f4)" "ffff-new"
+chk "the sysctl, already in place, is not installed again" "$(grep -c '^install .*disable-ipv6' "$CALLS")" "0"
+echo "gggg-stuck:802-3-ethernet::auto" >> "$NM_PROFILES"
+export STUB_nmcli_modify_EXIT=10
+chk "a network NetworkManager will not change does not fail the run" "$(run)" "0"
+chk "but is said out loud" "$(grep -c 'could not switch IPv6 off for network gggg-stuck' "$ROOT/out.log")" "1"
+unset STUB_nmcli_modify_EXIT
+rm -rf "$SCHED/config/sysctl" "$NM_PROFILES"
 
 echo
 if [[ ${#fails[@]} -eq 0 ]]; then

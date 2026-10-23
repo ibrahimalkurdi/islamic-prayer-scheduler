@@ -98,8 +98,8 @@ PUBLIC_SITES = os.path.join(HERE, "public_sites.json")
 PRAYER_SOURCE_KEY = "prayer_csv_source_label"
 
 # The app a device hands out runs on those sites and reaches the device from there - its
-# settings page and its countdown's mute - so they may call the endpoints those need. The
-# browser still asks the user first (Local Network Access), per site.
+# settings page and its speaker's mute and volume - so they may call the endpoints those
+# need. The browser still asks the user first (Local Network Access), per site.
 
 
 def public_app_origins():
@@ -117,7 +117,7 @@ def public_app_origins():
 
 
 PUBLIC_APP_ORIGIN = public_app_origins()
-PUBLIC_APP_PATHS = ("/api/mute", "/api/device", "/api/settings", "/api/apply",
+PUBLIC_APP_PATHS = ("/api/mute", "/api/volume", "/api/device", "/api/settings", "/api/apply",
                     "/api/prayer-source", "/api/reset", "/api/update",
                     "/api/update/versions", "/api/update/auto", "/api/audio",
                     "/api/audio/check", "/api/audio/delete", "/api/os-timezone",
@@ -402,6 +402,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_settings_get()
             if path == "/api/mute":
                 return self.api_mute_get()
+            if path == "/api/volume":
+                return self.api_volume_get()
             if path == "/api/apply":
                 return self.send_json(self.device.apply_state)
             if path == "/api/device":
@@ -446,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_settings_post()
             if path == "/api/mute":
                 return self.api_mute_post()
+            if path == "/api/volume":
+                return self.api_volume_post()
             if path == "/api/prayer-source":
                 return self.api_prayer_source_post()
             if path == "/api/reset":
@@ -885,6 +889,30 @@ class Handler(BaseHTTPRequestHandler):
 
         self.api_mute_get()
 
+    def api_volume_get(self):
+        mute_lib.restore_lapsed_volume()
+        held = mute_lib.temporary_volume()
+        level = mute_lib.audio_volume()
+        self.send_json({
+            "volume": level,
+            "reachable": level is not None,
+            "until": (datetime.fromtimestamp(held["until"]).isoformat(timespec="seconds")
+                      if held else None),
+            "restore": held["restore"] if held else None,
+            "minutes": mute_lib.VOLUME_DURATION_MINUTES,
+            "default": mute_lib.DEFAULT_VOLUME,
+        })
+
+    def api_volume_post(self):
+        body = self.read_json() or {}
+        level = body.get("volume")
+        if isinstance(level, bool) or not isinstance(level, (int, float)) or not 0 <= level <= 100:
+            return self.fail(400, "volume must be a number from 0 to 100")
+        if not mute_lib.set_volume(round(level), permanent=bool(body.get("permanent"))):
+            self.log_message("volume: %s", mute_lib.last_error())
+            return self.fail(503, "تعذّر الوصول إلى مكبر الصوت")
+        self.api_volume_get()
+
     def read_json(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -897,6 +925,17 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return None
         return payload if isinstance(payload, dict) else None
+
+
+def watch_volume():
+    """Puts back the volume a temporary one replaced once its hour is up, whether or not
+    any page is open - this server is the one part always running."""
+    while True:
+        try:
+            mute_lib.restore_lapsed_volume()
+        except Exception as error:  # the next round tries again
+            print(f"volume: {error}", file=sys.stderr, flush=True)
+        time.sleep(mute_lib.VOLUME_CHECK_SECONDS)
 
 
 def build_server(scheduler_dir, desktop_dir, port, bind="0.0.0.0"):
@@ -921,6 +960,7 @@ def main():
 
     server, device = build_server(args.scheduler_dir, args.desktop_dir, args.port, args.bind)
     threading.Thread(target=device.restore_brightness, daemon=True).start()
+    threading.Thread(target=watch_volume, daemon=True).start()
     address = local_ip() or args.bind
     print(f"Prayer scheduler website on http://{socket.gethostname()}.local"
           f"{'' if args.port == 80 else ':' + str(args.port)}"

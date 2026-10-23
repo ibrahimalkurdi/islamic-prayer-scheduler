@@ -224,6 +224,119 @@ counter.audio_poll_due = 0
 counter.sync_mute_state()
 chk("and it goes when the sound is back", counter.mute_until.isHidden(), True)
 
+print("6b. a volume set for a while from a phone: the same line says when it goes back")
+volume_until = int(_datetime.now().timestamp()) + 1800
+page.temporary_volume = lambda: {"until": volume_until, "restore": 39}
+volume_reads = []
+page.audio_volume = lambda: volume_reads.append(1) or 82
+counter.audio_poll_due = 5
+counter.sync_mute_state()
+line = counter.mute_until.text()
+chk("it shows at once, with the level, read straight away rather than on the next beat",
+    (counter.mute_until.isHidden(), line.startswith("مستوى الصوت \u206682%\u2069 حتى"), len(volume_reads)),
+    (False, True, 1))
+chk("naming the time it goes back",
+    page.clock_12h(_datetime.fromtimestamp(volume_until)).strip() in line, True)
+chk("in the buttons' colour, as the mute's line is",
+    counter.page_button_color in counter.mute_until.styleSheet(), True)
+counter.sync_mute_state()
+chk("the level is not asked for again on every tick", len(volume_reads), 1)
+page.is_muted = lambda: True
+page.audio_is_muted = lambda: True
+page.mute_expiry = lambda: expiry
+counter.audio_poll_due = 0
+counter.sync_mute_state()
+chk("a mute takes the line: nothing is heard then, whatever the volume",
+    counter.mute_until.text().startswith("الصوت مكتوم حتى"), True)
+page.is_muted = lambda: False
+page.audio_is_muted = lambda: False
+counter.audio_poll_due = 0
+counter.sync_mute_state()
+chk("unmuted, the volume's line is back", counter.mute_until.text().startswith("مستوى الصوت \u206682%\u2069 حتى"), True)
+page.temporary_volume = lambda: {"until": int(_datetime.now().timestamp()) - 1, "restore": 39}
+counter.sync_mute_state()
+chk("once its time has passed it goes, before the server has put the volume back",
+    counter.mute_until.isHidden(), True)
+page.temporary_volume = lambda: None
+counter.sync_mute_state()
+chk("and stays gone with nothing temporary", counter.mute_until.isHidden(), True)
+
+print("6c. holding the speaker opens the volume, as the website's long press does")
+from PyQt5.QtTest import QTest
+from PyQt5.QtCore import Qt as _Qt
+from shared import mute as shared_mute
+speaker = {"level": 39, "held": None}
+volume_calls = []
+def fake_set_volume(level, permanent=False):
+    volume_calls.append((level, permanent))
+    if permanent:
+        speaker["held"] = None
+    else:
+        speaker["held"] = speaker["held"] or {"until": int(_datetime.now().timestamp()) + 3600,
+                                              "restore": speaker["level"]}
+    speaker["level"] = level
+    return True
+shared_mute.audio_volume = lambda: speaker["level"]
+shared_mute.set_volume = fake_set_volume
+shared_mute.temporary_volume = lambda: speaker["held"]
+page.temporary_volume = lambda: speaker["held"]
+page.audio_volume = lambda: speaker["level"]
+toggles = []
+real_toggle = counter.toggle_mute
+counter.toggle_mute = lambda: toggles.append(1)
+if counter.stack.currentWidget() is not counter.counter_page:
+    counter.toggle_view()
+button = counter.mute_btn
+QTest.mousePress(button, _Qt.LeftButton, _Qt.NoModifier, button.rect().center())
+QTest.qWait(page.MUTE_HOLD_MS + 200)
+QTest.mouseRelease(button, _Qt.LeftButton, _Qt.NoModifier, button.rect().center())
+app.processEvents()
+dialog = counter.volume_dialog
+chk("a hold opens the volume over the whole window, and does not mute",
+    (dialog is not None and dialog.isVisible(), dialog.geometry() == counter.rect(), toggles),
+    (True, True, []))
+chk("inside the app's own window, not a window of its own", dialog.isWindow(), False)
+chk("showing the speaker's volume", (dialog.slider.value(), dialog.level.text()), (39, "39%"))
+chk("and that a change lasts an hour unless kept", "60 دقيقة" in dialog.note.text(), True)
+dialog.slider.setSliderDown(True)
+dialog.slider.setValue(82)
+chk("a drag sets nothing until the finger lifts", volume_calls, [])
+dialog.slider.setSliderDown(False)
+chk("then it is set, for an hour", volume_calls, [(82, False)])
+chk("and the panel says when it goes back, the number kept left to right",
+    dialog.note.text().startswith("يعود إلى ⁦39%⁩ عند"), True)
+chk("as does the line under the buttons, at once",
+    counter.mute_until.text().startswith("مستوى الصوت ⁦82%⁩ حتى"), True)
+dialog.slider.setValue(60)
+chk("a tap on the groove, with no drag, is set straight away", volume_calls[-1], (60, False))
+dialog.keep.setChecked(True)
+chk("ticking the box keeps it", volume_calls[-1], (60, True))
+chk("and the line goes: nothing is waiting to be put back", counter.mute_until.isHidden(), True)
+dialog.reset_btn.click()
+chk("the reset button puts the default back, and keeps it", volume_calls[-1], (50, True))
+chk("named with its level", dialog.reset_btn.text(), "إعادة إلى ⁦50%⁩")
+counter.tick(); app.processEvents()
+from PyQt5.QtCore import QPoint as _QPoint
+corner = _QPoint(5, 5)
+chk("the clock, the line and the name painted every tick stay under it",
+    counter.childAt(corner) is dialog, True)
+chk("so its controls are what a tap reaches",
+    counter.childAt(dialog.mapTo(counter, dialog.reset_btn.geometry().center()
+                                 + dialog.card.pos())) is dialog.reset_btn, True)
+QTest.mouseClick(dialog, _Qt.LeftButton, _Qt.NoModifier, corner)
+chk("a tap on the dimmed screen around it closes it", dialog.isVisible(), False)
+button.click()
+chk("a quick tap still mutes", toggles, [1])
+QTest.mousePress(button, _Qt.LeftButton, _Qt.NoModifier, button.rect().center())
+QTest.qWait(100)
+QTest.mouseRelease(button, _Qt.LeftButton, _Qt.NoModifier, button.rect().center())
+QTest.qWait(page.MUTE_HOLD_MS + 100)
+chk("and a short press with the finger is a tap, not a hold that opens it late",
+    (toggles, dialog.isVisible()), ([1, 1], False))
+counter.toggle_mute = real_toggle
+page.temporary_volume = lambda: None
+counter.sync_mute_state()
+
 print("7. Settings keeps Amiri when the desktop's qt5ct theme sets another font")
 # qt5ct (Nunito Sans, no Arabic) is only there in the desktop session, so this reads the
 # order in the source: not desktop-settings-aware, before the app exists.

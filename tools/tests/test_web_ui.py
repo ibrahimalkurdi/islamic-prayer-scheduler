@@ -116,8 +116,11 @@ friday_quran_position = after
 quran_audio_checked = one.mp3
 """)
 
-for name in ("one.mp3", "two.mp3"):
-    open(os.path.join(SCHEDULER, "audio", "quran", name), "w").close()
+# one.mp3 plays for a minute: 2297 MPEG-1 Layer III frames at 128 kbps. two.mp3 is no
+# MP3 at all, so its length cannot be read.
+with open(os.path.join(SCHEDULER, "audio", "quran", "one.mp3"), "wb") as handle:
+    handle.write((b"\xff\xfb\x90\x00" + bytes(413)) * 2297)
+open(os.path.join(SCHEDULER, "audio", "quran", "two.mp3"), "w").close()
 open(os.path.join(SCHEDULER, "audio", "fajr", "athan.mp3"), "w").close()
 
 # apply_settings.sh, stubbed: the real one rebuilds the prayer map and restarts a
@@ -232,6 +235,9 @@ with open(os.path.join(SCHEDULER, "config", "scripts", "init.sh"), "w",
 BIN = os.path.join(ROOT, "bin")
 os.makedirs(BIN)
 SINK_STATE = os.path.join(ROOT, "sink-muted")
+SINK_VOLUME = os.path.join(ROOT, "sink-volume")
+with open(SINK_VOLUME, "w", encoding="utf-8") as handle:
+    handle.write("0.50\n")
 WPCTL = os.path.join(BIN, "wpctl")
 with open(WPCTL, "w", encoding="utf-8") as handle:
     handle.write(f"""#!/bin/bash
@@ -239,11 +245,16 @@ if [[ "$1" == "set-mute" ]]; then
     echo "$3" > "{SINK_STATE}"
     exit 0
 fi
+if [[ "$1" == "set-volume" ]]; then
+    [[ -f "{ROOT}/sink-gone" ]] && exit 1
+    echo "$3" > "{SINK_VOLUME}"
+    exit 0
+fi
 if [[ "$1" == "get-volume" ]]; then
     if [[ "$(cat "{SINK_STATE}" 2>/dev/null)" == "1" ]]; then
-        echo "Volume: 0.50 [MUTED]"
+        echo "Volume: $(cat "{SINK_VOLUME}") [MUTED]"
     else
-        echo "Volume: 0.50"
+        echo "Volume: $(cat "{SINK_VOLUME}")"
     fi
     exit 0
 fi
@@ -553,6 +564,33 @@ check("and what is ticked in it",
       settings["audio"]["quran_audio_checked"]["checked"], ["one.mp3"])
 check("an empty folder lists nothing",
       settings["audio"]["duha_audio_checked"]["available"], [])
+quran_seconds = settings["audio"]["quran_audio_checked"]["seconds"]
+check_true("the Quran's files come with how long each plays, for when it ends",
+           abs(quran_seconds["one.mp3"] - 2297 * 417 * 8 / 128000) < 0.01)
+check("and a file that is no MP3 with none", quran_seconds["two.mp3"], None)
+check("every list is timed, for when each event ends",
+      [key for key, info in settings["audio"].items() if "seconds" not in info], [])
+settings_src = get("/settings/")[1].decode("utf-8")
+check_true("the settings page shows when every event ends, beside a time of day chosen for it",
+           "box.dataset.ends = field.audio;" in settings_src
+           and "(fixed ? clockRow : endRow).appendChild(box);" in settings_src
+           and 'startRow.classList.toggle("hidden", !!fixed);' in settings_src
+           and 'modeSelect.addEventListener("change", placeEnds);' in settings_src
+           and '"ينتهي التشغيل: "' in settings_src
+           and '"يبدأ التشغيل: "' in settings_src and "start.dataset.starts = field.audio;" in settings_src
+           and 'const start = el("span", { className: "ends" });' in settings_src
+           and ".ends {" in get("/static/app.css")[1].decode("utf-8"))
+check_true("following the times and the ticks as they change, and warning of an overlap",
+           'set.addEventListener("input", timingChanged);' in settings_src
+           and 'set.addEventListener("change", timingChanged);' in settings_src
+           and "window.alert(" in settings_src)
+check_true("a tap on a time field opens the phone's picker, and the end box is outside its label",
+           "input.showPicker();" in settings_src
+           and 'clockRow = el("div", { className: "clock-row" }, [' in settings_src
+           and ".clock-row {" in get("/static/app.css")[1].decode("utf-8"))
+friday = settings["friday_times"]
+check_true("the coming Friday's times too, for Surat Al-Kahf",
+           isinstance(friday, dict) and friday["dhuhr"] == 12 * 60)
 check_true("today's times are offered for the rules",
            settings["times"]["dhuhr"] == 12 * 60)
 # The fixture's config.ini predates the choice, which is every device on its first boot
@@ -622,21 +660,55 @@ check("and only the mode it was sent was added",
       ["athkar_elsabah_mode = clock"])
 after = open(INI, encoding="utf-8").read()
 
-print("12b. the countdown page carries the mute control inside the counter")
-_, body, _ = get("/countdown/")
-page = body.decode("utf-8")
-check_true("the page is full-bleed", 'class="full"' in page)
-check_true("the mute button is inside the counter",
-           page.index('id="mute"') > page.index('id="counter"')
-           and page.index('id="mute"') < page.index("</main>"))
+print("12b. the speaker is on the daily list, beside its icons, and off the countdown")
+page = get("/")[1].decode("utf-8")
+nav = page[page.index('<nav class="top-icons">'):page.index("</nav>")]
+check_true("the speaker is among the icons at the top", 'id="mute"' in nav)
+check_true("a button, hidden until it knows what it can reach",
+           '<button class="icon-link speaker hidden" id="mute" type="button"' in nav)
 check_true("it is drawn as SVG", "SPEAKER_OFF" in page and "<svg" in page)
-# The touch screen's glyphs are monochrome and take the page colour. A browser renders
-# U+1F50A / U+1F507 as colour emoji that ignore `color`, so they could never go red when
-# muted - which is why the page must not fall back to them.
+check_true("a device from before the volume still mutes, and its panel asks for an update",
+           'Promise.allSettled([call("/api/mute"), call("/api/volume")])' in page
+           and "if (noVolume) {" in page and "VOLUME_NEEDS_UPDATE" in page)
+# The page is right to left, so the first in the source is the rightmost: read across
+# from the left the icons are countdown, settings, speaker.
+check_true("in the order speaker, settings, countdown from the right",
+           nav.index('id="mute"') < nav.index('id="to-settings"') < nav.index('href="countdown/"'))
+# A browser renders U+1F50A / U+1F507 as colour emoji that ignore `color`, so they could
+# never go red when muted - which is why the page must not fall back to them.
 check("no emoji speaker anywhere on the page",
       any(ch in page for ch in ("\U0001F50A", "\U0001F507")), False)
 check_true("and its muted state is the app's red",
-           "#dc3545" in get("/static/app.css")[1].decode("utf-8"))
+           ".icon-link.muted {\n    color: #dc3545;" in get("/static/app.css")[1].decode("utf-8"))
+countdown = get("/countdown/")[1].decode("utf-8")
+check("the countdown has no speaker any more",
+      ['id="mute"' in countdown, "/api/mute" in countdown, "SPEAKER_ON" in countdown],
+      [False, False, False])
+check_true("a tap mutes, a longer press opens the volume",
+           'setTimeout(() => {\n            timer = null;\n            pressed = true;\n            openVolume();\n        }, LONG_PRESS_MS);' in page
+           and "if (pressed) {\n            pressed = false;\n            return;\n        }\n        toggleMute();" in page)
+check_true("as does the phone's own long press, its context menu kept away",
+           'button.addEventListener("contextmenu", (event) => {\n        event.preventDefault();' in page
+           and "-webkit-touch-callout: none;" in get("/static/app.css")[1].decode("utf-8"))
+check_true("the volume is a slider with a box beside it to keep it",
+           '<input type="range" id="volume" min="0" max="100"' in page
+           and '<input type="checkbox" id="volume-keep">تثبيت هذا المستوى دائمًا' in page)
+check_true("the finger that opened it, lifted over the backdrop, does not close it again",
+           "if (event.target === panel && backdropPressed) close();" in page)
+check_true("set when the finger lifts off the slider, kept only when the box is ticked",
+           'slider.addEventListener("change", () => setVolume());' in page
+           and "async function setVolume(level = Number(slider.value), permanent = keep.checked)" in page)
+check_true("a percentage in Arabic text stays one left-to-right run, not %50",
+           "const percent = (level) => Site.ltr(`${level}%`);" in page
+           and "`${state.restore}%" not in page and "`${state.default}%" not in page)
+check_true("a button puts the default back, and keeps it",
+           '<button class="ghost" id="volume-reset">إعادة إلى &#x2066;50%&#x2069;</button>' in page
+           and 'reset.addEventListener("click", () => setVolume(Number(reset.dataset.level || 50), true));'
+           in page)
+check_true("under the speaker, when a volume set for a while goes back, as the mute's line does",
+           '<p class="volume-state hidden" id="volume-state"></p>' in page
+           and "`مستوى الصوت ${percent(state.volume)} حتى ${" in page
+           and 'showVolumeLine(noVolume ? null : volume.value);' in page)
 
 print("12c. the palette is still the one the touch screen paints")
 # The website's colours are copies of the app's, and copies drift. These are re-derived
@@ -863,6 +935,66 @@ check("nor is it answered for the site",
 check("a foreign site still may not save",
       raw("POST", "/api/settings", "https://evil.example", b'{"duha_time": 30}')[0], 403)
 
+print("17c. the volume: for an hour and then put back, unless kept")
+status, body, _ = get("/api/volume")
+state = json.loads(body)
+check("GET /api/volume reads the speaker", (status, state["volume"], state["reachable"]),
+      (200, 50, True))
+check("with nothing temporary", (state["until"], state["restore"]), (None, None))
+check("and the default the reset button puts back", state["default"], 50)
+status, state = post("/api/volume", {"volume": 80}, origin=BASE)
+check("POST sets it", (status, state["volume"], open(SINK_VOLUME).read().strip()),
+      (200, 80, "0.80"))
+check("for an hour, to go back to what it was",
+      (state["restore"], state["minutes"]), (50, 60))
+until = datetime.fromisoformat(state["until"])
+check_true("an hour from now",
+           abs((until - datetime.now()).total_seconds() - 3600) < 60)
+status, state = post("/api/volume", {"volume": 30}, origin=BASE)
+check("a second change keeps what the first will go back to",
+      (state["volume"], state["restore"]), (30, 50))
+check("restore_lapsed_volume leaves it while the hour runs",
+      (mute_lib.restore_lapsed_volume(), open(SINK_VOLUME).read().strip()), (False, "0.30"))
+check_true("and puts it back once the hour is up",
+           mute_lib.restore_lapsed_volume(now=datetime.now() + timedelta(minutes=61)))
+check("to the volume it replaced, with nothing left behind",
+      (open(SINK_VOLUME).read().strip(), os.path.exists(mute_lib.VOLUME_FLAG_FILE)),
+      ("0.50", False))
+status, state = post("/api/volume", {"volume": 70, "permanent": True}, origin=BASE)
+check("kept, it stays: nothing to go back to",
+      (status, state["volume"], state["until"], os.path.exists(mute_lib.VOLUME_FLAG_FILE)),
+      (200, 70, None, False))
+post("/api/volume", {"volume": 40}, origin=BASE)
+status, state = post("/api/volume", {"volume": 40, "permanent": True}, origin=BASE)
+check("keeping a temporary volume ends its hour", (state["volume"], state["until"]), (40, None))
+for bad in ({"volume": 101}, {"volume": -1}, {"volume": "loud"}, {"volume": True}, {}):
+    check(f"{bad} is refused", post("/api/volume", bad, origin=BASE)[0], 400)
+check("and changes nothing", open(SINK_VOLUME).read().strip(), "0.40")
+open(os.path.join(ROOT, "sink-gone"), "w").close()
+status, reply = post("/api/volume", {"volume": 90}, origin=BASE)
+check("with no speaker to reach, it says so", (status, bool(reply.get("error"))), (503, True))
+check("and leaves no hour behind that would set a volume later",
+      os.path.exists(mute_lib.VOLUME_FLAG_FILE), False)
+os.remove(os.path.join(ROOT, "sink-gone"))
+status, body, headers = raw("POST", "/api/volume", APP_ORIGIN, b'{"volume": 55}')
+check("the app a device hands out may set it too",
+      (status, json.loads(body)["volume"], headers.get("Access-Control-Allow-Origin")),
+      (200, 55, APP_ORIGIN))
+check("but not a stranger", raw("POST", "/api/volume", "https://evil.example",
+                                b'{"volume": 100}')[0], 403)
+mute_lib.restore_lapsed_volume(now=datetime.now() + timedelta(minutes=61))
+with open(mute_lib.VOLUME_FLAG_FILE, "w") as flag:
+    flag.write(f"{int(time.time()) - 1} 50\n")
+mute_lib.VOLUME_CHECK_SECONDS = 0.1
+threading.Thread(target=web.watch_volume, daemon=True).start()
+time.sleep(1)
+mute_lib.VOLUME_CHECK_SECONDS = 30
+check("the server's watcher puts a lapsed volume back with no page open",
+      (open(SINK_VOLUME).read().strip(), os.path.exists(mute_lib.VOLUME_FLAG_FILE)),
+      ("0.50", False))
+check_true("and the server starts it", "threading.Thread(target=watch_volume, daemon=True)"
+           in open(os.path.join(WEB_UI, "main.py"), encoding="utf-8").read())
+
 print("18. the touch screen would see that mute, because the flag is the state")
 mute_lib.write_mute_flag()
 check_true("shared.is_muted agrees", mute_lib.is_muted())
@@ -946,9 +1078,9 @@ check_true("the landing page offers it under the name the phone used",
            and "${info.public_site}/d/${encodeURIComponent(name)}/" in home)
 check_true("and only on the device", home.index("if (window.DEVICE) {\n    Site.json(\"/api/device\")") > 0)
 
-print("20b. a device's app opens settings and the mute on the device, or says it cannot")
+print("20b. a device's app opens settings and the speaker on the device, or says it cannot")
 app_js = get("/static/app.js")[1].decode("utf-8")
-countdown = get("/countdown/")[1].decode("utf-8")
+home = get("/")[1].decode("utf-8")
 check_true("the device's own address", "fetch(`http://${host}.local${path}`" in app_js)
 check_true("Chrome asks the device first, as a local-network request",
            'targetAddressSpace: "local"' in app_js and 'mode: "no-cors"' in app_js)
@@ -981,25 +1113,27 @@ check_true("and says so when the device is out of reach",
            in settings_page)
 check_true("and its settings page says so when the device is out of reach",
            "أنت خارج شبكة الواي فاي الخاصة بالجهاز، الإعدادات غير متاحة." in settings_page)
-check_true("Chrome mutes and unmutes the device straight from the app",
-           'Site.deviceJson(host, "/api/mute",\n' in countdown
-           and 'method: "POST", body: "{}"' in countdown)
+check_true("Chrome mutes and sets the volume straight from the app",
+           "speaker((path, options) => Site.deviceJson(owner, path, options)," in home
+           and 'post("/api/mute", {})' in home and 'post("/api/volume",' in home)
 check_true("and shows its state once the permission is there",
-           "Site.localNetworkAllowed().then((allowed) =>" in countdown)
+           "Site.localNetworkAllowed().then((allowed) =>" in home)
 check_true("a device that refuses, from an older release, is opened instead",
-           "if (await Site.deviceAnswers(host)) location.href = target;" in countdown)
+           "if (await Site.deviceAnswers(owner)) location.href = target;" in home)
 # Safari cannot send it, or check first, so there the speaker opens the device's own
-# countdown, the same way settings does.
-check_true("elsewhere the speaker opens the device's countdown",
-           'button.addEventListener("click", () => { location.href = target; });' in countdown
-           and 'Site.devicePage(host, "/countdown/")' in countdown)
+# daily list, where the speaker now is, the same way settings opens the device's page.
+check_true("elsewhere the speaker opens the device's own list",
+           'button.addEventListener("click", () => { location.href = target; });' in home
+           and 'const target = Site.devicePage(owner, "/");' in home)
 check_true("and says so when it is out of reach",
-           "أنت خارج شبكة الواي فاي الخاصة بالجهاز، كتم الصوت غير متاح." in countdown)
-check_true("under the speaker, not at the foot of the page",
-           'Site.noteSayer("#speaker-note", "speaker-note")' in countdown)
+           "أنت خارج شبكة الواي فاي الخاصة بالجهاز، التحكم في الصوت غير متاح." in home)
+check_true("under the speaker's row, not at the foot of the page",
+           'Site.noteSayer("#speaker-note")' in home
+           and home.index('id="speaker-note"') < home.index('id="rows"'))
 check_true("the speaker stays off the public site",
-           countdown.index("} else if (Site.ownerHost()) {")
-           < countdown.index('document.querySelector("#mute").remove();'))
+           "} else if (owner) {" in home
+           and home.index("if (window.DEVICE) {\n    const refresh = speaker(")
+           < home.index("} else if (owner) {"))
 
 print("20c. and it reports the version the daily page prints at its foot")
 VERSION_FILE = os.path.join(SCHEDULER, "var", "installed_version")

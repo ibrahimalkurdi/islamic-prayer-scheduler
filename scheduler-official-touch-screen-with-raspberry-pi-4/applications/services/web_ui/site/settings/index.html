@@ -153,7 +153,10 @@ function buildField(field) {
         const input = el("input", { type: "time", id: field.clock,
                                     value: state.values[field.clock] || "" });
         input.dataset.text = field.clock;
-        clockRow = el("label", {}, [document.createTextNode("الوقت: "), input]);
+        /* The end box goes beside the time, not inside its label: a tap on it would
+           only focus the field, and a phone opens no picker for that. */
+        clockRow = el("div", { className: "clock-row" }, [
+            el("label", {}, [document.createTextNode("الوقت: "), input])]);
         wrap.appendChild(clockRow);
     }
 
@@ -191,13 +194,240 @@ function buildField(field) {
             document.createTextNode("الموضع: "), select]));
     }
 
+    /* The ticked files play one after another from the event's start, so with it: when
+       they finish. A device from before it reports no lengths, and shows nothing. */
+    if (state.times && (state.audio[field.audio] || {}).seconds) {
+        const box = el("span", { className: "ends" });
+        box.dataset.ends = field.audio;
+        const start = el("span", { className: "ends" });
+        start.dataset.starts = field.audio;
+        const startRow = el("div", {}, [document.createTextNode("يبدأ التشغيل: "), start]);
+        const endRow = el("div", {}, [document.createTextNode("ينتهي التشغيل: ")]);
+        /* A start chosen as a time of day is already in its own box, so the end sits
+           beside it, as the daily Quran's does; one worked out from a prayer is shown. */
+        const placeEnds = () => {
+            const fixed = clockRow && !clockRow.classList.contains("hidden");
+            (fixed ? clockRow : endRow).appendChild(box);
+            startRow.classList.toggle("hidden", !!fixed);
+            endRow.classList.toggle("hidden", !!fixed);
+        };
+        wrap.append(startRow, endRow);
+        if (modeSelect) modeSelect.addEventListener("change", placeEnds);
+        placeEnds();
+    }
     if (field.audio) wrap.appendChild(audioBox(field.audio));
     return wrap;
+}
+
+const DAY_MINUTES = 24 * 60;
+const EVENT_ENABLE_KEYS = {
+    tahajjud: "enable_tahajjud_prayer", fajr: "enable_prayer_fajr",
+    sunrise: "enable_prayer_sunrise", athkar_elsabah: "enable_athkar_elsabah",
+    duha: "enable_duha_prayer", dhuhr: "enable_prayer_dhuhr", asr: "enable_prayer_asr",
+    maghrib: "enable_prayer_maghrib", athkar_elmasa: "enable_athkar_elmasa",
+    isha: "enable_prayer_isha", quran: "enable_listen_to_quran",
+    friday_quran: "enable_friday_quran",
+};
+const EVENT_NAMES = {
+    tahajjud: "صلاة التهجد", fajr: "أذان الفجر", sunrise: "الشروق",
+    athkar_elsabah: "أذكار الصباح", duha: "صلاة الضحى", dhuhr: "أذان الظهر",
+    asr: "أذان العصر", maghrib: "أذان المغرب", athkar_elmasa: "أذكار المساء",
+    isha: "أذان العشاء", quran: "القرآن الكريم", friday_quran: "سورة الكهف يوم الجمعة",
+};
+const OVERLAP_CHECK_MS = 1500;
+let knownOverlaps = new Map();
+let overlapTimer = null;
+
+function eventOf(key) {
+    return key.replace(/_audio_checked$/, "");
+}
+
+function durationText(seconds) {
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 1) return "أقل من دقيقة";
+    if (minutes < 60) return `${minutes} دقيقة`;
+    return `${Site.ltr(`${Math.floor(minutes / 60)}:${Site.pad(minutes % 60)}`)} ساعة`;
+}
+
+function clockText(minutes) {
+    return Site.ltr(Site.clock12(new Date(2000, 0, 1, 0, minutes)));
+}
+
+function clockMinutes(value) {
+    const match = /^(\d{1,2}):(\d{2})/.exec(value || "");
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function formValues() {
+    const values = {};
+    for (const node of document.querySelectorAll("#form [data-bool]")) values[node.dataset.bool] = node.checked;
+    for (const node of document.querySelectorAll("#form [data-int]")) values[node.dataset.int] = Number(node.value) || 0;
+    for (const node of document.querySelectorAll("#form [data-text]")) values[node.dataset.text] = node.value;
+    return values;
+}
+
+/* The same placing as settings_rules.event_starts, which the touch screen uses. */
+function eventStarts(values, times, friday) {
+    const starts = {};
+    for (const prayer of ["fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha"]) {
+        starts[prayer] = times[prayer];
+    }
+    starts.tahajjud = times.fajr - (values.tahajjud_time || 0);
+    starts.duha = times.dhuhr - (values.duha_time || 0);
+    const athkar = clockMinutes(values.athkar_elsabah_clock);
+    starts.athkar_elsabah = values.athkar_elsabah_mode !== "after_fajr" && athkar !== null
+        ? Math.min(Math.max(athkar, times.fajr + 1), times.dhuhr - 1)
+        : times.fajr + (values.athkar_elsabah_time || 0);
+    starts.athkar_elmasa = times.maghrib + (values.athkar_elmasa_time || 0);
+    const quran = clockMinutes(values.listen_to_quran);
+    if (quran !== null) starts.quran = quran;
+    if (friday) {
+        const offset = values.friday_quran_time || 0;
+        const wanted = values.friday_quran_position === "before"
+            ? times.dhuhr - offset : times.dhuhr + offset;
+        starts.friday_quran = Math.min(Math.max(wanted, times.sunrise + 1), times.asr - 1);
+    }
+    const placed = {};
+    for (const [event, start] of Object.entries(starts)) {
+        if (values[EVENT_ENABLE_KEYS[event]]) {
+            placed[event] = ((start % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+        }
+    }
+    return placed;
+}
+
+function eventSeconds() {
+    const seconds = {};
+    const unread = new Set();
+    for (const [key, info] of Object.entries(state.audio)) {
+        const names = [...document.querySelectorAll("[data-audio]")]
+            .filter((node) => node.dataset.audio === key && node.checked)
+            .map((node) => node.value);
+        const lengths = names.map((name) => (info.seconds || {})[name]);
+        seconds[eventOf(key)] = lengths.reduce((sum, length) => sum + (length || 0), 0);
+        if (lengths.some((length) => length == null)) unread.add(eventOf(key));
+    }
+    return { seconds, unread };
+}
+
+function playingWindows(starts, seconds) {
+    const windows = {};
+    for (const [event, start] of Object.entries(starts)) {
+        windows[event] = [start * 60, start * 60 + Math.max(Math.round(seconds[event] || 0), 1)];
+    }
+    return windows;
+}
+
+function overlappingPairs(windows) {
+    const events = Object.keys(windows).sort();
+    const pairs = [];
+    events.forEach((first, i) => {
+        const [aStart, aEnd] = windows[first];
+        for (const second of events.slice(i + 1)) {
+            const [bStart, bEnd] = windows[second];
+            if ([-DAY_MINUTES * 60, 0, DAY_MINUTES * 60]
+                    .some((shift) => aStart < bEnd + shift && bStart + shift < aEnd)) {
+                pairs.push([first, second]);
+            }
+        }
+    });
+    return pairs;
+}
+
+function overlapMessage(pairs, windows) {
+    const span = (event) => `${clockText(Math.floor(windows[event][0] / 60))} – ` +
+                            clockText(Math.round(windows[event][1] / 60));
+    const lines = pairs
+        .map((pair) => [...pair].sort((a, b) => windows[a][0] - windows[b][0]))
+        .sort((a, b) => windows[a[0]][0] - windows[b[0]][0])
+        .map(([first, second]) => `• «${EVENT_NAMES[first]}» (${span(first)}) مع ` +
+                                  `«${EVENT_NAMES[second]}» (${span(second)})`);
+    return "تتداخل أوقات التشغيل التالية:\n" + lines.join("\n") +
+        "\n\nلا يُشغَّل إلا ملف واحد في كل مرة: الأذان يوقف ما قبله، " +
+        "وغيره لا يُشغَّل إذا بدأ أثناء تشغيل آخر.";
+}
+
+function paintEnds() {
+    if (!state.times) return;
+    const { seconds, unread } = eventSeconds();
+    const values = formValues();
+    for (const key of Object.values(EVENT_ENABLE_KEYS)) values[key] = true;
+    const starts = eventStarts(values, state.times, false);
+    if (state.friday_times) {
+        starts.friday_quran = eventStarts(values, state.friday_times, true).friday_quran;
+    }
+    for (const start of document.querySelectorAll("[data-starts]")) {
+        const event = eventOf(start.dataset.starts);
+        start.textContent = starts[event] == null ? "--" : clockText(starts[event]);
+    }
+    for (const box of document.querySelectorAll("[data-ends]")) {
+        const event = eventOf(box.dataset.ends);
+        const ticked = [...document.querySelectorAll("[data-audio]")]
+            .some((node) => node.dataset.audio === box.dataset.ends && node.checked);
+        box.classList.toggle("hidden", starts[event] == null);
+        if (starts[event] == null) continue;
+        if (!ticked) {
+            box.textContent = `اختر ${event === "quran" ? "السور" : "الملفات"} أدناه لمعرفة وقت الانتهاء`;
+            continue;
+        }
+        let text = `حتى ${clockText(starts[event] + Math.round(seconds[event] / 60))}` +
+                   ` · المدة ${durationText(seconds[event])}`;
+        if (unread.has(event)) text += " (تعذّرت قراءة مدة بعض الملفات)";
+        box.textContent = text;
+    }
+}
+
+/* The pairs of switched-on events that play at once, each with the day's windows it
+   was found in: today's, and the coming Friday's for Surat Al-Kahf. */
+function currentOverlaps() {
+    const found = new Map();
+    if (!state.times) return found;
+    const { seconds } = eventSeconds();
+    const values = formValues();
+    const today = playingWindows(eventStarts(values, state.times, false), seconds);
+    for (const pair of overlappingPairs(today)) found.set(pair.join("|"), { pair, windows: today });
+    if (state.friday_times) {
+        const friday = playingWindows(eventStarts(values, state.friday_times, true), seconds);
+        for (const pair of overlappingPairs(friday)) {
+            if (pair.includes("friday_quran")) found.set(pair.join("|"), { pair, windows: friday });
+        }
+    }
+    return found;
+}
+
+function warnNewOverlaps() {
+    const found = currentOverlaps();
+    const fresh = [...found.entries()].filter(([key]) => !knownOverlaps.has(key));
+    knownOverlaps = found;
+    if (!fresh.length) return;
+    const byDay = new Map();
+    for (const [, { pair, windows }] of fresh) {
+        if (!byDay.has(windows)) byDay.set(windows, []);
+        byDay.get(windows).push(pair);
+    }
+    window.alert([...byDay].map(([windows, pairs]) => overlapMessage(pairs, windows))
+        .join("\n\n"));
+}
+
+function timingChanged() {
+    paintEnds();
+    clearTimeout(overlapTimer);
+    overlapTimer = setTimeout(warnNewOverlaps, OVERLAP_CHECK_MS);
 }
 
 /* The sections that act at once come first, each with its own button, and the ones the
    save button keeps sit together in the box it is at the bottom of. «تحديثات البرنامج»
    is between the two halves of the first lot and fills #updates by itself. */
+/* Some phone browsers only focus a time field on a tap and open no picker for it. */
+document.addEventListener("click", (event) => {
+    const input = event.target.closest && event.target.closest('input[type="time"]');
+    if (!input || input.disabled || !input.showPicker) return;
+    try {
+        input.showPicker();
+    } catch (e) {
+    }
+});
+
 function buildForm() {
     const screen = document.querySelector("#screen");
     const instant = document.querySelector("#instant");
@@ -227,8 +457,13 @@ function buildForm() {
     for (const section of SECTIONS) {
         const set = el("fieldset", {}, [el("legend", { textContent: section.legend })]);
         for (const field of section.fields) set.appendChild(buildField(field));
+        set.addEventListener("input", timingChanged);
+        set.addEventListener("change", timingChanged);
         form.appendChild(set);
     }
+    clearTimeout(overlapTimer);
+    knownOverlaps = currentOverlaps();
+    paintEnds();
     renderSource();
 }
 
@@ -648,6 +883,7 @@ async function changeSource(choice) {
         const fresh = await api("/api/settings");
         state.prayer_source = fresh.prayer_source;
         state.times = fresh.times;
+        state.friday_times = fresh.friday_times;
         renderSource();
         working(false);
         if (applied.state === "ok") show("ok", `تم اختيار «${isolate(answer.chosen)}» وتطبيقه.`);
@@ -806,6 +1042,7 @@ document.querySelector("#save").addEventListener("click", async () => {
             const fresh = await api("/api/settings");
             state.prayer_source = fresh.prayer_source;
             state.times = fresh.times;
+            state.friday_times = fresh.friday_times;
             renderSource();
         }
         const payload = collect();

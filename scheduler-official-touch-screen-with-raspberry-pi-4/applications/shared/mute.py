@@ -168,3 +168,98 @@ def stop_current_audio():
         subprocess.run(["pkill", "-TERM", "-f", PLAYER_SCRIPT_FILE], check=False)
     except OSError:
         pass
+
+
+# The speaker's volume, set from the website's speaker button. Like the mute it is
+# temporary by default: the flag holds when it lapses and the volume to go back to, and
+# whoever sees it lapse puts that volume back - the web server, which is always running,
+# checks every VOLUME_CHECK_SECONDS. Set as permanent, there is no flag and it stays.
+VOLUME_FLAG_FILE = os.path.join(SCHEDULER_DIR, "var", "volume.flag")
+VOLUME_DURATION_MINUTES = MUTE_DURATION_MINUTES
+# What the volume panel's reset button sets, and keeps.
+DEFAULT_VOLUME = 50
+VOLUME_CHECK_SECONDS = 30
+AUDIO_VOLUME_CMD = ["wpctl", "set-volume", AUDIO_SINK]
+
+
+def audio_volume():
+    """The output device's volume in percent, or None if it cannot be asked."""
+    try:
+        result = subprocess.run(AUDIO_STATE_CMD, capture_output=True, text=True,
+                                timeout=AUDIO_CMD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as error:
+        _record(AUDIO_STATE_CMD, error=error)
+        return None
+    _record(AUDIO_STATE_CMD, result=result)
+    words = result.stdout.split()
+    if result.returncode != 0 or len(words) < 2 or words[0] != "Volume:":
+        return None
+    try:
+        return round(float(words[1]) * 100)
+    except ValueError:
+        return None
+
+
+def audio_set_volume(percent):
+    """Set the output device's volume, 0-100. False if the device could not be reached."""
+    level = max(0, min(100, int(percent)))
+    command = AUDIO_VOLUME_CMD + [f"{level / 100:.2f}"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True,
+                                timeout=AUDIO_CMD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as error:
+        _record(command, error=error)
+        return False
+    _record(command, result=result)
+    return result.returncode == 0
+
+
+def temporary_volume():
+    """{"until": epoch second, "restore": percent} while a temporary volume is set, else
+    None - an unreadable flag included."""
+    try:
+        with open(VOLUME_FLAG_FILE) as flag:
+            until, restore = (int(part) for part in flag.read().split())
+    except (OSError, ValueError):
+        return None
+    return {"until": until, "restore": restore}
+
+
+def set_volume(percent, permanent=False):
+    """Set the volume, for VOLUME_DURATION_MINUTES unless permanent. A second temporary
+    change keeps the volume the first one will go back to, and starts the hour again.
+    Returns False, changing nothing kept, if the device could not be reached."""
+    before = temporary_volume()
+    restore = before["restore"] if before else audio_volume()
+    if not audio_set_volume(percent):
+        return False
+    if permanent or restore is None:
+        clear_volume_flag()
+        return True
+    until = int((datetime.now() + timedelta(minutes=VOLUME_DURATION_MINUTES)).timestamp())
+    os.makedirs(os.path.dirname(VOLUME_FLAG_FILE), exist_ok=True)
+    with open(VOLUME_FLAG_FILE, "w") as flag:
+        flag.write(f"{until} {restore}\n")
+    return True
+
+
+def clear_volume_flag():
+    try:
+        os.remove(VOLUME_FLAG_FILE)
+    except OSError:
+        pass
+
+
+def restore_lapsed_volume(now=None):
+    """Put back the volume a lapsed temporary one replaced. True if it did."""
+    held = temporary_volume()
+    if held is None:
+        if os.path.exists(VOLUME_FLAG_FILE):
+            clear_volume_flag()
+        return False
+    if (now or datetime.now()).timestamp() < held["until"]:
+        return False
+    if not audio_set_volume(held["restore"]):
+        return False
+    clear_volume_flag()
+    return True

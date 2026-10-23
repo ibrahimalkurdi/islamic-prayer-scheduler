@@ -390,5 +390,243 @@ app.removeEventFilter(app.debug_filter)
 for name in os.listdir(DUHA_DIR):
     os.remove(os.path.join(DUHA_DIR, name))
 
+print("8. beside the daily Quran's time: when its ticked files finish")
+import struct
+QURAN_DIR = os.path.join(SCHEDULER, "audio/quran")
+made_quran_dir = not os.path.isdir(QURAN_DIR)
+os.makedirs(QURAN_DIR, exist_ok=True)
+def recitation(name, seconds):
+    """A tiny MP3 whose Xing header names enough 1152-sample frames for `seconds`."""
+    header = b"\xff\xfb\x90\x00"
+    first = header + bytes(32) + b"Xing" + struct.pack(">II", 1, round(seconds * 44100 / 1152))
+    with open(os.path.join(QURAN_DIR, name), "wb") as handle:
+        handle.write(first + bytes(417 - len(first)) + (header + bytes(413)) * 3)
+    w.add_audio_list_item(QURAN_DIR, name)
+recitation("zz-baqara.mp3", 90 * 60)
+recitation("zz-kahf.mp3", 60 * 60)
+with open(os.path.join(QURAN_DIR, "zz-broken.mp3"), "w") as handle:
+    handle.write("not audio")
+w.add_audio_list_item(QURAN_DIR, "zz-broken.mp3")
+plain = lambda: w.quran_end_label.text().replace(gui.LTR_ISOLATE, "").replace(gui.POP_ISOLATE, "")
+tick(w.quran_audio_list, set())
+chk("nothing ticked: it asks for the files", plain(), "اختر السور أدناه لمعرفة وقت الانتهاء")
+w.cron_hour_spin.setValue(7); w.cron_min_spin.setValue(0)
+tick(w.quran_audio_list, {"zz-baqara.mp3", "zz-kahf.mp3"})
+chk("two and a half hours from 7:00 runs until 9:30", plain(), "حتى 9:30 AM · المدة 2:30 ساعة")
+w.cron_hour_spin.setValue(23)
+chk("it follows the time as it changes, past midnight too", plain(),
+    "حتى 1:30 AM · المدة 2:30 ساعة")
+tick(w.quran_audio_list, {"zz-kahf.mp3"})
+chk("and the ticks", plain(), "حتى 12:00 AM · المدة 1:00 ساعة")
+tick(w.quran_audio_list, {"zz-kahf.mp3", "zz-broken.mp3"})
+chk("a file it cannot read is said, not counted", plain(),
+    "حتى 12:00 AM · المدة 1:00 ساعة (تعذّرت قراءة مدة بعض الملفات)")
+chk("a grey box", "background-color: #e4e4e4" in w.quran_end_label.styleSheet(), True)
+from PyQt5.QtWidgets import QFormLayout
+form = next(f for f in w.cron_frame.layout().findChildren(QFormLayout)
+            if f.indexOf(w.cron_min_spin) >= 0)
+chk("in the rows of the time it is chosen beside",
+    [type(form.itemAt(r, form.FieldRole).widget()).__name__ for r in range(form.rowCount())
+     if form.itemAt(r, form.FieldRole) is not None][-3:], ["QSpinBox", "QSpinBox", "QLabel"])
+recitation("zz-short.mp3", 20 * 60)
+tick(w.quran_audio_list, {"zz-short.mp3"})
+w.cron_hour_spin.setValue(6); w.cron_min_spin.setValue(30)
+chk("under an hour, in minutes", plain(), "حتى 6:50 AM · المدة 20 دقيقة")
+chk("and under a minute said as such", gui.duration_text(25), "أقل من دقيقة")
+w.forget_deleted_audio("quran", {"zz-short.mp3"}, False)
+chk("a ticked file deleted is taken out of it at once", plain(),
+    "اختر السور أدناه لمعرفة وقت الانتهاء")
+for name in ("zz-baqara.mp3", "zz-kahf.mp3", "zz-broken.mp3", "zz-short.mp3"):
+    os.remove(os.path.join(QURAN_DIR, name))
+
+print("9. every event shows when it ends, and running into another is warned of")
+ATHKAR_DIR = os.path.join(SCHEDULER, "audio/athkar_elsabah")
+made_athkar_dir = not os.path.isdir(ATHKAR_DIR)
+os.makedirs(ATHKAR_DIR, exist_ok=True)
+os.makedirs(QURAN_DIR, exist_ok=True)
+def timed(directory, name, seconds):
+    header = b"\xff\xfb\x90\x00"
+    first = header + bytes(32) + b"Xing" + struct.pack(">II", 1, round(seconds * 44100 / 1152))
+    with open(os.path.join(directory, name), "wb") as handle:
+        handle.write(first + bytes(417 - len(first)) + (header + bytes(413)) * 3)
+    w.add_audio_list_item(directory, name)
+timed(ATHKAR_DIR, "zz-athkar.mp3", 20 * 60)
+timed(QURAN_DIR, "zz-long.mp3", 3 * 3600)
+warned = []
+gui.arabic_warning = lambda parent, title, text: warned.append(text)
+for chk_box in [*w.prayer_checkboxes.values(), w.tahajjud_chk, w.duha_chk,
+                w.athkar_elmasa_chk, w.friday_quran_chk]:
+    chk_box.setChecked(False)
+end_text = lambda event: w.end_labels[event].text().replace(gui.LTR_ISOLATE, "").replace(
+    gui.POP_ISOLATE, "")
+chk("a box under every event, the athans and Surat Al-Kahf too",
+    sorted(w.end_labels), sorted(["fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha",
+                                  "tahajjud", "duha", "athkar_elsabah", "athkar_elmasa",
+                                  "quran", "friday_quran"]))
+w.resize(800, 480); w.show(); app.processEvents()
+def reads_right_to_left(event):
+    box = w.end_labels[event]
+    title = next(l for l in box.parentWidget().findChildren(type(box)) if l is not box)
+    return title.geometry().x() > box.geometry().x() and box.geometry().right() > box.parentWidget().width() // 3
+chk("each row reads right to left: its title on the right, the box beside it",
+    [e for e in ("fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha", "tahajjud", "duha",
+                 "athkar_elsabah", "athkar_elmasa", "friday_quran") if not reads_right_to_left(e)], [])
+starts = {"fajr": w.prayer_time_labels["fajr"], "duha": w.duha_time_label,
+          "athkar_elmasa": w.athkar_elmasa_time_label}
+chk("each start is in the same grey box as its end, under a title of the same size",
+    [(e, label.styleSheet() == gui.QURAN_END_STYLE,
+      next(l for l in label.parentWidget().findChildren(type(label)) if l is not label).text())
+     for e, label in starts.items()],
+    [(e, True, gui.START_LABEL_TEXT) for e in starts])
+chk("and holds the time alone",
+    w.duha_time_label.text().replace(gui.LTR_ISOLATE, "").replace(gui.POP_ISOLATE, "")[-3:], " AM")
+chk("all of them the same grey box",
+    {label.styleSheet() for label in w.end_labels.values()}, {gui.QURAN_END_STYLE})
+tick(w.prayer_audio_lists["fajr"], set())
+chk("an athan with nothing ticked asks for its files", end_text("fajr"),
+    "اختر الملفات أدناه لمعرفة وقت الانتهاء")
+w.athkar_elsabah_chk.setChecked(True)
+w.select_athkar_elsabah_mode(gui.ATHKAR_ELSABAH_MODE_CLOCK)
+w.athkar_elsabah_hour_spin.setValue(9); w.athkar_elsabah_min_spin.setValue(45)
+tick(w.athkar_elsabah_audio_list, {"zz-athkar.mp3"})
+chk("Athkar Elsabah at 9:45 with twenty minutes of files ends at 10:05",
+    end_text("athkar_elsabah"), "حتى 10:05 AM · المدة 20 دقيقة")
+chk("at a fixed time it has no start line, like the daily Quran",
+    w.athkar_elsabah_time_label.isHidden(), True)
+w.select_athkar_elsabah_mode(gui.ATHKAR_ELSABAH_MODE_AFTER_FAJR)
+chk("worked out from Fajr, it shows when it starts", w.athkar_elsabah_time_label.isHidden(), False)
+w.select_athkar_elsabah_mode(gui.ATHKAR_ELSABAH_MODE_CLOCK)
+fajr_today = w.get_today_prayer_times()["fajr"]
+w.athkar_elsabah_hour_spin.setValue((fajr_today - 60) // 60)
+chk("unless the time had to be moved, which that line says",
+    (w.athkar_elsabah_time_label.isHidden(), "تم تعديله" in w.athkar_elsabah_time_label.text()),
+    (False, True))
+w.athkar_elsabah_hour_spin.setValue(9)
+chk("and gone again once it fits", w.athkar_elsabah_time_label.isHidden(), True)
+DHUHR_DIR = gui.PRAYER_AUDIO_DIRS["dhuhr"]
+os.makedirs(DHUHR_DIR, exist_ok=True)
+timed(DHUHR_DIR, "zz-athan.mp3", 4 * 60)
+tick(w.prayer_audio_lists["dhuhr"], {"zz-athan.mp3"})
+dhuhr = w.get_today_prayer_times()["dhuhr"]
+chk("an athan counts from its own time", end_text("dhuhr"),
+    f"حتى {w.minutes_to_clock(dhuhr + 4)} · المدة 4 دقيقة".replace(gui.LTR_ISOLATE, "")
+    .replace(gui.POP_ISOLATE, ""))
+os.remove(os.path.join(DHUHR_DIR, "zz-athan.mp3"))
+w.forget_deleted_audio("dhuhr", {"zz-athan.mp3"}, False)
+w.cron_chk.setChecked(True)
+w.cron_hour_spin.setValue(6); w.cron_min_spin.setValue(0)
+tick(w.quran_audio_list, {"zz-long.mp3"})
+w.warn_new_overlaps()
+warned.clear()
+chk("three hours of Quran from 6:00 ends at 9:00, clear of the Athkar", end_text("quran"),
+    "حتى 9:00 AM · المدة 3:00 ساعة")
+w.cron_hour_spin.setValue(7)
+chk("a change waits for the finger to stop before warning", w.overlap_timer.isActive(), True)
+w.overlap_timer.stop(); w.warn_new_overlaps()
+chk("moved to 7:00 it runs into them, and says so", len(warned), 1)
+chk("naming both, with when each plays",
+    warned[-1].replace(gui.LTR_ISOLATE, "").replace(gui.POP_ISOLATE, "").splitlines()[1],
+    "• «القرآن الكريم» (7:00 AM – 10:00 AM) مع «أذكار الصباح» (9:45 AM – 10:05 AM)")
+chk("and that the form goes back", gui.OVERLAP_RESTORED_TEXT in warned[-1], True)
+chk("closing it puts the Quran back at 6:00, the last time clear of them",
+    (w.cron_hour_spin.value(), w.cron_min_spin.value(), end_text("quran")),
+    (6, 0, "حتى 9:00 AM · المدة 3:00 ساعة"))
+chk("with nothing left to check", w.overlap_timer.isActive(), False)
+w.athkar_elsabah_hour_spin.setValue(8); w.athkar_elsabah_min_spin.setValue(15)
+w.overlap_timer.stop(); w.warn_new_overlaps()
+chk("Athkar Elsabah moved to 8:15, inside the Quran, is warned of and put back at 9:45",
+    (len(warned), w.athkar_elsabah_hour_spin.value(), w.athkar_elsabah_min_spin.value()), (2, 9, 45))
+w.athkar_elsabah_chk.setChecked(False); w.warn_new_overlaps()
+w.cron_hour_spin.setValue(8); w.warn_new_overlaps()
+chk("a change that meets nothing is kept, and becomes the one to go back to",
+    (len(warned), w.cron_hour_spin.value()), (2, 8))
+w.athkar_elsabah_chk.setChecked(True); w.warn_new_overlaps()
+chk("switching an event on into an overlap is undone too",
+    (len(warned), w.athkar_elsabah_chk.isChecked(), w.cron_hour_spin.value()), (3, False, 8))
+w.cron_hour_spin.setValue(6); w.warn_new_overlaps()
+w.athkar_elsabah_chk.setChecked(True); w.warn_new_overlaps()
+chk("nothing is said when nothing meets", len(warned), 3)
+saves = []
+real_save = w.save_settings
+w.save_settings = lambda *args, **kwargs: saves.append(1) or False
+w.cron_hour_spin.setValue(7)
+w.save_and_apply_settings()
+chk("saving before the warning had its turn still warns, puts it back and saves nothing",
+    (len(warned), w.cron_hour_spin.value(), saves, w.is_processing), (4, 6, [], False))
+w.save_settings = real_save
+from PyQt5.QtTest import QTest
+hour_edit = w.cron_hour_spin.lineEdit()
+QTest.mouseClick(hour_edit, Qt.LeftButton, pos=hour_edit.rect().center())
+pad_key = lambda text: next(b for b in w.number_pad.findChildren(gui.QPushButton)
+                            if b.text() == text).click()
+pad_key("7"); pad_key("موافق")
+chk("OK on the pad checks at once: the warning comes while the pad is still open",
+    (len(warned), w.number_pad.isVisible()), (5, True))
+chk("and the pad stays, showing the time put back, for another try",
+    (w.cron_hour_spin.value(), w.number_pad.display.text()), (6, "6"))
+pad_key("5"); pad_key("موافق")
+chk("a time that meets nothing closes it", (len(warned), w.number_pad.isVisible(),
+                                            w.cron_hour_spin.value()), (5, False, 5))
+w.apply_config_to_ui()
+chk("reloading the saved settings does not warn about them", (w.overlap_timer.isActive(),
+                                                                len(warned)), (False, 5))
+for directory, name in ((ATHKAR_DIR, "zz-athkar.mp3"), (QURAN_DIR, "zz-long.mp3")):
+    os.remove(os.path.join(directory, name))
+if made_athkar_dir:
+    os.rmdir(ATHKAR_DIR)
+if made_quran_dir:
+    os.rmdir(QURAN_DIR)
+
+print("10. a tap on a number field opens a pad to type it, inside the window")
+from PyQt5.QtTest import QTest
+from PyQt5.QtCore import QPoint
+w.cron_chk.setChecked(True)
+w.cron_hour_spin.setValue(7)
+edit = w.cron_hour_spin.lineEdit()
+QTest.mouseClick(edit, Qt.LeftButton, pos=edit.rect().center())
+pad = w.number_pad
+chk("it opens over the window, not as a window of its own",
+    (pad.isVisible(), pad.parentWidget() is w, pad.isWindow()), (True, True, False))
+chk("titled with the field's label", pad.title.text(), "الساعة")
+ok_btn, cancel_btn = pad.ok_btn, pad.cancel_btn
+digit = lambda t: next(b for b in pad.findChildren(gui.QPushButton) if b.text() == t)
+chk("OK on the right as Arabic reads, the digits laid out as on a phone",
+    (ok_btn.mapTo(pad, ok_btn.rect().center()).x() > cancel_btn.mapTo(pad, cancel_btn.rect().center()).x(),
+     digit("1").mapTo(pad, QPoint(0, 0)).x() < digit("3").mapTo(pad, QPoint(0, 0)).x()), (True, True))
+chk("showing the value it has", pad.display.text(), "7")
+chk("and the range it takes", pad.hint.text().replace(gui.LTR_ISOLATE, "").replace(gui.POP_ISOLATE, ""),
+    "من 0 إلى 23")
+press = lambda text: next(b for b in pad.findChildren(gui.QPushButton) if b.text() == text).click()
+press("1"); press("8")
+chk("the first digit replaces it, the next add to it", pad.display.text(), "18")
+press("5")
+chk("no more digits than the largest value has", pad.display.text(), "18")
+press("موافق")
+chk("OK sets the field and closes", (w.cron_hour_spin.value(), pad.isVisible()), (18, False))
+QTest.mouseClick(edit, Qt.LeftButton, pos=edit.rect().center())
+press("⌫"); press("⌫"); press("9"); press("9")
+press("موافق")
+chk("a value out of range is not taken, and the range turns red",
+    (w.cron_hour_spin.value(), pad.isVisible(), "#c62828" in pad.hint.styleSheet()), (18, True, True))
+press("إلغاء")
+chk("cancel leaves it as it was", (w.cron_hour_spin.value(), pad.isVisible()), (18, False))
+QTest.mousePress(edit, Qt.LeftButton, pos=QPoint(2, 2))
+QTest.mouseRelease(edit, Qt.LeftButton, pos=QPoint(2, 60))
+chk("a swipe that starts on a field does not open it", pad.isVisible(), False)
+w.cron_chk.setChecked(False)
+QTest.mouseClick(edit, Qt.LeftButton, pos=edit.rect().center())
+chk("nor does a tap on a field that is switched off", pad.isVisible(), False)
+w.duha_chk.setChecked(True)
+duha_edit = w.duha_spin.lineEdit()
+QTest.mouseClick(duha_edit, Qt.LeftButton, pos=duha_edit.rect().center())
+warned.clear()
+press("5")
+press("موافق")
+chk("a typed value is checked like one stepped to: Duha 5 minutes before Dhuhr is refused",
+    (len(warned), w.duha_spin.value() != 5), (1, True))
+chk("and the pad stays open on the value kept",
+    (pad.isVisible(), pad.display.text()), (True, str(w.duha_spin.value())))
+press("إلغاء")
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

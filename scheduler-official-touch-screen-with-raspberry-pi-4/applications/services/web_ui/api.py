@@ -15,7 +15,7 @@ import importlib.util
 import os
 from datetime import date as date_cls, datetime, time, timedelta
 
-from shared import (audio_lists, audio_upload, brightness, os_timezone, prayer_logic,
+from shared import (audio_duration, audio_lists, audio_upload, brightness, os_timezone, prayer_logic,
                     prayer_source, settings_defaults, settings_rules)
 
 # The colours the touch screen paints, by the names period_state returns. Sent to the
@@ -215,7 +215,6 @@ AUDIO_KEYS = {
     "maghrib_audio_checked": "maghrib",
     "isha_audio_checked": "isha",
 }
-
 FRIDAY_QURAN_POSITIONS = ("before", "after")
 
 
@@ -259,6 +258,9 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
             "checked": sorted(audio_lists.checked_from_config(section.get(key, ""))),
             "folder_missing": not os.path.isdir(directory),
         }
+        audio[key]["seconds"] = {
+            name: audio_duration.mp3_seconds(os.path.join(directory, name))
+            for name in audio[key]["available"]}
 
     return {
         "values": values,
@@ -272,7 +274,18 @@ def settings_payload(ini_path, scheduler_dir, desktop_dir):
         "os_timezone": os_timezone.current(),
         "brightness": brightness.status(scheduler_dir),
         "times": today_times(scheduler_dir, desktop_dir),
+        "friday_times": today_times(scheduler_dir, desktop_dir, next_friday()),
     }
+
+
+FRIDAY_WEEKDAY = 4
+
+
+def next_friday():
+    """Today when today is Friday, otherwise the Friday coming: the day Surat Al-Kahf
+    next plays."""
+    today = datetime.now().date()
+    return today + timedelta(days=(FRIDAY_WEEKDAY - today.weekday()) % 7)
 
 
 # The Arabic country and city names for the device's time zone, from the same generated
@@ -398,14 +411,14 @@ def csv_sources(scheduler_dir, desktop_dir):
             "candidates": found}
 
 
-def today_times(scheduler_dir, desktop_dir):
+def today_times(scheduler_dir, desktop_dir, date=None):
     """Today's Fajr/Sunrise/Dhuhr in minutes, which the two rules are checked against.
 
     None when the CSV cannot be read - the caller reports that rather than validating
     against numbers it invented."""
     current = os.path.join(desktop_dir, "إدخال-مواقيت-الصلاة-للمستخدم.csv")
     try:
-        return settings_rules.prayer_minutes_for(current, datetime.now().date())
+        return settings_rules.prayer_minutes_for(current, date or datetime.now().date())
     except (OSError, ValueError, KeyError):
         return None
 

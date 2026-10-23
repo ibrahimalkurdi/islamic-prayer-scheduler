@@ -28,6 +28,8 @@ LOGROTATE_SRC_NAME="config/logrotate/scheduler"
 LOGROTATE_INSTALLED="/etc/logrotate.d/scheduler"
 ZONEINFO_DIR="/usr/share/zoneinfo"
 TIMEZONE_FILE="/etc/timezone"
+SYSCTL_DIR="/etc/sysctl.d"
+IPV6_OFF_NAME="config/sysctl/90-disable-ipv6.conf"
 
 # id -u rather than $EUID, because $EUID is readonly in bash and a test cannot stand in
 # for it - and a root-only script with no way to exercise it is how the last one shipped
@@ -255,6 +257,51 @@ if [[ -f "$LOGROTATE_SRC" ]]; then
                 [[ $CHECK_ONLY -eq 0 ]] && chown "$device_user":"$device_user" "$log"
             fi
         done
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# IPv6 off
+# ---------------------------------------------------------------------------
+# The reasons are in the sysctl file itself. The sysctl alone is not enough:
+# NetworkManager turns IPv6 back on for each interface it brings up whose profile says
+# ipv6.method auto, and it has no global default to say otherwise. So every wired and
+# wireless profile is set to disabled, every run - a network added on the screen since
+# the last one is caught on the next nightly check - and a connection that is up has the
+# change reapplied in place, without dropping it. The loopback profile is the sysctl's.
+IPV6_OFF_SRC="$SCHEDULER_DIR/$IPV6_OFF_NAME"
+if [[ -f "$IPV6_OFF_SRC" ]]; then
+    ipv6_changed=0
+    ipv6_installed="$SYSCTL_DIR/$(basename "$IPV6_OFF_SRC")"
+    if differs "$IPV6_OFF_SRC" "$ipv6_installed"; then
+        note "installing $ipv6_installed"
+        if [[ $CHECK_ONLY -eq 0 ]]; then
+            install -m 0644 -o root -g root "$IPV6_OFF_SRC" "$ipv6_installed" \
+                && ipv6_changed=1 \
+                || echo "WARNING: could not install $ipv6_installed" >&2
+        fi
+    fi
+    if command -v nmcli > /dev/null 2>&1; then
+        while IFS=: read -r uuid type device; do
+            case "$type" in 802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
+            [[ "$(nmcli -g ipv6.method connection show "$uuid" 2> /dev/null)" == "disabled" ]] \
+                && continue
+            note "switching IPv6 off for network $uuid"
+            [[ $CHECK_ONLY -eq 1 ]] && continue
+            if ! nmcli connection modify "$uuid" ipv6.method disabled; then
+                echo "WARNING: could not switch IPv6 off for network $uuid" >&2
+                continue
+            fi
+            ipv6_changed=1
+            if [[ -n "$device" ]]; then
+                nmcli device reapply "$device" > /dev/null \
+                    || echo "WARNING: IPv6 stays on for $device until it reconnects" >&2
+            fi
+        done < <(nmcli -t -f UUID,TYPE,DEVICE connection show 2> /dev/null)
+    fi
+    if [[ $ipv6_changed -eq 1 ]]; then
+        sysctl -q -p "$ipv6_installed" > /dev/null \
+            || echo "WARNING: IPv6 stays on until the next boot" >&2
     fi
 fi
 

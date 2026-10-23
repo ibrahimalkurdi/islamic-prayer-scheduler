@@ -269,3 +269,126 @@ def year_moves_message(athkar_moves, friday_moves, clock):
     if not parts:
         return ""
     return "\n\n".join(parts) + "\n\nهل تريد ذلك؟"
+
+
+# ---------------------------------------------------------------------------
+# When each event plays, and which of them run into each other
+# ---------------------------------------------------------------------------
+# Every event plays its ticked files one after another from its start. play_audio.sh
+# lets one player run at a time: an athan stops whatever is playing, and anything else
+# that starts while something plays is not played at all. Settings warns when a change
+# makes two of them meet.
+
+DAY_MINUTES = 24 * 60
+ATHAN_EVENTS = ("fajr", "dhuhr", "asr", "maghrib", "isha")
+EVENT_ENABLE_KEYS = {
+    "tahajjud": "enable_tahajjud_prayer",
+    "fajr": "enable_prayer_fajr",
+    "sunrise": "enable_prayer_sunrise",
+    "athkar_elsabah": "enable_athkar_elsabah",
+    "duha": "enable_duha_prayer",
+    "dhuhr": "enable_prayer_dhuhr",
+    "asr": "enable_prayer_asr",
+    "maghrib": "enable_prayer_maghrib",
+    "athkar_elmasa": "enable_athkar_elmasa",
+    "isha": "enable_prayer_isha",
+    "quran": "enable_listen_to_quran",
+    "friday_quran": "enable_friday_quran",
+}
+EVENT_NAMES = {
+    "tahajjud": "صلاة التهجد",
+    "fajr": "أذان الفجر",
+    "sunrise": "الشروق",
+    "athkar_elsabah": "أذكار الصباح",
+    "duha": "صلاة الضحى",
+    "dhuhr": "أذان الظهر",
+    "asr": "أذان العصر",
+    "maghrib": "أذان المغرب",
+    "athkar_elmasa": "أذكار المساء",
+    "isha": "أذان العشاء",
+    "quran": "القرآن الكريم",
+    "friday_quran": "سورة الكهف يوم الجمعة",
+}
+
+
+def _int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clock_minutes(value):
+    try:
+        hour, minute = str(value).split(":")
+        return int(hour) * 60 + int(minute)
+    except ValueError:
+        return None
+
+
+def event_starts(values, times, friday=False):
+    """When each switched-on event starts on a day with these prayer times, in minutes
+    since midnight, placed the way the scheduler places it. Surat Al-Kahf is included
+    only when `friday`."""
+    fajr, dhuhr = times["fajr"], times["dhuhr"]
+    starts = {prayer: times[prayer]
+              for prayer in ("fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha")}
+    starts["tahajjud"] = fajr - _int(values.get("tahajjud_time"))
+    starts["duha"] = dhuhr - _int(values.get("duha_time"))
+    clock = _clock_minutes(values.get("athkar_elsabah_clock"))
+    if athkar_elsabah_mode(values.get("athkar_elsabah_mode")) == ATHKAR_ELSABAH_MODE_CLOCK \
+            and clock is not None:
+        starts["athkar_elsabah"] = min(max(clock, fajr + 1), dhuhr - 1)
+    else:
+        starts["athkar_elsabah"] = fajr + _int(values.get("athkar_elsabah_time"))
+    starts["athkar_elmasa"] = times["maghrib"] + _int(values.get("athkar_elmasa_time"))
+    quran = _clock_minutes(values.get("listen_to_quran"))
+    if quran is not None:
+        starts["quran"] = quran
+    if friday:
+        offset = _int(values.get("friday_quran_time"))
+        wanted = dhuhr - offset if values.get("friday_quran_position") == "before" \
+            else dhuhr + offset
+        starts["friday_quran"] = min(max(wanted, times["sunrise"] + 1), times["asr"] - 1)
+    return {event: start % DAY_MINUTES for event, start in starts.items()
+            if values.get(EVENT_ENABLE_KEYS[event])}
+
+
+def playing_windows(starts, seconds):
+    """{event: (start, end)} in seconds since midnight. An event whose files have no known
+    length still holds its starting second."""
+    return {event: (start * 60, start * 60 + max(round(seconds.get(event) or 0), 1))
+            for event, start in starts.items()}
+
+
+def overlapping_pairs(windows):
+    """Every pair of events that play at the same moment, also across midnight, as
+    sorted (event, event) tuples."""
+    events = sorted(windows)
+    pairs = set()
+    for i, first in enumerate(events):
+        a_start, a_end = windows[first]
+        for second in events[i + 1:]:
+            b_start, b_end = windows[second]
+            for shift in (-DAY_MINUTES * 60, 0, DAY_MINUTES * 60):
+                if a_start < b_end + shift and b_start + shift < a_end:
+                    pairs.add((first, second))
+                    break
+    return pairs
+
+
+def overlap_message(pairs, windows, clock):
+    """The warning for these pairs. `clock` renders minutes since midnight the way the
+    caller shows times."""
+    def span(event):
+        start, end = windows[event]
+        return f"{clock(start // 60)} – {clock(round(end / 60))}"
+
+    ordered = sorted(tuple(sorted(pair, key=lambda event: windows[event][0])) for pair in pairs)
+    lines = []
+    for first, second in sorted(ordered, key=lambda pair: windows[pair[0]][0]):
+        lines.append(f"• «{EVENT_NAMES[first]}» ({span(first)}) مع "
+                     f"«{EVENT_NAMES[second]}» ({span(second)})")
+    return ("تتداخل أوقات التشغيل التالية:\n" + "\n".join(lines) +
+            "\n\nلا يُشغَّل إلا ملف واحد في كل مرة: الأذان يوقف ما قبله، "
+            "وغيره لا يُشغَّل إذا بدأ أثناء تشغيل آخر.")

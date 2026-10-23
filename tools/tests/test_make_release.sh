@@ -178,7 +178,7 @@ echo "6. everything the device reads from its own tree is a path a release may r
 out="$(build 2.1.5 < /dev/null)"
 MANIFEST="$BUILD/dist/version.json"
 for path in "config/packages.txt" "config/logrotate/" "config/systemd/" "config/scripts/" \
-            "config/wallpaper/" "USER_MANUAL_AR.pdf"; do
+            "config/sysctl/" "config/wallpaper/" "USER_MANUAL_AR.pdf"; do
     if python3 -c "import json,sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1]))['include'] else 1)" \
             "$MANIFEST" "$path"; then
         echo "  ✓ $path is a path the updater may replace"

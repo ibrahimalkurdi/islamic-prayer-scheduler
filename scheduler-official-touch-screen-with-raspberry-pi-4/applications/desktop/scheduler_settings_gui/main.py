@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAbstractButton,
     QListView,
+    QGridLayout,
 )
 from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, QObject, QEvent, QPoint, QRect
 from PyQt5.QtGui import QFont, QFontMetrics, QIcon
@@ -86,6 +87,7 @@ SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from shared import audio_lists
+from shared import audio_duration
 from shared import audio_upload
 from shared import brightness
 from shared import internet_status
@@ -283,6 +285,25 @@ def read_default_settings():
 # because the athan scheduler parses them.
 MERIDIEM_AM = "AM"
 MERIDIEM_PM = "PM"
+# Under each event's time: when the files ticked for it finish, played one after another
+# from that time.
+START_LABEL_TEXT = "يبدأ التشغيل:"
+END_LABEL_TEXT = "ينتهي التشغيل:"
+TIME_ROW_FONT = "15pt"
+OVERLAP_CHECK_MS = 1500
+TAP_SLOP = 20
+OVERLAP_RESTORED_TEXT = "أُعيدت الإعدادات إلى آخر أوقات لا تتداخل."
+QURAN_END_STYLE = ("background-color: #e4e4e4; color: #333; border: 1px solid #c8c8c8;"
+                   f" border-radius: 6px; padding: 4px 10px; font-size: {TIME_ROW_FONT};")
+
+
+def duration_text(seconds):
+    minutes = round(seconds / 60)
+    if minutes < 1:
+        return "أقل من دقيقة"
+    if minutes < 60:
+        return f"{minutes} دقيقة"
+    return f"{LTR_ISOLATE}{minutes // 60}:{minutes % 60:02d}{POP_ISOLATE} ساعة"
 # Every label here is an Arabic sentence with a time inside it. Left to itself the bidi
 # algorithm splits "4:35 AM" in two - the digits are weak, AM is strong left-to-right -
 # and lays the halves out right to left, so the screen reads "AM 4:35". These wrap the
@@ -310,13 +331,11 @@ def event_labels(arabic_name, wording):
         return {
             "section": f"إعدادات صلاة {arabic_name}",
             "enable": f"تفعيل أذان {arabic_name}",
-            "time": f"وقت صلاة {arabic_name}",
             "files": f"ملفات أذان {arabic_name}:",
         }
     return {
         "section": f"إعدادات تنبيه {arabic_name}",
         "enable": f"تفعيل تنبيه {arabic_name}",
-        "time": f"وقت {arabic_name}",
         "files": f"ملفات تنبيه {arabic_name}:",
     }
 
@@ -649,6 +668,150 @@ class RightAlignedComboBox(TouchComboBox):
 COUNTDOWN_APP = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "prayer_times_gui", "main.py")
+
+
+class NumberPad(QWidget):
+    """Digits for a number field, over the window. The screen's own keyboard serves
+    Wayland apps only and this one is drawn through X, so a tap in a field otherwise
+    selects the number and offers nothing to type with. Inside the window, not one of its
+    own, for the reason TouchComboBox gives."""
+
+    KEY_STYLE = ("QPushButton { background: #f3f4f6; color: #111; border: 1px solid #bbb;"
+                 " border-radius: 8px; font-size: 24px; }"
+                 " QPushButton:pressed { background: #d1d5db; }")
+    OK_STYLE = ("QPushButton { background: #4CAF50; color: white; border: none;"
+                " border-radius: 8px; font-size: 20px; }"
+                " QPushButton:pressed { background: #3e8e41; }")
+    CANCEL_STYLE = ("QPushButton { background: #9e9e9e; color: white; border: none;"
+                    " border-radius: 8px; font-size: 20px; }"
+                    " QPushButton:pressed { background: #757575; }")
+
+    def __init__(self, parent, verify=lambda: True):
+        super().__init__(parent)
+        self.verify = verify
+        self.spin = None
+        self.typed = ""
+        self.fresh = True
+        self.setObjectName("numberPadShade")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("#numberPadShade { background: rgba(0, 0, 0, 120); }")
+        self.card = QFrame(self)
+        self.card.setObjectName("numberPadCard")
+        self.card.setStyleSheet("#numberPadCard { background: white; border-radius: 12px; }")
+        self.card.setFixedWidth(380)
+        self.card.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(self.card)
+        layout.setContentsMargins(16, 10, 16, 12)
+        layout.setSpacing(6)
+        self.title = QLabel()
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setLayoutDirection(Qt.RightToLeft)
+        self.title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.display = QLabel()
+        self.display.setAlignment(Qt.AlignCenter)
+        self.display.setFixedHeight(46)
+        self.display.setStyleSheet("font-size: 30px; border: 1px solid #999; border-radius: 6px;"
+                                   " background: #fafafa;")
+        self.hint = QLabel()
+        self.hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title)
+        layout.addWidget(self.display)
+        layout.addWidget(self.hint)
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for index, digit in enumerate("123456789"):
+            grid.addWidget(self.key(digit, lambda _=False, d=digit: self.type(d)),
+                           index // 3, index % 3)
+        grid.addWidget(self.key("⌫", self.erase), 3, 0)
+        grid.addWidget(self.key("0", lambda: self.type("0")), 3, 1)
+        grid.addWidget(self.key("C", self.clear_typed), 3, 2)
+        keys = QWidget()
+        keys.setLayoutDirection(Qt.LeftToRight)
+        keys.setLayout(grid)
+        layout.addWidget(keys)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.ok_btn = self.key("موافق", self.accept, self.OK_STYLE)
+        self.cancel_btn = self.key("إلغاء", self.hide, self.CANCEL_STYLE)
+        buttons.addWidget(self.ok_btn)
+        buttons.addWidget(self.cancel_btn)
+        layout.addLayout(buttons)
+        self.hide()
+
+    def key(self, text, handler, style=None):
+        button = QPushButton(text)
+        button.setFocusPolicy(Qt.NoFocus)
+        button.setFixedHeight(50)
+        button.setStyleSheet(style or self.KEY_STYLE)
+        button.clicked.connect(handler)
+        return button
+
+    def open(self, spin, title):
+        self.spin = spin
+        self.typed = str(spin.value())
+        self.fresh = True
+        self.title.setText(title)
+        self.show_hint(False)
+        self.paint()
+        self.setGeometry(self.parentWidget().rect())
+        self.card.adjustSize()
+        self.card.move((self.width() - self.card.width()) // 2,
+                       max(0, (self.height() - self.card.height()) // 2))
+        self.show()
+        self.raise_()
+
+    def show_hint(self, wrong):
+        self.hint.setText(f"من {LTR_ISOLATE}{self.spin.minimum()}{POP_ISOLATE} "
+                          f"إلى {LTR_ISOLATE}{self.spin.maximum()}{POP_ISOLATE}")
+        self.hint.setStyleSheet("font-size: 15px; color: %s;" % ("#c62828" if wrong else "#555"))
+
+    def paint(self):
+        self.display.setText(self.typed)
+
+    def type(self, digit):
+        if self.fresh:
+            self.typed = ""
+            self.fresh = False
+        if len(self.typed) < len(str(self.spin.maximum())):
+            self.typed = (self.typed + digit).lstrip("0") or "0"
+        self.show_hint(False)
+        self.paint()
+
+    def erase(self):
+        self.fresh = False
+        self.typed = self.typed[:-1]
+        self.paint()
+
+    def clear_typed(self):
+        self.fresh = False
+        self.typed = ""
+        self.paint()
+
+    def accept(self):
+        if not self.typed or not self.spin.minimum() <= int(self.typed) <= self.spin.maximum():
+            self.show_hint(True)
+            return
+        """Closes only once the value has been checked and kept. One that is refused - a
+        Duha time too near Dhuhr, a time that runs into another event - is put back by
+        the warning, and the pad stays open on the value kept, for another try."""
+        spin = self.spin
+        wanted = int(self.typed)
+        spin.setValue(wanted)
+        spin.lineEdit().deselect()
+        spin.editingFinished.emit()
+        if self.verify() and spin.value() == wanted:
+            self.hide()
+            return
+        self.typed = str(spin.value())
+        self.fresh = True
+        self.show_hint(False)
+        self.paint()
+        self.raise_()
+
+    def mousePressEvent(self, event):
+        if not self.card.geometry().contains(event.pos()):
+            self.hide()
+        event.accept()
 
 
 def countdown_running():
@@ -1056,6 +1219,8 @@ class ControlApp(QMainWindow):
 
         self.prayer_checkboxes = {}
         self.prayer_audio_lists = {}
+        self.end_labels = {}
+        self.audio_seconds = {}
 
         for key, arabic_name, wording in PRAYER_TIMES:
             cfg_key = f"{PRAYER_PREFIX}{key}"
@@ -1081,13 +1246,12 @@ class ControlApp(QMainWindow):
             box_layout.addWidget(chk)
             self.prayer_checkboxes[cfg_key] = chk
 
-            lbl_time = QLabel(f'{labels["time"]}: --')
-            lbl_time.setStyleSheet("font-size: 15px; color: black")
-            box_layout.addWidget(lbl_time)
+            lbl_time = self.time_row(box_layout, START_LABEL_TEXT)
 
             if not hasattr(self, "prayer_time_labels"):
                 self.prayer_time_labels = {}
             self.prayer_time_labels[key] = lbl_time
+            self.end_labels[key] = self.time_row(box_layout, END_LABEL_TEXT)
 
             lbl = QLabel(labels["files"])
             lbl.setStyleSheet("font-size: 20px; font-weight: bold;")
@@ -1272,6 +1436,11 @@ class ControlApp(QMainWindow):
 
         self.add_spinbox_row(cron_form, "الساعة", self.cron_hour_spin)
         self.add_spinbox_row(cron_form, "الدقيقة", self.cron_min_spin)
+        self.quran_end_label = QLabel()
+        self.quran_end_label.setStyleSheet(QURAN_END_STYLE)
+        self.quran_end_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.add_spinbox_row(cron_form, END_LABEL_TEXT, self.quran_end_label)
+        self.end_labels["quran"] = self.quran_end_label
 
         cron_layout.addLayout(cron_form)
 
@@ -1482,8 +1651,47 @@ class ControlApp(QMainWindow):
         self.friday_quran_spin.valueChanged.connect(self.update_all_time_labels)
         self.friday_quran_position_combo.currentIndexChanged.connect(self.update_all_time_labels)
 
+        self.event_audio = {key: (self.prayer_audio_lists[key], PRAYER_AUDIO_DIRS[key])
+                            for key, _name, _wording in PRAYER_TIMES}
+        self.event_audio.update({
+            "tahajjud": (self.tahajjud_audio_list, TAHAJJUD_AUDIO_DIR),
+            "duha": (self.duha_audio_list, DUHA_AUDIO_DIR),
+            "athkar_elsabah": (self.athkar_elsabah_audio_list, ATHKAR_ELSABAH_AUDIO_DIR),
+            "athkar_elmasa": (self.athkar_elmasa_audio_list, ATHKAR_ELMASA_AUDIO_DIR),
+            "quran": (self.quran_audio_list, QURAN_AUDIO_DIR),
+            "friday_quran": (self.friday_quran_audio_list, FRIDAY_QURAN_AUDIO_DIR),
+        })
+        self.overlap_timer = QTimer(self)
+        self.overlap_timer.setSingleShot(True)
+        self.overlap_timer.setInterval(OVERLAP_CHECK_MS)
+        self.overlap_timer.timeout.connect(self.warn_new_overlaps)
+        timing = [self.cron_hour_spin, self.cron_min_spin, self.tahajjud_spin, self.duha_spin,
+                  self.athkar_elsabah_spin, self.athkar_elsabah_hour_spin,
+                  self.athkar_elsabah_min_spin, self.athkar_elmasa_spin, self.friday_quran_spin]
+        for spin in timing:
+            spin.valueChanged.connect(self.timing_changed)
+        for combo in (self.athkar_elsabah_mode_combo, self.friday_quran_position_combo):
+            combo.currentIndexChanged.connect(self.timing_changed)
+        for chk in [*self.prayer_checkboxes.values(), self.tahajjud_chk, self.duha_chk,
+                    self.athkar_elsabah_chk, self.athkar_elmasa_chk, self.cron_chk,
+                    self.friday_quran_chk]:
+            chk.stateChanged.connect(self.timing_changed)
+        for audio_list, _directory in self.event_audio.values():
+            audio_list.itemChanged.connect(self.timing_changed)
+        self.timing_spins = timing
+        self.timing_combos = [self.athkar_elsabah_mode_combo, self.friday_quran_position_combo]
+        self.timing_checks = [*self.prayer_checkboxes.values(), self.tahajjud_chk, self.duha_chk,
+                              self.athkar_elsabah_chk, self.athkar_elmasa_chk, self.cron_chk,
+                              self.friday_quran_chk]
+        self.restoring_timing = False
+
         # --- Initial calculation ---
         self.update_all_time_labels()
+        self.known_overlaps = self.current_overlaps()
+        self.good_timing = self.timing_snapshot()
+        self.number_pad = NumberPad(self, self.verify_timing)
+        for spin in self.findChildren(QSpinBox):
+            spin.lineEdit().installEventFilter(self)
         if DEBUG_LOG is not None:
             self.watch_for_debug()
 
@@ -1673,31 +1881,31 @@ class ControlApp(QMainWindow):
         try:
             times = self.get_today_prayer_times()  # get Fajr/Dhuhr/...
             # --- Update prayer labels ---
-            for key, arabic_name, wording in PRAYER_TIMES:
-                labels = event_labels(arabic_name, wording)
-                self.prayer_time_labels[key].setText(
-                    f'{labels["time"]}: {self.minutes_to_clock(times[key])}'
-                )
+            for key, _name, _wording in PRAYER_TIMES:
+                self.prayer_time_labels[key].setText(self.minutes_to_clock(times[key]))
 
             # --- Update Duha/Tahajjud/Athkar ---
             sunrise, dhuhr = self.get_today_sunrise_dhuhr()
             # Duha
             duha_time = dhuhr - self.duha_spin.value()
-            self.duha_time_label.setText(f"وقت صلاة الضحى: {self.minutes_to_clock(duha_time)}")
+            self.duha_time_label.setText(self.minutes_to_clock(duha_time))
             # Tahajjud
             fajr = times["fajr"]
             tahajjud_time = fajr - self.tahajjud_spin.value()
-            self.tahajjud_time_label.setText(f"وقت صلاة التهجد: {self.minutes_to_clock(tahajjud_time)}")
+            self.tahajjud_time_label.setText(self.minutes_to_clock(tahajjud_time))
             # Athkar Sabh
             athkar_sabah_time, moved = self.athkar_elsabah_minutes_today(times)
-            athkar_sabah_text = f"وقت أذكار الصباح: {self.minutes_to_clock(athkar_sabah_time)}"
+            athkar_sabah_text = self.minutes_to_clock(athkar_sabah_time)
             if moved:
                 athkar_sabah_text += " (تم تعديله ليقع بين الفجر والظهر)"
             self.athkar_elsabah_time_label.setText(athkar_sabah_text)
+            fixed = self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK
+            self.athkar_elsabah_time_label.setVisible(not fixed or moved)
+            self.athkar_elsabah_time_label.parentWidget().setVisible(not fixed or moved)
             # Athkar Masa
             maghrib = times["maghrib"]
             athkar_masa_time = maghrib + self.athkar_elmasa_spin.value()
-            self.athkar_elmasa_time_label.setText(f"وقت أذكار المساء: {self.minutes_to_clock(athkar_masa_time)}")
+            self.athkar_elmasa_time_label.setText(self.minutes_to_clock(athkar_masa_time))
 
             # Surat Al-Kahf. Read against the coming Friday's own times rather than today's,
             # because that is the day it plays on - and in its own try, so a source CSV
@@ -1710,6 +1918,7 @@ class ControlApp(QMainWindow):
 
         except Exception as e:
             print("Failed to update time labels:", e)
+        self.paint_end_times()
             # Optional: clear labels if error
 
 
@@ -1751,8 +1960,8 @@ class ControlApp(QMainWindow):
             else dhuhr + offset
         when = self.clamp_friday_quran(wanted, row)
 
-        text = (f"وقت قراءة سورة الكهف يوم الجمعة {friday.day:02d}/{friday.month:02d}: "
-                f"{self.minutes_to_clock(when)}")
+        text = (f"{self.minutes_to_clock(when)} "
+                f"(الجمعة {LTR_ISOLATE}{friday.day:02d}/{friday.month:02d}{POP_ISOLATE})")
         if when != wanted:
             text += " (تم تعديله ليقع بين الشروق والعصر)"
         return text
@@ -2570,6 +2779,191 @@ class ControlApp(QMainWindow):
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         return frame
 
+    def time_row(self, layout, text):
+        holder = QWidget()
+        holder.setLayoutDirection(Qt.RightToLeft)
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(text)
+        title.setStyleSheet(f"font-size: {TIME_ROW_FONT};")
+        box = QLabel("--")
+        box.setStyleSheet(QURAN_END_STYLE)
+        box.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        row.addWidget(title)
+        row.addWidget(box)
+        row.addStretch()
+        layout.addWidget(holder)
+        return box
+
+    def timing_values(self):
+        """The timing settings as the form has them now, under their config keys."""
+        values = {settings_rules.EVENT_ENABLE_KEYS[key]: chk.isChecked()
+                  for key, chk in ((key.removeprefix(PRAYER_PREFIX), chk)
+                                   for key, chk in self.prayer_checkboxes.items())}
+        values.update({
+            TAHAJJUD_ENABLE: self.tahajjud_chk.isChecked(),
+            DUHA_ENABLE: self.duha_chk.isChecked(),
+            ATHKAR_ELSABAH_ENABLE: self.athkar_elsabah_chk.isChecked(),
+            ATHKAR_ELMASA_ENABLE: self.athkar_elmasa_chk.isChecked(),
+            QURAN_ENABLE: self.cron_chk.isChecked(),
+            FRIDAY_QURAN_ENABLE: self.friday_quran_chk.isChecked(),
+            TAHAJJUD_TIME: self.tahajjud_spin.value(),
+            DUHA_TIME: self.duha_spin.value(),
+            ATHKAR_ELSABAH_MODE: self.selected_athkar_elsabah_mode(),
+            ATHKAR_ELSABAH_CLOCK: f"{self.athkar_elsabah_hour_spin.value():02d}:"
+                                  f"{self.athkar_elsabah_min_spin.value():02d}",
+            ATHKAR_ELSABAH_TIME: self.athkar_elsabah_spin.value(),
+            ATHKAR_ELMASA_TIME: self.athkar_elmasa_spin.value(),
+            "listen_to_quran": f"{self.cron_hour_spin.value():02d}:"
+                               f"{self.cron_min_spin.value():02d}",
+            FRIDAY_QURAN_POSITION: self.selected_friday_quran_position(),
+            FRIDAY_QURAN_TIME: self.friday_quran_spin.value(),
+        })
+        return values
+
+    def ticked_audio(self, event):
+        audio_list, _directory = self.event_audio[event]
+        return [audio_list.item(i).text() for i in range(audio_list.count())
+                if audio_list.item(i).checkState() == Qt.Checked]
+
+    def event_seconds(self):
+        """{event: seconds its ticked files play}, and the events with a file whose
+        length could not be read."""
+        seconds, unread = {}, set()
+        for event, (_list, directory) in self.event_audio.items():
+            lengths = [self.file_seconds(directory, name) for name in self.ticked_audio(event)]
+            seconds[event] = sum(length or 0 for length in lengths)
+            if None in lengths:
+                unread.add(event)
+        return seconds, unread
+
+    def day_windows(self, values, seconds, friday):
+        times = (settings_rules.prayer_minutes_for(self.effective_prayer_csv(),
+                                                   self.next_friday())
+                 if friday else self.get_today_prayer_times())
+        starts = settings_rules.event_starts(values, times, friday=friday)
+        return settings_rules.playing_windows(starts, seconds)
+
+    def timing_changed(self, *_):
+        self.paint_end_times()
+        if not self.restoring_timing:
+            self.overlap_timer.start()
+
+    def verify_timing(self):
+        """The overlap check at once, rather than when the typing has settled. False when
+        it warned and put the form back."""
+        self.overlap_timer.stop()
+        return not self.warn_new_overlaps()
+
+    def timing_snapshot(self):
+        """Everything that decides when an event plays, as the form has it now."""
+        return {
+            "spins": [spin.value() for spin in self.timing_spins],
+            "combos": [combo.currentIndex() for combo in self.timing_combos],
+            "checks": [chk.isChecked() for chk in self.timing_checks],
+            "audio": {event: [audio_list.item(i).checkState() for i in range(audio_list.count())]
+                      for event, (audio_list, _directory) in self.event_audio.items()},
+        }
+
+    def restore_timing(self, snapshot):
+        """Puts the form back as it was in `snapshot`. A list whose files changed since
+        keeps its ticks: the snapshot no longer says which file is which."""
+        self.restoring_timing = True
+        try:
+            for spin, value in zip(self.timing_spins, snapshot["spins"]):
+                spin.setValue(value)
+            for combo, index in zip(self.timing_combos, snapshot["combos"]):
+                combo.setCurrentIndex(index)
+            for chk, checked in zip(self.timing_checks, snapshot["checks"]):
+                chk.setChecked(checked)
+            for event, states in snapshot["audio"].items():
+                audio_list, _directory = self.event_audio[event]
+                if audio_list.count() == len(states):
+                    for i, state in enumerate(states):
+                        audio_list.item(i).setCheckState(state)
+        finally:
+            self.restoring_timing = False
+        self.overlap_timer.stop()
+        self.last_valid_duha = self.duha_spin.value()
+        self.last_valid_athkar_elsabah = self.athkar_elsabah_spin.value()
+        self.update_all_time_labels()
+
+    def paint_end_times(self, *_):
+        if not hasattr(self, "event_audio"):
+            return
+        seconds, unread = self.event_seconds()
+        values = dict(self.timing_values(), **{key: True for key
+                                               in settings_rules.EVENT_ENABLE_KEYS.values()})
+        try:
+            starts = settings_rules.event_starts(values, self.get_today_prayer_times())
+            starts["friday_quran"] = settings_rules.event_starts(
+                values, settings_rules.prayer_minutes_for(self.effective_prayer_csv(),
+                                                          self.next_friday()),
+                friday=True)["friday_quran"]
+        except (OSError, ValueError, KeyError):
+            starts = {}
+        for event, label in self.end_labels.items():
+            if not self.ticked_audio(event):
+                what = "السور" if event == "quran" else "الملفات"
+                label.setText(f"اختر {what} أدناه لمعرفة وقت الانتهاء")
+                continue
+            if event not in starts:
+                label.setText("--")
+                continue
+            text = (f"حتى {self.minutes_to_clock(starts[event] + round(seconds[event] / 60))}"
+                    f" · المدة {duration_text(seconds[event])}")
+            if event in unread:
+                text += " (تعذّرت قراءة مدة بعض الملفات)"
+            label.setText(text)
+
+    def current_overlaps(self):
+        """The pairs of switched-on events that play at once, with the windows each pair
+        was found in."""
+        seconds, _unread = self.event_seconds()
+        values = self.timing_values()
+        found = {}
+        try:
+            today = self.day_windows(values, seconds, friday=False)
+            for pair in settings_rules.overlapping_pairs(today):
+                found[pair] = today
+            friday = self.day_windows(values, seconds, friday=True)
+            for pair in settings_rules.overlapping_pairs(friday):
+                if "friday_quran" in pair:
+                    found[pair] = friday
+        except (OSError, ValueError, KeyError):
+            pass
+        return found
+
+    def warn_new_overlaps(self):
+        found = self.current_overlaps()
+        new = {pair: windows for pair, windows in found.items()
+               if pair not in self.known_overlaps}
+        if not new:
+            self.known_overlaps = found
+            self.good_timing = self.timing_snapshot()
+            return False
+        messages = []
+        for windows in {id(w): w for w in new.values()}.values():
+            pairs = [pair for pair, owner in new.items() if owner is windows]
+            messages.append(settings_rules.overlap_message(pairs, windows,
+                                                           self.minutes_to_clock))
+        arabic_warning(self, "تنبيه: تداخل في أوقات التشغيل",
+                       "\n\n".join(messages) + "\n\n" + OVERLAP_RESTORED_TEXT)
+        self.restore_timing(self.good_timing)
+        self.known_overlaps = self.current_overlaps()
+        return True
+
+    def file_seconds(self, directory, name):
+        path = os.path.join(directory, name)
+        try:
+            stamp = os.stat(path)
+        except OSError:
+            return None
+        key = (path, stamp.st_size, stamp.st_mtime)
+        if key not in self.audio_seconds:
+            self.audio_seconds[key] = audio_duration.mp3_seconds(path)
+        return self.audio_seconds[key]
+
     def paint_upload_button(self, *_):
         ready = bool(self.upload_folder_combo.currentData())
         self.upload_btn.setStyleSheet(
@@ -2650,6 +3044,7 @@ class ControlApp(QMainWindow):
         for i in reversed(range(list_widget.count())):
             if list_widget.item(i).text() in deleted:
                 list_widget.takeItem(i)
+        self.paint_end_times()
         if switched_off:
             settings[audio_lists.EVENT_ENABLE_KEYS[key]] = "False"
             for chk, widget in self.event_switches():
@@ -3130,9 +3525,9 @@ class ControlApp(QMainWindow):
         self.add_spinbox_row(form, spin_label_text, spin)
         layout.addLayout(form)
 
-        time_label = QLabel("--")
-        time_label.setStyleSheet("font-size: 15px; color: #555;")
-        layout.addWidget(time_label)
+        time_label = self.time_row(layout, START_LABEL_TEXT)
+        self.end_labels[audio_cfg_key.removesuffix("_audio_checked")] = self.time_row(
+            layout, END_LABEL_TEXT)
 
         audio_list = self.create_checkable_audio_list(audio_dir)
         self.load_audio_checked_state(audio_list, audio_cfg_key)
@@ -3292,6 +3687,10 @@ class ControlApp(QMainWindow):
         # Surat Al-Kahf audio list
         self.load_audio_checked_state(
             self.friday_quran_audio_list, "friday_quran_audio_checked")
+        if hasattr(self, "overlap_timer"):
+            self.overlap_timer.stop()
+            self.known_overlaps = self.current_overlaps()
+            self.good_timing = self.timing_snapshot()
 
 
     # ---------------- Config ----------------
@@ -3530,6 +3929,12 @@ class ControlApp(QMainWindow):
 
         try:
             # 3. Validations
+            if self.overlap_timer.isActive():
+                self.overlap_timer.stop()
+                if self.warn_new_overlaps():
+                    self.unlock_button()
+                    return
+
             if not self.validate_prayer_csv():
                 self.unlock_button()
                 return 
@@ -3557,6 +3962,34 @@ class ControlApp(QMainWindow):
 
         except Exception:
             self.unlock_button()
+
+    def spin_title(self, spin):
+        for form in self.findChildren(QFormLayout):
+            label = form.labelForField(spin)
+            if label is not None:
+                return label.text()
+        return ""
+
+    def eventFilter(self, obj, event):
+        """A tap on a number field opens the pad. A swipe that starts on one scrolls the
+        page as before."""
+        if isinstance(obj.parentWidget(), QSpinBox):
+            if event.type() == QEvent.MouseButtonPress:
+                self.pad_press = event.globalPos()
+            elif event.type() == QEvent.MouseButtonRelease:
+                spin = obj.parentWidget()
+                pressed = getattr(self, "pad_press", None)
+                self.pad_press = None
+                if spin.isEnabled() and pressed is not None and \
+                        (event.globalPos() - pressed).manhattanLength() <= TAP_SLOP:
+                    self.number_pad.open(spin, self.spin_title(spin))
+                    return True
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "number_pad", None) and self.number_pad.isVisible():
+            self.number_pad.setGeometry(self.rect())
 
     def closeEvent(self, event):
         """Closing Settings goes back to the time screen, as closing a phone app's settings
