@@ -752,13 +752,12 @@ check_true("a tap mutes, a longer press opens the volume",
 check_true("as does the phone's own long press, its context menu kept away",
            'button.addEventListener("contextmenu", (event) => {\n        event.preventDefault();' in page
            and "-webkit-touch-callout: none;" in get("/static/app.css")[1].decode("utf-8"))
-check_true("a finger is told apart by its own touches, so iPhone Safari's held-finger gesture "
-           "cannot cancel the press before the volume opens",
-           'button.addEventListener("touchstart", (event) => {' in page
-           and "}, { passive: false });" in page
-           and "if (tapped && !button.disabled) toggleMute();" in page
-           and 'if (event.button !== 0 || event.pointerType === "touch") return;' in page
-           and "button.icon-link svg { pointer-events: none; }" in get("/static/app.css")[1].decode("utf-8"))
+check_true("a finger iPhone Safari cancels after it was held still opens the volume, "
+           "a scroll does not",
+           'button.addEventListener("pointercancel", (event) => {' in page
+           and '&& event.timeStamp - downAt >= HELD_STILL_MS;' in page
+           and "const HELD_STILL_MS = 300;" in page
+           and 'addEventListener("touchstart"' not in page)
 check_true("the volume is a slider with a box beside it to keep it",
            '<input type="range" id="volume" min="0" max="100"' in page
            and '<input type="checkbox" id="volume-keep">تثبيت هذا المستوى دائمًا' in page)
