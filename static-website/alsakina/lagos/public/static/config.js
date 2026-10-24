@@ -4,7 +4,7 @@
 window.DATA = "/data/{year}.json";
 window.DEVICE = false;
 window.PLACE = "لاغوس";
-window.VERSION = "1.7.2";
+window.VERSION = "1.7.3";
 window.TIMEZONE = "Africa/Lagos";
 window.CITY = "lagos";
 window.CITIES = [
