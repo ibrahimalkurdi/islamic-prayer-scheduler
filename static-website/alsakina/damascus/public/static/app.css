@@ -111,7 +111,6 @@ button.icon-link {
     -webkit-touch-callout: none;
     touch-action: manipulation;
 }
-button.icon-link svg { pointer-events: none; }
 
 /* Muted reads as an alarm, not as a state: the same red the touch screen uses. */
 .icon-link.muted {
