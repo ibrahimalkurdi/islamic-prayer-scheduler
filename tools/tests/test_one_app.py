@@ -395,5 +395,18 @@ chk("both apps apply it before their QApplication is made",
                  settings_source[settings_source.index('if __name__ == "__main__":'):])],
     [True, True])
 
+print("9. a tapped window button keeps no focus frame")
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
+clock_was = counter.clock_btn.isChecked()
+QTest.mouseClick(counter.clock_btn, Qt.LeftButton); app.processEvents()
+QTest.mouseClick(counter.clock_btn, Qt.LeftButton); app.processEvents()
+chk("the clock is back as it was after two taps", counter.clock_btn.isChecked(), clock_was)
+chk("and the clock button did not take focus", counter.clock_btn.hasFocus(), False)
+chk("no window button can take focus",
+    [b.focusPolicy() for b in (counter.exit_btn, counter.fullscreen_btn, counter.view_btn,
+                               counter.mute_btn, counter.settings_btn, counter.clock_btn)],
+    [Qt.NoFocus] * 6)
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

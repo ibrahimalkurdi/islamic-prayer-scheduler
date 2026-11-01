@@ -1138,6 +1138,9 @@ class AdhanCounter(QWidget):
         for button in (self.exit_btn, self.fullscreen_btn, self.view_btn,
                        self.mute_btn, self.settings_btn, self.clock_btn):
             button.raise_()
+            # A tapped button would keep keyboard focus, and the device's qt5ct style
+            # draws a frame round a focused button - left on the clock after every tap.
+            button.setFocusPolicy(Qt.NoFocus)
             # Subpixel antialiasing tints thin strokes orange on one edge and blue on
             # the other. On the speaker's sound waves that is strong enough to read as
             # colour, which would compete with the red that means muted.
