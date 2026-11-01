@@ -4,7 +4,7 @@
 
    Network first, so a rebuilt site is seen as soon as the phone is online; the copy kept
    here when the network is gone, or too slow to be worth waiting for. */
-const CACHE = "sakina-a45751259e8a";
+const CACHE = "sakina-6a4e1e24e124";
 const FILES = [
     "/",
     "/countdown/",
