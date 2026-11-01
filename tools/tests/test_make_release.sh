@@ -188,5 +188,28 @@ for path in "config/packages.txt" "config/logrotate/" "config/systemd/" "config/
 done
 git -C "$BUILD" tag -d pi4-v2.1.5 > /dev/null 2>&1
 
+echo "7. every file either tree ships is one the updater may write"
+# Section 6 names paths someone remembered. zero 1.7.6 shipped display.ini, units-off.txt
+# and the promisc dispatcher script without any of them on the list, so a Zero set up
+# from a release never got them. This asks the tarball itself. config/needs_init is read
+# from the staged release, never copied.
+for variant in pi4 zero; do
+    out="$(cd "$BUILD" && bash tools/make_release.sh "$variant" 2.1.6 < /dev/null 2>&1)"
+    chk "the $variant build succeeds" "$?" "0"
+    uncovered="$(python3 - "$BUILD/dist/scheduler-$variant-2.1.6.tar.gz" "$BUILD/dist/version.json" <<'PY'
+import json, sys, tarfile
+include = json.load(open(sys.argv[2]))["include"]
+for member in tarfile.open(sys.argv[1]).getmembers():
+    path = member.name.removeprefix("./")
+    if member.isdir() or path == "config/needs_init":
+        continue
+    if not any(path == i or (i.endswith("/") and path.startswith(i)) for i in include):
+        print(path)
+PY
+)"
+    chk "nothing in the $variant archive is left off its include list" "$uncovered" ""
+    git -C "$BUILD" tag -d "$variant-v2.1.6" > /dev/null 2>&1
+done
+
 echo
 [ $fail -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

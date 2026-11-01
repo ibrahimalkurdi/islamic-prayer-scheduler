@@ -157,10 +157,13 @@ git archive --format=tar "HEAD:$SUBTREE" | tar -x -C "$WORK"
 
 # The two trees keep their fonts and presets in different places, and an empty
 # directory left behind by a rename must not end up in the list either - so this asks
-# the exported tree what is really there, not the checkout.
+# the exported tree what is really there, not the checkout. The last three are the
+# Zero's own and absent from the Pi 4 tree.
 for optional in "config/fonts/" "config/icons/" "config/arabic-fonts/" "config/prayers-config/" \
-                "config/logrotate/" "config/sysctl/" "config/wallpaper/" "default-audio/"; do
-    if [[ -d "$WORK/${optional%/}" ]] && [[ -n "$(ls -A "$WORK/${optional%/}")" ]]; then
+                "config/logrotate/" "config/sysctl/" "config/wallpaper/" "default-audio/" \
+                "config/NetworkManager/" "config/display.ini" "config/units-off.txt"; do
+    if [[ -f "$WORK/$optional" ]] \
+        || { [[ -d "$WORK/${optional%/}" ]] && [[ -n "$(ls -A "$WORK/${optional%/}")" ]]; }; then
         INCLUDE+=("$optional")
     fi
 done
