@@ -90,6 +90,7 @@ from shared import audio_lists
 from shared import audio_duration
 from shared import audio_upload
 from shared import brightness
+from shared.display import apply_screen_scale
 from shared import internet_status
 from shared import os_timezone
 from shared import prayer_source
@@ -4214,6 +4215,7 @@ if __name__ == "__main__":
     # loop starts, over the Amiri below. Every label and checkbox that does not name a
     # family of its own then falls back to DejaVu Sans. Not desktop-settings-aware, qt5ct
     # leaves fonts and palette alone and still supplies the style.
+    apply_screen_scale(MAIN_DIR)
     QApplication.setDesktopSettingsAware(False)
     app = QApplication(sys.argv)
     app.setFont(QFont("Amiri"))

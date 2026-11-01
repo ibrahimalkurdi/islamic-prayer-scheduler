@@ -356,5 +356,44 @@ aware = main_block.find("QApplication.setDesktopSettingsAware(False)")
 chk("not desktop-settings-aware, before QApplication is made",
     0 <= aware < main_block.index("QApplication(sys.argv)"), True)
 
+print("8. config/display.ini scales both apps for a larger screen")
+# The Zero's 1024x600 panel draws the 800x480 layout 1.25 times larger, so it shows exactly
+# what a Pi 4 shows. Set through QT_SCALE_FACTOR before QApplication exists.
+import tempfile
+from shared import display
+
+
+def _scale_for(text):
+    with tempfile.TemporaryDirectory() as tree:
+        os.makedirs(os.path.join(tree, "config"))
+        if text is not None:
+            with open(display.display_file(tree), "w", encoding="utf-8") as f:
+                f.write(text)
+        environ = {}
+        display.apply_screen_scale(tree, environ)
+        return environ.get("QT_SCALE_FACTOR")
+
+
+chk("a scale in the file is handed to Qt", _scale_for("[screen]\nscale = 1.25\n"), "1.25")
+chk("no file, no scale - the Pi 4 draws at its own size", _scale_for(None), None)
+chk("a scale of 1, one out of range or one that is no number changes nothing",
+    [_scale_for(f"[screen]\nscale = {v}\n") for v in ("1", "0.5", "9", "big")],
+    [None, None, None, None])
+environ = {"QT_SCALE_FACTOR": "2"}
+with tempfile.TemporaryDirectory() as tree:
+    display.apply_screen_scale(tree, environ)
+chk("a scale already in the environment is left alone", environ["QT_SCALE_FACTOR"], "2")
+ZERO_DISPLAY = os.environ.get("ZERO_DISPLAY_INI")
+if ZERO_DISPLAY:
+    chk("the Zero's 600-pixel panel is scaled from 480", display.screen_scale(ZERO_DISPLAY), 600 / 480)
+time_source = open(TIME_APP, encoding="utf-8").read()
+settings_source = open(SETTINGS_APP, encoding="utf-8").read()
+chk("both apps apply it before their QApplication is made",
+    [src.index("apply_screen_scale(") < src.index("QApplication(sys.argv)",
+                                                   src.index('if __name__ == "__main__":'))
+     for src in (time_source[time_source.index('if __name__ == "__main__":'):],
+                 settings_source[settings_source.index('if __name__ == "__main__":'):])],
+    [True, True])
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

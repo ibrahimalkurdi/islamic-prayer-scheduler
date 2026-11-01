@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=اوقات الصلاة
+Name=السكينة
 Comment=Touchscreen Application
 Exec=env DISPLAY=:0 QT_QPA_PLATFORM=xcb python3 /home/ihms/Desktop/scheduler/applications/desktop/prayer_times_gui/main.py
 Icon=athan-app

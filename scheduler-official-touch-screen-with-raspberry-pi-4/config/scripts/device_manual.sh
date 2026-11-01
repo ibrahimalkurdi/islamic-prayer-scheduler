@@ -44,6 +44,11 @@ if [[ -f "$OUT" && "$(cat "$STAMP" 2> /dev/null)" == "$WANT" ]]; then
 fi
 
 [[ -n "$CHROMIUM" ]] || skip "chromium is not installed"
+# Below 1 GB, Raspberry Pi OS's chromium stops on a "not recommended" dialog on the screen,
+# headless or not, and printing a page would take most of a Zero's memory anyway. The Pi 4
+# shows 900-odd MB of its 1 GB, so the line sits well below that.
+MEM_KB="$(awk '/^MemTotal:/ {print $2}' "${MEMINFO:-/proc/meminfo}" 2> /dev/null)"
+(( ${MEM_KB:-0} >= 600000 )) || skip "too little memory for chromium"
 command -v qpdf > /dev/null || skip "qpdf is not installed"
 "$PYTHON" -c 'import segno' 2> /dev/null || skip "python3-segno is not installed"
 

@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>اوقات الصلاة</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icon-256.png" sizes="256x256">
+<link rel="apple-touch-icon" href="/static/icon-256.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0F172A">
+</head>
+<body>
+
+<header class="top">
+    <h1>اوقات الصلاة</h1>
+    <nav class="top-icons">
+        <button class="icon-link speaker hidden" id="mute" type="button" aria-label="كتم الصوت"
+                aria-haspopup="dialog" title="اضغط لكتم الصوت، واضغط مطوّلًا لضبط مستواه"></button>
+        <a class="icon-link hidden" id="to-settings" href="settings/" aria-label="الاعدادات"
+           title="الاعدادات"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+        </svg></a>
+        <a class="icon-link" href="countdown/" aria-label="الوقت المتبقي للصلاة"
+           title="الوقت المتبقي للصلاة"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/>
+        </svg></a>
+    </nav>
+</header>
+<p class="mute-state hidden" id="mute-state"></p>
+<p class="volume-state hidden" id="volume-state"></p>
+<div class="note hidden" id="speaker-note"></div>
+<p class="sub hidden" id="place"></p>
+<p class="city-diff hidden" id="city-diff">هذه المدينة مختلفة عن المضبوطة في الجهاز. للإبقاء عليها نفسها بدّل إلى <a href="#" id="city-home"></a></p>
+
+<div class="guide confirm hidden" id="city-confirm" role="dialog" aria-modal="true"
+     aria-labelledby="city-confirm-title">
+    <div class="guide-card">
+        <h2 id="city-confirm-title">تغيير المدينة</h2>
+        <p>هل تريد تغيير المدينة من <b id="city-from"></b> إلى <b id="city-to"></b>؟</p>
+        <p class="confirm-note hidden" id="city-device-note">ملاحظة: هذا التغيير لا يغيّر ملف الإعدادات في الجهاز، ولتغييره يجب تعديله من الجهاز نفسه.</p>
+        <div class="confirm-actions">
+            <button class="yes" id="city-yes">نعم</button>
+            <button class="ghost" id="city-no">لا</button>
+        </div>
+    </div>
+</div>
+
+<div class="guide confirm hidden" id="volume-panel" role="dialog" aria-modal="true"
+     aria-labelledby="volume-title">
+    <div class="guide-card">
+        <h2 id="volume-title">مستوى الصوت</h2>
+        <div class="volume-row">
+            <input type="range" id="volume" min="0" max="100" step="1" aria-label="مستوى الصوت">
+            <output id="volume-value" for="volume">--%</output>
+        </div>
+        <label class="volume-keep"><input type="checkbox" id="volume-keep">تثبيت هذا المستوى دائمًا</label>
+        <p class="confirm-note" id="volume-note"></p>
+        <div class="confirm-actions">
+            <button class="ghost" id="volume-reset">إعادة إلى &#x2066;50%&#x2069;</button>
+            <button class="ghost" id="volume-close">إغلاق</button>
+        </div>
+    </div>
+</div>
+
+<div class="install app-install hidden" id="app-install">
+    <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
+</div>
+
+<div class="guide hidden" id="ios-guide" role="dialog" aria-modal="true"
+     aria-labelledby="ios-guide-title">
+    <div class="guide-card">
+        <h2 id="ios-guide-title">ثبّت التطبيق في خطوتين</h2>
+        <ol>
+            <li>
+                <span class="guide-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3l-4 4 1.4 1.4L11 6.8V15h2V6.8l1.6 1.6L16 7z"/>
+                    <path d="M6 10h3v2H7v8h10v-8h-2v-2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1z"/>
+                </svg></span>
+                <span>اضغط زر <b>المشاركة</b> في أسفل Safari.
+                    <small>إن لم تجده، فاضغط <b>⋯</b> أولًا.</small></span>
+            </li>
+            <li>
+                <span class="guide-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/>
+                    <path d="M11 7.5h2V11h3.5v2H13v3.5h-2V13H7.5v-2H11z"/>
+                </svg></span>
+                <span>اختر <b>إضافة إلى الشاشة الرئيسية</b>، ثم <b>إضافة</b>.
+                    <small>إن لم تظهر، فمرّر القائمة إلى الأسفل.</small></span>
+            </li>
+        </ol>
+        <button class="ghost" id="ios-guide-close">حسنًا</button>
+    </div>
+    <div class="guide-arrow" aria-hidden="true"><svg viewBox="0 0 24 24">
+        <path d="M11 4h2v12l4.5-4.5 1.4 1.4L12 19.8l-6.9-6.9 1.4-1.4L11 16z"/>
+    </svg></div>
+</div>
+
+<div class="list-nav">
+    <input type="date" id="pick">
+    <button class="ghost" id="today">اليوم</button>
+</div>
+
+<div class="badge-row hidden" id="badge-row"><span class="badge" id="badge">--:--</span></div>
+
+<div class="rows" id="rows"></div>
+<div class="note bad hidden" id="error"></div>
+
+<div class="install hidden" id="install">
+    <a class="install-button" id="install-link" href="#">ثبّت التطبيق على هاتفك</a>
+    <p>يفتح مواقيت الصلاة والعداد حتى خارج شبكة الواي فاي، والإعدادات من داخلها.</p>
+</div>
+
+<p class="version hidden" id="version"></p>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+/* One page serves every date: the date is read from the query string, so a static host
+   needs no rewrite rule and the address can be shared as it stands. */
+function requestedDate() {
+    const asked = new URLSearchParams(location.search).get("date");
+    return Site.parseLocal(asked) ? asked : Site.isoDate(Site.now());
+}
+
+if (window.PLACE) {
+    const place = document.querySelector("#place");
+    place.textContent = window.PLACE;
+    place.classList.remove("hidden");
+    document.title = `${document.title} - ${window.PLACE}`;
+}
+
+/* The name becomes a list of every city the site carries. Choosing one asks first, then
+   reloads the page on that city's years and clock. In the app a device hands out, the
+   site's own city is the device's: the note under the name says when the phone shows
+   another, and the link in it goes straight back. */
+if (Site.cities().length > 1) {
+    const current = Site.shownCity();
+    const home = Site.homeCity();
+    const fromDevice = Boolean(Site.ownerHost());
+    const select = document.createElement("select");
+    select.id = "city";
+    select.setAttribute("aria-label", "المدينة");
+    for (const city of Site.cities()) {
+        select.add(new Option(city.place, city.id, false, city === current));
+    }
+    const pick = document.createElement("span");
+    pick.className = "city-pick";
+    pick.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+    pick.prepend(select);
+    document.querySelector("#place").replaceChildren(pick);
+
+    const show = (id) => {
+        if (Site.chooseCity(id)) location.reload();
+    };
+    const confirm = document.querySelector("#city-confirm");
+    const keep = () => {
+        select.value = current.id;
+        confirm.classList.add("hidden");
+    };
+    select.addEventListener("change", () => {
+        if (select.value === current.id) return;
+        document.querySelector("#city-from").textContent = current.place;
+        document.querySelector("#city-to").textContent =
+            Site.cities().find((city) => city.id === select.value).place;
+        confirm.classList.remove("hidden");
+    });
+    document.querySelector("#city-yes").addEventListener("click", () => show(select.value));
+    document.querySelector("#city-no").addEventListener("click", keep);
+    confirm.addEventListener("click", (event) => { if (event.target === confirm) keep(); });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !confirm.classList.contains("hidden")) keep();
+    });
+
+    if (fromDevice) {
+        document.querySelector("#city-device-note").classList.remove("hidden");
+        if (current !== home) {
+            const back = document.querySelector("#city-home");
+            back.textContent = home.place;
+            back.addEventListener("click", (event) => {
+                event.preventDefault();
+                show(home.id);
+            });
+            document.querySelector("#place").classList.add("above-diff");
+            document.querySelector("#city-diff").classList.remove("hidden");
+        }
+    }
+}
+
+let shown = requestedDate();
+/* Kept from the last render so the badge can tick every second without asking the device
+   for anything, and so a colour change can be noticed as it happens rather than at the
+   next full redraw. */
+let currentDay = null;
+let carried = null;
+let lastState = null;
+
+async function render() {
+    const day = await Site.dayData(shown);
+    const now = Site.now();
+    const isToday = shown === Site.isoDate(now);
+    /* Shown on the Isha row, as the device shows it. */
+    carried = isToday && !Site.runningPeriod(day, now) ? await Site.eveningBefore(now) : null;
+    currentDay = day;
+    const container = document.querySelector("#rows");
+    container.textContent = "";
+
+    for (const period of day.periods) {
+        const row = document.createElement("div");
+        row.className = "row";
+
+        /* Only today has a period in force - a browsed date is a list, not a state. */
+        const live = carried && carried.name === period.name ? carried : period;
+        const span = isToday ? Site.spanAt(live, now) : null;
+        const start = Site.parseLocal(live.start);
+        const end = Site.parseLocal(live.end);
+        const running = isToday && start && end && start <= now && now < end;
+
+        /* Painted the way PrayerCard.apply_state paints it: a left-to-right gradient
+           into the darker shade, a derived border and a glow of the same colour - except
+           makrooh, which is flat so it matches the orange the counter paints exactly.
+           Every one of these shades is worked out on the device, not here. */
+        const style = running && span ? day.cards.active[span.color] : null;
+        if (style) {
+            row.style.background = style.flat
+                ? style.from
+                : `linear-gradient(to left, ${style.from}, ${style.to})`;
+            row.style.color = style.text;
+            row.style.borderColor = style.border;
+            row.style.boxShadow = `0 0 16px ${style.glow}`;
+            row.classList.add("running");
+        } else {
+            row.style.background = day.cards.idle.background;
+            row.style.color = day.cards.idle.text;
+            row.style.borderColor = day.cards.idle.border;
+        }
+
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = period.display;
+        row.appendChild(name);
+
+        const right = document.createElement("span");
+        if (span && span.makrooh && running) {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = day.makrooh_label;
+            right.appendChild(tag);
+            right.appendChild(document.createTextNode(" "));
+        }
+        const clock = document.createElement("span");
+        clock.className = "clock";
+        clock.textContent = period.clock || "--:--";
+        right.appendChild(clock);
+        row.appendChild(right);
+
+        container.appendChild(row);
+    }
+
+    document.querySelector("#pick").value = shown;
+    document.querySelector("#error").classList.add("hidden");
+    paintBadge(now);
+}
+
+/* How long the running period still has to run, in the pill above the list. Hidden when
+   nothing is running - on a browsed date there is no such thing, which is also when the
+   app hides it. */
+function runningState(now) {
+    if (!currentDay || shown !== Site.isoDate(now)) return null;
+    const period = Site.runningPeriod(currentDay, now)
+        || (carried && Site.runningPeriod({ periods: [carried] }, now));
+    if (!period) return null;
+    const span = Site.spanAt(period, now);
+    if (!span) return null;
+    return { period, color: span.color, end: Site.parseLocal(period.end) };
+}
+
+function paintBadge(now) {
+    const badge = document.querySelector("#badge");
+    const state = runningState(now);
+
+    /* The row itself is hidden, not just the pill: hide() takes the widget out of the
+       layout on the device, so the gap closes rather than being left empty. */
+    const row = document.querySelector("#badge-row");
+    if (!state) {
+        row.classList.add("hidden");
+        return;
+    }
+
+    const minutes = Math.max(0, Math.floor((state.end - now) / 60000));
+    badge.textContent = `${Site.pad(Math.floor(minutes / 60))}:${Site.pad(minutes % 60)}`;
+
+    const style = currentDay.cards.badge[state.color];
+    badge.style.background =
+        `linear-gradient(to bottom left, ${style.from}, ${style.to})`;
+    badge.style.borderColor = style.border;
+    badge.style.color = style.text;
+    badge.style.boxShadow = `0 0 26px ${style.glow}`;
+    row.classList.remove("hidden");
+}
+
+function show(date) {
+    shown = date;
+    const url = new URL(location.href);
+    url.searchParams.set("date", date);
+    history.replaceState(null, "", url);
+    render().catch((e) => Site.fail(e.message));
+}
+
+document.querySelector("#pick").addEventListener("change", (event) => {
+    if (event.target.value) show(event.target.value);
+});
+document.querySelector("#today").addEventListener("click", () => {
+    show(Site.isoDate(Site.now()));
+});
+
+render().catch((e) => Site.fail(e.message));
+
+/* The badge counts down in minutes, so it is repainted every second from the data
+   already in hand - no request. The same tick notices when the running period or its
+   colour has changed and redraws the list then, which is what keeps the highlight as
+   sharp as the app's without polling the device for it. */
+setInterval(() => {
+    const now = Site.now();
+    const state = runningState(now);
+    const key = state ? `${state.period.name}/${state.color}` : null;
+
+    if (key !== lastState) {
+        lastState = key;
+        render().catch(() => {});
+        return;
+    }
+    paintBadge(now);
+}, 1000);
+
+/* The installed version at the foot of the page, the line the touch screen's own daily
+   list carries. A static host shows the release the devices run, baked in as VERSION.
+
+   Re-read on the minute rather than once, for the reason the app re-reads it on every
+   refresh - check_updates.sh writes var/installed_version only after the new release
+   passes its health check, which is after the page is already open. */
+function refreshVersion() {
+    if (!window.DEVICE) {
+        if (!window.VERSION) return;
+        const line = document.querySelector("#version");
+        line.textContent = window.VERSION;
+        line.classList.remove("hidden");
+        return;
+    }
+    Site.json("/api/device").then((info) => {
+        const line = document.querySelector("#version");
+        if (!info.version) return;
+        line.textContent = info.version;
+        line.classList.remove("hidden");
+    }).catch(() => {});
+}
+
+refreshVersion();
+
+/* Settings acts on one Raspberry Pi, so it is offered on the device itself and in the app
+   a device hands out (Site.ownerHost), never on the public site. */
+const owner = Site.ownerHost();
+if (window.DEVICE || owner) document.querySelector("#to-settings").classList.remove("hidden");
+/* Chrome opens the app's own settings page, which talks to the device directly. Safari
+   can neither reach the device nor check the wifi, so there it opens the device's own
+   page; off its wifi Safari says it cannot open it. */
+if (owner && !Site.canAskDevice()) {
+    document.querySelector("#to-settings").href = Site.devicePage(owner, "/settings/");
+}
+
+/* ---- the speaker ----
+   A tap mutes or unmutes the device for an hour, as the touch screen's speaker does. A
+   longer press opens the device's volume: changed for an hour too and then put back,
+   unless kept with the box beside the slider. Drawn rather than set as text: a browser
+   renders the speaker codepoints as colour emoji that ignore `color`, so they could never
+   go red when muted. */
+const SPEAKER_ON = `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 9v6h4l5 4V5L7 9H3z"/>
+    <path d="M15.5 8.5a5 5 0 0 1 0 7 1 1 0 0 0 1.4 1.4 7 7 0 0 0 0-9.9 1 1 0 0 0-1.4 1.4z"/>
+    <path d="M18.4 5.6a9 9 0 0 1 0 12.8 1 1 0 0 0 1.4 1.4 11 11 0 0 0 0-15.6 1 1 0 1 0-1.4 1.4z"/>
+</svg>`;
+const SPEAKER_OFF = `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 9v6h4l5 4V5L7 9H3z"/>
+    <path d="M16.3 9.3a1 1 0 0 1 1.4 0L19.5 11l1.8-1.8a1 1 0 1 1 1.4 1.4L20.9 12.4l1.8 1.8a1 1 0 0 1-1.4 1.4l-1.8-1.8-1.8 1.8a1 1 0 0 1-1.4-1.4l1.8-1.8-1.8-1.7a1 1 0 0 1 0-1.4z"/>
+</svg>`;
+const LONG_PRESS_MS = 550;
+const HELD_STILL_MS = 300;
+/* Every request polls the device, so the state is re-read on this slower beat; the touch
+   screen and a shell can both change it. */
+const SPEAKER_POLL_MS = 15000;
+
+function showMute(state) {
+    const button = document.querySelector("#mute");
+    button.innerHTML = state.muted ? SPEAKER_OFF : SPEAKER_ON;
+    button.classList.toggle("muted", !!state.muted);
+    button.setAttribute("aria-label", state.muted ? "إلغاء كتم الصوت" : "كتم الصوت");
+
+    let label = "";
+    if (state.muted && state.flag_until) {
+        label = `الصوت مكتوم حتى ${Site.ltr(Site.clock12(Site.parseLocal(state.flag_until)))}`;
+    } else if (state.muted) {
+        label = "الصوت مكتوم";
+    }
+    const line = document.querySelector("#mute-state");
+    if (!state.sink_reachable) {
+        label += (label ? " — " : "") + "تعذّر الوصول إلى مكبر الصوت";
+        /* wpctl's own line, in English: in the title for whoever can act on it, and in
+           logs/web_ui.log. */
+        line.title = state.reason || "";
+    } else {
+        line.title = "";
+    }
+    line.textContent = label;
+    line.classList.toggle("hidden", !label);
+}
+
+/* "50%" in an Arabic sentence, kept as one left-to-right run: on its own the sign is
+   laid out before the number, as "%50". */
+const percent = (level) => Site.ltr(`${level}%`);
+
+/* Under the speaker, the line the mute has: when a volume set for a while goes back. */
+function showVolumeLine(state) {
+    const line = document.querySelector("#volume-state");
+    const until = state && state.reachable && state.until;
+    line.textContent = until
+        ? `مستوى الصوت ${percent(state.volume)} حتى ${Site.ltr(Site.clock12(Site.parseLocal(state.until)))}`
+        : "";
+    line.classList.toggle("hidden", !until);
+}
+
+function showVolume(state) {
+    showVolumeLine(state);
+    if (state.default != null) {
+        document.querySelector("#volume-reset").textContent = `إعادة إلى ${percent(state.default)}`;
+        document.querySelector("#volume-reset").dataset.level = state.default;
+    }
+    const slider = document.querySelector("#volume");
+    const keep = document.querySelector("#volume-keep");
+    const note = document.querySelector("#volume-note");
+    slider.disabled = keep.disabled = document.querySelector("#volume-reset").disabled =
+        !state.reachable;
+    if (!state.reachable) {
+        document.querySelector("#volume-value").textContent = "--%";
+        note.textContent = "تعذّر الوصول إلى مكبر الصوت";
+        return;
+    }
+    slider.value = state.volume;
+    document.querySelector("#volume-value").textContent = `${state.volume}%`;
+    if (state.until) {
+        note.textContent = `يعود إلى ${percent(state.restore)} عند ` +
+            Site.ltr(Site.clock12(Site.parseLocal(state.until)));
+    } else {
+        note.textContent = `أي تغيير يبقى ${state.minutes} دقيقة ثم يعود المستوى السابق، ` +
+            "إلا إذا حدّدت «تثبيت هذا المستوى دائمًا».";
+    }
+}
+
+/* `call(path, options)` reaches the device: from its own page, or from the app it handed
+   out. `unreachable(error)` is told when a tap's request fails, `reached()` when it
+   succeeds. */
+const VOLUME_NEEDS_UPDATE = "ضبط مستوى الصوت غير متاح على هذا الجهاز قبل تحديث برنامجه.";
+
+function speaker(call, unreachable, reached = () => {}) {
+    const button = document.querySelector("#mute");
+    const panel = document.querySelector("#volume-panel");
+    const slider = document.querySelector("#volume");
+    const keep = document.querySelector("#volume-keep");
+    const post = (path, body) => call(path, { method: "POST", body: JSON.stringify(body) });
+    let timer = null;
+    let pressed = false;
+    let noVolume = false;
+
+    /* A device from before the volume answers the mute alone, and the volume panel then
+       says the device needs updating instead of treating it as out of reach. */
+    const refresh = async () => {
+        const [mute, volume] = await Promise.allSettled([call("/api/mute"), call("/api/volume")]);
+        if (mute.status === "rejected") throw mute.reason;
+        showMute(mute.value);
+        noVolume = volume.status === "rejected";
+        showVolumeLine(noVolume ? null : volume.value);
+    };
+
+    async function toggleMute() {
+        button.disabled = true;
+        try {
+            showMute(await post("/api/mute", {}));
+            reached();
+        } catch (e) {
+            unreachable(e);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function openVolume() {
+        if (!panel.classList.contains("hidden")) return;
+        keep.checked = false;
+        if (noVolume) {
+            Site.noteSayer("#speaker-note")("warn", VOLUME_NEEDS_UPDATE);
+            return;
+        }
+        try {
+            showVolume(await call("/api/volume"));
+            panel.classList.remove("hidden");
+            reached();
+        } catch (e) {
+            unreachable(e);
+        }
+    }
+
+    async function setVolume(level = Number(slider.value), permanent = keep.checked) {
+        try {
+            showVolume(await post("/api/volume", { volume: level, permanent }));
+        } catch (e) {
+            document.querySelector("#volume-note").textContent = e.message;
+        }
+    }
+    /* The default, kept: whatever was set for a while is not put back over it. */
+    const reset = document.querySelector("#volume-reset");
+    reset.addEventListener("click", () => setVolume(Number(reset.dataset.level || 50), true));
+
+    const stopTimer = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+    };
+    let downAt = 0;
+    button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        pressed = false;
+        downAt = event.timeStamp;
+        stopTimer();
+        timer = setTimeout(() => {
+            timer = null;
+            pressed = true;
+            openVolume();
+        }, LONG_PRESS_MS);
+    });
+    button.addEventListener("pointerleave", stopTimer);
+    /* iPhone Safari takes a finger held still for its own gesture just before the volume's
+       turn, cancels the press and fires no context menu: a finger cancelled after that long
+       held still is the hold. A scroll cancels it at once. */
+    button.addEventListener("pointercancel", (event) => {
+        const held = timer !== null && event.pointerType === "touch"
+            && event.timeStamp - downAt >= HELD_STILL_MS;
+        stopTimer();
+        if (held) {
+            pressed = true;
+            openVolume();
+        }
+    });
+    /* A phone's own long press is a context menu: it opens the volume here instead, and so
+       does a right click. */
+    button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        stopTimer();
+        pressed = true;
+        openVolume();
+    });
+    button.addEventListener("click", () => {
+        stopTimer();
+        if (pressed) {
+            pressed = false;
+            return;
+        }
+        toggleMute();
+    });
+
+    slider.addEventListener("input", () => {
+        document.querySelector("#volume-value").textContent = `${slider.value}%`;
+    });
+    slider.addEventListener("change", () => setVolume());
+    keep.addEventListener("change", () => { if (keep.checked) setVolume(); });
+    const close = () => panel.classList.add("hidden");
+    document.querySelector("#volume-close").addEventListener("click", close);
+    /* Only a tap that starts on the backdrop closes it: the finger that opened it is
+       still down when it appears, and lifting it is a click on whatever is under it. */
+    let backdropPressed = false;
+    panel.addEventListener("pointerdown", (event) => { backdropPressed = event.target === panel; });
+    panel.addEventListener("click", (event) => {
+        if (event.target === panel && backdropPressed) close();
+        backdropPressed = false;
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !panel.classList.contains("hidden")) close();
+    });
+
+    button.innerHTML = SPEAKER_ON;
+    button.classList.remove("hidden");
+    return refresh;
+}
+
+if (window.DEVICE) {
+    const refresh = speaker((path, options) => Site.json(path, Object.assign(
+        { headers: { "Content-Type": "application/json" } }, options)),
+        (e) => Site.fail(e.message));
+    refresh().catch(() => {});
+    setInterval(() => refresh().catch(() => {}), SPEAKER_POLL_MS);
+} else if (owner) {
+    /* The app a device hands out, on the public site. Chrome reaches the device from here
+       - Local Network Access, and main.py lets this site call /api/mute and /api/volume.
+       Safari cannot reach an http:// device from an https:// page at all, so there the
+       speaker opens the device's own list, where it works. */
+    const target = Site.devicePage(owner, "/");
+    const button = document.querySelector("#mute");
+    if (Site.canAskDevice()) {
+        const say = Site.noteSayer("#speaker-note");
+        const away = "أنت خارج شبكة الواي فاي الخاصة بالجهاز، التحكم في الصوت غير متاح.";
+        let polling = null;
+        const refresh = speaker((path, options) => Site.deviceJson(owner, path, options),
+            async () => {
+                /* A device that answers but refused is on a release from before the app
+                   could reach it: its own page still can. */
+                if (await Site.deviceAnswers(owner)) location.href = target;
+                else say("bad", away, target, "حاول فتحها على أي حال");
+            },
+            () => follow());
+        function follow() {
+            document.querySelector("#speaker-note").className = "note hidden";
+            if (!polling) polling = setInterval(() => refresh().catch(() => {}), SPEAKER_POLL_MS);
+        }
+        Site.localNetworkAllowed().then((allowed) => {
+            if (allowed) refresh().then(follow).catch(() => {});
+        });
+    } else {
+        button.innerHTML = SPEAKER_ON;
+        button.classList.remove("hidden");
+        button.addEventListener("click", () => { location.href = target; });
+    }
+}
+
+/* The page a device's install button opens installs itself. Chrome hands over its install
+   dialog only from a tap on this page, so the button is the one step left; Safari has no
+   such dialog, so on an iPhone the same button shows the two taps in Safari's own menu. Nothing shows once installed. */
+if (owner && !Site.installedApp()) {
+    const box = document.querySelector("#app-install");
+    let offer = null;
+    window.addEventListener("beforeinstallprompt", (event) => {
+        event.preventDefault();
+        offer = event;
+        box.classList.remove("hidden");
+    });
+    const guide = document.querySelector("#ios-guide");
+    document.querySelector("#app-install-button").addEventListener("click", async () => {
+        if (Site.isIosSafari()) {
+            guide.classList.remove("hidden");
+            return;
+        }
+        if (!offer) return;
+        /* Chrome offers its dialog once per page load, whichever way it is answered. */
+        offer.prompt();
+        await offer.userChoice;
+        box.classList.add("hidden");
+        offer = null;
+    });
+    window.addEventListener("appinstalled", () => box.classList.add("hidden"));
+    document.querySelector("#ios-guide-close").addEventListener("click", () => {
+        guide.classList.add("hidden");
+    });
+    if (Site.isIosSafari()) box.classList.remove("hidden");
+}
+
+/* On the device, the way onto a phone: the same pages from the city's public site, under
+   this device's name so its settings icon knows where to go. Named as the phone reached
+   this page - a device's mDNS name can differ from its hostname. */
+if (window.DEVICE) {
+    Site.json("/api/device").then((info) => {
+        if (!info.public_site) return;
+        const name = location.hostname.endsWith(".local")
+            ? location.hostname.slice(0, -".local".length)
+            : info.hostname;
+        document.querySelector("#install-link").href =
+            `${info.public_site}/d/${encodeURIComponent(name)}/`;
+        document.querySelector("#install").classList.remove("hidden");
+    }).catch(() => {});
+}
+
+/* And a full redraw on the minute regardless, so a day that rolls over at midnight is
+   picked up even though nothing about the running period changed. */
+setInterval(() => {
+    if (shown === Site.isoDate(Site.now())) render().catch(() => {});
+    refreshVersion();
+}, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>الوقت المتبقي للصلاة</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icon-256.png" sizes="256x256">
+<link rel="apple-touch-icon" href="/static/icon-256.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0F172A">
+</head>
+<body class="full">
+
+<main class="counter" id="counter">
+    <a class="corner back-corner" href="../" aria-label="اوقات الصلاة">→</a>
+
+    <div class="notice" id="notice"></div>
+    <div class="name" id="name"></div>
+    <div class="digits" id="digits">--:--</div>
+
+    <div class="note bad hidden error-line" id="error"></div>
+</main>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+<script>
+let day = null;
+/* The instant the colour next changes. Until it arrives nothing is fetched - the page
+   only ticks its own digits - which is what keeps an open countdown free on the device. */
+let refreshAt = null;
+
+async function loadDay() {
+    const now = Site.now();
+    day = await Site.dayData(null);
+    refreshAt = null;
+
+    /* Between midnight and Fajr, on a static host: see Site.eveningBefore. */
+    if (!Site.runningPeriod(day, now)) {
+        const carried = await Site.eveningBefore(now);
+        if (carried) day = await Site.dayData(Site.isoDate(Site.parseLocal(carried.start)));
+    }
+}
+
+function nextBoundary(at) {
+    /* The earliest instant, across every period of the day, that is still ahead of us:
+       either a colour change inside a period or the start of the next one. */
+    let soonest = null;
+    for (const period of day.periods) {
+        const moments = period.spans.map((s) => Site.parseLocal(s.from));
+        moments.push(Site.parseLocal(period.start), Site.parseLocal(period.end));
+        for (const moment of moments) {
+            if (moment && moment > at && (!soonest || moment < soonest)) soonest = moment;
+        }
+    }
+    return soonest;
+}
+
+function tick() {
+    if (!day) return;
+    const now = Site.now();
+
+    if (refreshAt && now >= refreshAt) {
+        loadDay().then(paint).catch((e) => Site.fail(e.message));
+        return;
+    }
+    paint(now);
+}
+
+function paint(at) {
+    const now = at instanceof Date ? at : Site.now();
+    const counter = document.querySelector("#counter");
+    const period = Site.runningPeriod(day, now);
+
+    if (!period) {
+        /* loadDay already looked at the evening before, so reaching here means the data
+           really does not cover this moment - a date missing from the device's CSV, for
+           instance. Re-read once a minute rather than on every tick, so a page left open
+           through a gap does not hammer the device. */
+        document.querySelector("#digits").textContent = "--:--";
+        counter.style.backgroundColor = day.countdown.default;
+        counter.style.color = day.countdown.text;
+        document.querySelector("#name").textContent = "";
+        if (!refreshAt || now >= refreshAt) {
+            refreshAt = new Date(now.getTime() + 60000);
+            loadDay().catch(() => {});
+        }
+        return;
+    }
+
+    const end = Site.parseLocal(period.end);
+    const remaining = Math.max(0, Math.floor((end - now) / 1000));
+    const hours = Math.floor(remaining / 3600);
+    const minutes = Math.floor((remaining % 3600) / 60);
+    document.querySelector("#digits").textContent =
+        `${Site.pad(hours)}:${Site.pad(minutes)}`;
+    document.querySelector("#name").textContent = period.display;
+
+    const span = Site.spanAt(period, now);
+    const color = span ? span.color : "beige";
+    /* The counter has no beige: period_state returns it for the ordinary middle of a
+       period, and there the app paints its neutral grey. Text is white throughout, as
+       paint_counter_page styles the page's labels. */
+    counter.style.backgroundColor = day.countdown.fill[color] || day.countdown.default;
+    counter.style.color = day.countdown.text;
+    document.querySelector("#notice").textContent =
+        span && span.makrooh ? day.makrooh_notice : "";
+
+    if (!refreshAt) refreshAt = nextBoundary(now);
+}
+
+loadDay().then(() => {
+    paint();
+    setInterval(tick, 1000);
+}).catch((e) => Site.fail(e.message));
+</script>
+</body>
+</html>

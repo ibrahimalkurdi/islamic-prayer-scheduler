@@ -1,0 +1,32 @@
+[Unit]
+Description=Prayer Scheduler Website (LAN)
+After=network.target
+
+[Service]
+User=ihms
+WorkingDirectory=/home/ihms/Desktop/scheduler
+ExecStart=/usr/bin/python3 /home/ihms/Desktop/scheduler/applications/services/web_ui/main.py
+Restart=always
+RestartSec=5
+# Port 80, so the address is plain http://<hostname>.local with nothing to remember.
+# This grants the one capability that needs, and nothing else - the process still runs as
+# the device user, not as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# No CapabilityBoundingSet here, deliberately. Clamping it to CAP_NET_BIND_SERVICE looks
+# like free hardening and is not: sudo is setuid-root, and the first thing it does is
+# setgid(0), which needs CAP_SETGID. Inside a clamped bounding set becoming root grants
+# nothing, so apply_settings.sh died on "unable to change to root gid" and the website's
+# save button could never restart the athan service. The ambient capability above is what
+# opens port 80; the bounding set was never what kept this process unprivileged - User=
+# is.
+# XDG_RUNTIME_DIR is deliberately NOT set here. It was, as /run/user/%U, and on a real
+# device %U resolved to 0 even with User= set above - so the service looked for PipeWire
+# and for the session bus under root's runtime directory, found neither, and every mute
+# fell back to killing the player. applications/shared/mute.py derives it from the
+# running process's own uid instead, which cannot be wrong, and sets the session bus
+# address with it.
+StandardOutput=append:/home/ihms/Desktop/scheduler/logs/web_ui.log
+StandardError=append:/home/ihms/Desktop/scheduler/logs/web_ui.log
+
+[Install]
+WantedBy=multi-user.target

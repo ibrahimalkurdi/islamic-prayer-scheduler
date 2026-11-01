@@ -30,6 +30,7 @@ ZONEINFO_DIR="/usr/share/zoneinfo"
 TIMEZONE_FILE="/etc/timezone"
 SYSCTL_DIR="/etc/sysctl.d"
 IPV6_OFF_NAME="config/sysctl/90-disable-ipv6.conf"
+DISPATCHER_DIR="/etc/NetworkManager/dispatcher.d"
 
 # id -u rather than $EUID, because $EUID is readonly in bash and a test cannot stand in
 # for it - and a root-only script with no way to exercise it is how the last one shipped
@@ -303,6 +304,58 @@ if [[ -f "$IPV6_OFF_SRC" ]]; then
         sysctl -q -p "$ipv6_installed" > /dev/null \
             || echo "WARNING: IPv6 stays on until the next boot" >&2
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# NetworkManager dispatcher scripts
+# ---------------------------------------------------------------------------
+# Whatever the release ships under config/NetworkManager/dispatcher.d, NetworkManager runs
+# as root on each link event. The Zero's 99-promisc is one: it puts wlan0 in promiscuous
+# mode every time the link comes up, which keeps the Wi-Fi from going silently deaf to
+# inbound traffic. Each is also run once as "<interface> up" when installed, so its
+# effect starts now rather than at the next reconnect.
+for script in "$SCHEDULER_DIR"/config/NetworkManager/dispatcher.d/*; do
+    [[ -f "$script" ]] || continue
+    installed="$DISPATCHER_DIR/$(basename "$script")"
+    if differs "$script" "$installed"; then
+        note "installing $installed"
+        if [[ $CHECK_ONLY -eq 0 ]]; then
+            if install -D -m 0755 -o root -g root "$script" "$installed"; then
+                "$installed" wlan0 up \
+                    || echo "WARNING: $(basename "$script") takes effect at the next reconnect" >&2
+            else
+                echo "WARNING: could not install $installed" >&2
+            fi
+        fi
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Services this hardware does without
+# ---------------------------------------------------------------------------
+# config/units-off.txt, one unit per line, for a device with too little memory to keep
+# what the OS starts by default - the Zero's list. Stopped and disabled, never removed:
+# `systemctl enable --now <unit>` brings any of them back. A unit only takes effect
+# because it is named here, so a service a release ships in config/systemd can never be
+# listed and switched off by mistake: those are installed and started below regardless.
+# A unit file an older setup copied into /etc/systemd/system is deleted as well, so that
+# nothing - an old settings script, a reinstall - can start it again.
+UNITS_OFF_FILE="$SCHEDULER_DIR/config/units-off.txt"
+if [[ -f "$UNITS_OFF_FILE" ]]; then
+    while read -r unit _; do
+        [[ "$unit" =~ ^[A-Za-z0-9@._-]+\.(service|socket|path|timer)$ ]] || continue
+        [[ -f "$SCHEDULER_DIR/config/systemd/$unit" ]] && continue
+        if systemctl is-enabled --quiet "$unit" 2> /dev/null \
+           || systemctl is-active --quiet "$unit" 2> /dev/null; then
+            note "switching off $unit"
+            [[ $CHECK_ONLY -eq 0 ]] && { systemctl disable --now "$unit" > /dev/null 2>&1 \
+                || echo "WARNING: could not switch off $unit" >&2; }
+        fi
+        if [[ -f "$UNIT_DIR/$unit" && ! -L "$UNIT_DIR/$unit" ]]; then
+            note "removing $UNIT_DIR/$unit"
+            [[ $CHECK_ONLY -eq 0 ]] && rm -f "$UNIT_DIR/$unit" && units_changed=1
+        fi
+    done < <(grep -v '^[[:space:]]*#' "$UNITS_OFF_FILE")
 fi
 
 # avahi is what answers for <hostname>.local, and every device on this fleet is reached

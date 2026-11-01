@@ -319,6 +319,17 @@ STUB
     # wrong answer for the one root job every other root job is routed through.
     chk "a helper that could not be replaced is named on that list" \
         "$(skipped | grep -c 'scheduler-apply-system')" "1"
+
+    # A device whose .local name was set by hand keeps its hostname: the user's name would
+    # give ihms-k the hostname ihms-lr already has, and the fleet page goes by hostname.
+    printf '[server]\nhost-name=ihms-k\n' > "$ROOT/avahi.conf"
+    cp "$REPO/scheduler-official-touch-screen-with-raspberry-pi-4/config/scripts/init.sh" \
+       "$FAKE_SCH/config/scripts/init.sh"
+    PATH="$UNATT:$PATH" HOME="$FAKE_HOME" DEVICE_MODEL_FILE="$ROOT/fake_model" \
+        AVAHI_CONF="$ROOT/avahi.conf" timeout 180 bash "$FAKE_SCH/config/scripts/init.sh" \
+        < /dev/null > "$ROOT/unattended-named.log" 2>&1
+    chk "a device named by hand in avahi keeps its hostname" \
+        "$(grep -c 'Hostname kept as .* - reachable at ihms-k.local' "$ROOT/unattended-named.log") $(grep -c 'Setting hostname' "$ROOT/unattended-named.log")" "1 0"
 fi
 
 echo "12. the .local name keeps working without anyone typing a password"
@@ -582,6 +593,73 @@ chk "a network NetworkManager will not change does not fail the run" "$(run)" "0
 chk "but is said out loud" "$(grep -c 'could not switch IPv6 off for network gggg-stuck' "$ROOT/out.log")" "1"
 unset STUB_nmcli_modify_EXIT
 rm -rf "$SCHED/config/sysctl" "$NM_PROFILES"
+
+echo "17. dispatcher scripts are installed and take effect, listed services are switched off"
+# A tree of its own, holding only what this section is about, and every system directory
+# pointed into the scratch area: the dispatcher is really run, so it must be the copy
+# installed here and never one on this machine.
+ZTREE="$ROOT/zero"; ZETC="$ROOT/zero-etc"
+mkdir -p "$ZTREE/config/NetworkManager/dispatcher.d" "$ZTREE/config/systemd" "$ZETC/units" "$ZETC/dispatcher.d"
+cat > "$ZTREE/config/NetworkManager/dispatcher.d/99-test" <<SCRIPT
+#!/bin/sh
+echo "dispatched \$1 \$2" >> "$ROOT/dispatched.log"
+SCRIPT
+printf '[Service]\nExecStart=/bin/true\n' > "$ZTREE/config/systemd/shipped.service"
+cat > "$ZTREE/config/units-off.txt" <<'LIST'
+# comment lines are skipped
+cups.service
+idle.service
+old-watchdog.service
+shipped.service
+not a unit; rm -rf /
+LIST
+echo "old" > "$ZETC/units/old-watchdog.service"
+ZBIN="$ROOT/zero-bin"; mkdir -p "$ZBIN"
+cat > "$ZBIN/install" <<'STUB'
+#!/bin/bash
+echo "install $*" >> "$CALLS"
+args=(); while [[ $# -gt 0 ]]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+exec /usr/bin/install "${args[@]}"
+STUB
+cat > "$ZBIN/systemctl" <<'STUB'
+#!/bin/bash
+echo "systemctl $*" >> "$CALLS"
+case "$1" in
+    is-enabled|is-active) [[ " $UNITS_ON " == *" ${@: -1} "* ]] && exit 0; exit 1 ;;
+    disable) UNITS_ON="" ;;
+esac
+exit 0
+STUB
+chmod +x "$ZBIN"/*
+sed -e "s|^SCHEDULER_DIR=.*|SCHEDULER_DIR=\"$ZTREE\"|" \
+    -e "s|^UNIT_DIR=.*|UNIT_DIR=\"$ZETC/units\"|" \
+    -e "s|^DISPATCHER_DIR=.*|DISPATCHER_DIR=\"$ZETC/dispatcher.d\"|" "$SRC" > "$ROOT/apply-zero.sh"
+zrun() {
+    : > "$CALLS"
+    PATH="$ZBIN:$BIN:$PATH" bash "$ROOT/apply-zero.sh" "$@" > "$ROOT/out.log" 2>&1
+    echo $?
+}
+export UNITS_ON="cups.service old-watchdog.service shipped.service"
+chk "with all of it pending, --check says so" "$(zrun --check)" "10"
+chk "and installs, runs and stops nothing" \
+    "$(grep -c '^install\|disable --now' "$CALLS")$([[ -e "$ROOT/dispatched.log" ]] && echo ran)" "0"
+chk "a full run succeeds" "$(zrun)" "0"
+chk "the dispatcher script is installed, executable" "$(stat -c %a "$ZETC/dispatcher.d/99-test")" "755"
+chk "and run once as the link coming up, so it works before the next reconnect" \
+    "$(cat "$ROOT/dispatched.log")" "dispatched wlan0 up"
+chk "a listed service that is on is switched off, an idle one left alone" \
+    "$(grep 'disable --now' "$CALLS" | awk '{print $4}' | tr '\n' ' ')" "cups.service old-watchdog.service "
+chk "a unit file an older setup copied in is deleted, so nothing restarts it" \
+    "$([[ -e "$ZETC/units/old-watchdog.service" ]] && echo there || echo gone)" "gone"
+chk "and systemd is told" "$(grep -c '^systemctl daemon-reload' "$CALLS")" "1"
+chk "a service the release ships is never switched off, even when listed" \
+    "$(grep -c 'disable --now shipped.service' "$CALLS") $(grep -c '^systemctl restart shipped.service' "$CALLS")" "0 1"
+chk "a line that is not a unit name is ignored" "$(grep -c 'rm -rf\|not a unit' "$CALLS")" "0"
+export UNITS_ON="shipped.service"
+rm -f "$ROOT/dispatched.log"
+chk "done, the nightly check finds nothing to do" "$(zrun --check)" "0"
+zrun > /dev/null
+chk "and a second run does not run the dispatcher again" "$([[ -e "$ROOT/dispatched.log" ]] && echo ran || echo quiet)" "quiet"
 
 echo
 if [[ ${#fails[@]} -eq 0 ]]; then

@@ -1,0 +1,976 @@
+#!/usr/bin/env python3
+"""The prayer pages and the settings form, over the LAN at http://<hostname>.local
+
+Runs as scheduler_web_ui.service. Python standard library only - there is nothing to pip
+install on the device, and nothing to keep updated. Roughly 20 MB resident, and no CPU at
+all while nobody has a page open: the countdown ticks in the browser and comes back only
+at the instants the colour changes.
+
+Serves no HTML of its own. The pages under site/ are plain files that fetch JSON, so the
+same directory can be uploaded to a static host later - see tools/build_static_site.py.
+
+No authentication, by choice: anyone on the LAN can change this device's settings, the
+same as anyone standing in front of its touch screen. See ADMIN_MANUAL.md section 16.
+"""
+
+import argparse
+import configparser
+import json
+import os
+import posixpath
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import zipfile
+from datetime import date as date_cls, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+# applications/, so "from shared import ..." works however the service was started.
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+
+from shared import (audio_lists, audio_upload, brightness, device_info,  # noqa: E402
+                    mute as mute_lib, os_timezone, prayer_logic, prayer_source, updates)
+import api  # noqa: E402
+
+DEFAULT_PORT = 80
+SITE_DIR = os.path.join(HERE, "site")
+
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".ttf": "font/ttf",
+    ".woff2": "font/woff2",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
+}
+
+# The pages, by the URL each is reached at. A fixed table rather than a path joined onto
+# SITE_DIR: nothing a request can say is ever turned into a file name.
+PAGES = {
+    "/": "daily/index.html",
+    "/countdown/": "countdown/index.html",
+    "/settings/": "settings/index.html",
+}
+# Where the daily list used to live, for a bookmark or home-screen icon made before it
+# became the landing page.
+MOVED = {"/daily/": "/"}
+# The assets those pages ask for, likewise fixed.
+ASSETS = ("app.css", "app.js", "config.js", "manifest.webmanifest")
+
+# Added to the home screen from a phone, the site should carry the same icon the touch
+# screen does rather than a blank page glyph. Served from config/icons/ for the reason
+# the font is served from the zip: they are already in every release payload, and a copy
+# under site/ would be the same picture shipped twice and able to drift.
+ICON_DIR = "config/icons"
+ICONS = {
+    "icon-32.png": "athan-app-icon-32.png",
+    "icon-128.png": "athan-app-icon-128.png",
+    "icon-256.png": "athan-app-icon-256.png",
+}
+
+# Amiri is what the touch screen draws in, and a phone on this LAN may have no route to
+# the internet to fetch a webfont - so it is served from here. Read out of the zip the
+# device already ships rather than committed a second time: 421 KB in every release
+# payload, for a file that is already in it.
+FONT_ZIP = "config/fonts/arabic-fonts/Amiri.zip"
+# URL name -> member of the zip. The bold face is real rather than synthesised by the
+# browser, for the counter and the running row's time.
+FONTS = {
+    "Amiri.ttf": "Amiri-Regular.ttf",
+    "Amiri-Bold.ttf": "Amiri-Bold.ttf",
+}
+
+APPLY_TIMEOUT_SECONDS = 300
+
+# The city sites on the public host, by the prayer table each is built from. Written by
+# static-website/alsakina/build.py. A device whose table is one of these offers the app from
+# its city's site; any other device simply does not.
+PUBLIC_SITES = os.path.join(HERE, "public_sites.json")
+PRAYER_SOURCE_KEY = "prayer_csv_source_label"
+
+# The app a device hands out runs on those sites and reaches the device from there - its
+# settings page and its speaker's mute and volume - so they may call the endpoints those
+# need. The browser still asks the user first (Local Network Access), per site.
+
+
+def public_app_origins():
+    """Our own sites, each named in full, and their previews (<hash>.<site>, made only by
+    the project's owner). Never a pattern: anyone can create a .pages.dev project, and
+    sakina-app.pages.dev is already a stranger's."""
+    try:
+        with open(PUBLIC_SITES, encoding="utf-8") as handle:
+            sites = list(json.load(handle).values())
+    except (OSError, ValueError, AttributeError):
+        sites = []
+    hosts = sorted({urllib.parse.urlsplit(site).hostname or ""
+                    for site in sites} - {""})
+    return re.compile(r"^https://([a-z0-9-]+\.)?(%s)$" % "|".join(map(re.escape, hosts)))
+
+
+PUBLIC_APP_ORIGIN = public_app_origins()
+PUBLIC_APP_PATHS = ("/api/mute", "/api/volume", "/api/device", "/api/settings", "/api/apply",
+                    "/api/prayer-source", "/api/reset", "/api/update",
+                    "/api/update/versions", "/api/update/auto", "/api/audio",
+                    "/api/audio/check", "/api/audio/delete", "/api/os-timezone",
+                    "/api/brightness")
+
+# The two jobs that outlive a request and restart this very service on the way: an update,
+# and the setup a reset runs. A child of this process would be killed with it - systemd
+# stops every process in a unit's cgroup - so each runs as a transient unit of the
+# desktop user's own systemd, under a fixed name that also says whether it is running.
+UPDATE_UNIT = "scheduler-web-update"
+RESET_UNIT = "scheduler-web-reset"
+JOB_START_TIMEOUT_SECONDS = 15
+# The version list comes from the network, slower than the app's 10 s limit for a call
+# to the device - so it is fetched in the background and the page asks again.
+VERSIONS_FRESH_SECONDS = 60
+# A brightness shown from a phone that then goes quiet - the page closed, the wifi gone -
+# goes back on its own rather than staying until the next boot.
+BRIGHTNESS_PREVIEW_SECONDS = 60
+
+
+class Device:
+    """Where this device keeps its things, and the one job that takes time."""
+
+    def __init__(self, scheduler_dir, desktop_dir):
+        self.scheduler_dir = scheduler_dir
+        self.desktop_dir = desktop_dir
+        self.ini_path = os.path.join(scheduler_dir, "config", "config.ini")
+        self.map_path = os.path.join(scheduler_dir, "config", "prayer_times_map.py")
+        self.apply_script = os.path.join(scheduler_dir, "config", "scripts",
+                                         "apply_settings.sh")
+        self.apply_log = os.path.join(scheduler_dir, "logs", "apply_settings.log")
+        # One save at a time, and never while the touch screen is mid-save either: both
+        # write config.ini and then run apply_settings.sh, and interleaving the two would
+        # rebuild the prayer map from a half-written file.
+        self.lock = threading.Lock()
+        self.apply_state = {"state": "idle", "log": ""}
+        self.versions = {"state": "idle", "versions": [], "latest": "", "at": 0}
+        self._versions_lock = threading.Lock()
+        self._fonts = {}
+        self._icons = {}
+        self.brightness_lock = threading.Lock()
+        self.brightness_before = None
+        self.brightness_timer = None
+
+    def font(self, name):
+        """One of FONTS, out of the zip, read once and kept."""
+        if name in self._fonts:
+            return self._fonts[name] or None
+        path = os.path.join(self.scheduler_dir, FONT_ZIP)
+        try:
+            with zipfile.ZipFile(path) as bundle:
+                self._fonts[name] = bundle.read(FONTS[name])
+        except (OSError, KeyError, zipfile.BadZipFile):
+            self._fonts[name] = b""
+        return self._fonts[name] or None
+
+    def icon(self, name):
+        """One of ICONS, read once and kept. Same shape as font() above."""
+        if name in self._icons:
+            return self._icons[name] or None
+        path = os.path.join(self.scheduler_dir, ICON_DIR, ICONS[name])
+        try:
+            with open(path, "rb") as handle:
+                self._icons[name] = handle.read()
+        except OSError:
+            self._icons[name] = b""
+        return self._icons[name] or None
+
+    def public_site(self):
+        """The public site for the prayer table this device was set to, or None.
+
+        Keyed by the table's file name, the one thing the Settings app records about
+        where the times came from."""
+        config = configparser.ConfigParser(interpolation=None)
+        try:
+            config.read(self.ini_path, encoding="utf-8")
+            with open(PUBLIC_SITES, encoding="utf-8") as handle:
+                sites = json.load(handle)
+        except (OSError, ValueError, configparser.Error):
+            return None
+        source = config.get("Settings", PRAYER_SOURCE_KEY, fallback="").strip()
+        return sites.get(os.path.basename(source)) if source else None
+
+    def reload_times(self):
+        """The prayer map is rewritten under a running server - by apply_settings.sh here,
+        from the Settings app, and by the new year's cron job - so it is re-read whenever
+        it has changed rather than held from startup."""
+        if prayer_logic.PRAYER_MAP_FILE != self.map_path:
+            prayer_logic.PRAYER_MAP_FILE = self.map_path
+            return prayer_logic.load_prayer_times()
+        if prayer_logic.prayer_times_changed():
+            return prayer_logic.load_prayer_times()
+        return True
+
+    def start_apply(self):
+        """Run apply_settings.sh off the request thread, as the Settings app runs it off
+        the UI thread. The page polls /api/apply rather than holding a connection open
+        for the several seconds it takes, plus the scheduler restart."""
+        if self.apply_state["state"] == "running":
+            return
+        self.apply_state = {"state": "running", "log": ""}
+        threading.Thread(target=self._apply, daemon=True).start()
+
+    def _apply(self):
+        try:
+            os.makedirs(os.path.dirname(self.apply_log), exist_ok=True)
+            result = subprocess.run(["bash", self.apply_script], capture_output=True,
+                                    text=True, timeout=APPLY_TIMEOUT_SECONDS)
+            output = result.stdout + result.stderr
+            with open(self.apply_log, "a", encoding="utf-8") as log:
+                log.write(f"\n==== web {datetime.now():%Y-%m-%d %H:%M:%S} ====\n")
+                log.write(output)
+            state = "ok" if result.returncode == 0 else "failed"
+        except subprocess.TimeoutExpired:
+            output = "apply_settings.sh did not finish."
+            state = "failed"
+        except OSError as error:
+            output = f"Failed to run apply_settings.sh: {error}"
+            state = "failed"
+        self.apply_state = {"state": state, "log": tail(output)}
+
+
+    # ---- jobs that outlive this service -----------------------------------
+    def launch(self, unit, argv, env=None):
+        """Start argv as a transient unit of the user's systemd. Returns "" or the reason
+        it could not be started."""
+        command = ["systemd-run", "--user", "--collect", "--quiet", f"--unit={unit}"]
+        command += [f"--setenv={key}={value}" for key, value in (env or {}).items()]
+        try:
+            result = subprocess.run(command + ["--", *argv], capture_output=True, text=True,
+                                    timeout=JOB_START_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError) as error:
+            return str(error)
+        return "" if result.returncode == 0 else (result.stderr or result.stdout).strip()
+
+    def brightness_lapse(self):
+        """A preview nobody confirmed: back to the value from before it."""
+        with self.brightness_lock:
+            before, self.brightness_before = self.brightness_before, None
+            self.brightness_timer = None
+        if before is None:
+            return
+        try:
+            brightness.write(before)
+        except brightness.BrightnessError as error:
+            print(f"brightness: could not go back to {before}%: {error}", flush=True)
+
+    def restore_brightness(self):
+        try:
+            value = brightness.restore(self.scheduler_dir, brightness.RESTORE_WAIT_SECONDS)
+        except brightness.BrightnessError as error:
+            print(f"brightness: {error}", flush=True)
+            return
+        if value is not None:
+            print(f"brightness: restored {value}%", flush=True)
+
+    def job_running(self, unit):
+        try:
+            return subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit],
+                                  timeout=JOB_START_TIMEOUT_SECONDS).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def fetch_versions(self, force=False):
+        """Start a fetch of the published versions and the approved one, unless one is
+        running or the last finished under a minute ago. Returns the cache as it is."""
+        with self._versions_lock:
+            fresh = time.time() - self.versions["at"] < VERSIONS_FRESH_SECONDS
+            if self.versions["state"] != "fetching" and (force or not fresh):
+                self.versions = dict(self.versions, state="fetching")
+                threading.Thread(target=self._fetch_versions, daemon=True).start()
+            return dict(self.versions)
+
+    def _fetch_versions(self):
+        found = {}
+        workers = [threading.Thread(target=lambda: found.update(
+                       versions=updates.published(self.scheduler_dir))),
+                   threading.Thread(target=lambda: found.update(
+                       latest=updates.latest(self.scheduler_dir)))]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        versions = found.get("versions") or []
+        self.versions = {"state": "ok" if versions else "failed", "versions": versions,
+                         "latest": found.get("latest", ""), "at": time.time()}
+
+
+def tail(text, lines=40):
+    return "\n".join(text.strip().splitlines()[-lines:])
+
+
+def local_ip():
+    """This device's address on the LAN, for a phone whose mDNS does not resolve .local.
+
+    Asked of the routing table rather than of DNS: gethostbyname on a Pi answers 127.0.1.1
+    from /etc/hosts. No packet is sent - a UDP socket only picks a route."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 1))
+        return probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+
+
+class Handler(BaseHTTPRequestHandler):
+    device = None
+    server_version = "scheduler-web"
+    sys_version = ""
+    protocol_version = "HTTP/1.1"
+
+    # ---- plumbing ---------------------------------------------------------
+    def log_message(self, fmt, *args):
+        sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+
+    def public_app(self):
+        """The Origin of the app a device hands out, when that is who is asking for one
+        of the endpoints it may use; otherwise None."""
+        origin = self.headers.get("Origin", "")
+        path = urllib.parse.urlsplit(self.path).path
+        if path in PUBLIC_APP_PATHS and PUBLIC_APP_ORIGIN.match(origin):
+            return origin
+        return None
+
+    def send_json(self, payload, status=200):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        if self.public_app():
+            self.send_header("Access-Control-Allow-Origin", self.public_app())
+            self.send_header("Vary", "Origin")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # Every answer is about this moment or about a file the touch screen may have
+        # rewritten. Nothing here may be served from a browser cache.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_bytes(self, body, content_type, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def fail(self, status, message):
+        self.send_json({"error": message}, status)
+
+    def same_origin(self):
+        """A POST must come from a page this device served.
+
+        Without this, any site a phone on this LAN happens to open could post to
+        http://<hostname>.local/api/settings in the background. There is no login to
+        steal, but there is no reason to let a stranger's page restart the scheduler."""
+        origin = self.headers.get("Origin")
+        if origin is None:
+            # A form posted by our own page always sends one. No Origin means something
+            # that is not a browser, which is fine from the LAN - curl, a script.
+            return self.headers.get("Sec-Fetch-Site") in (None, "same-origin")
+        host = self.headers.get("Host", "")
+        return origin in (f"http://{host}", f"https://{host}") or self.public_app() is not None
+
+    # ---- routing ----------------------------------------------------------
+    def do_GET(self):
+        path, query = self.split_path()
+        try:
+            if path in PAGES:
+                return self.serve_file(PAGES[path])
+            if path.rstrip("/") + "/" in MOVED:
+                return self.redirect(MOVED[path.rstrip("/") + "/"])
+            # "/countdown" without the slash is what someone types.
+            if path.rstrip("/") + "/" in PAGES and path != "/":
+                return self.redirect(path.rstrip("/") + "/")
+            if path.startswith("/static/"):
+                return self.serve_asset(path[len("/static/"):])
+            if path == "/api/day":
+                return self.api_day(query)
+            if path == "/api/settings":
+                return self.api_settings_get()
+            if path == "/api/mute":
+                return self.api_mute_get()
+            if path == "/api/volume":
+                return self.api_volume_get()
+            if path == "/api/apply":
+                return self.send_json(self.device.apply_state)
+            if path == "/api/device":
+                return self.api_device()
+            if path == "/api/update":
+                return self.api_update_get()
+            if path == "/api/update/versions":
+                return self.send_json(self.device.fetch_versions(
+                    force=bool(query.get("refresh"))))
+            if path == "/api/reset":
+                return self.send_json({"running": self.device.job_running(RESET_UNIT)})
+            if path == "/api/brightness":
+                return self.send_json(brightness.status(self.device.scheduler_dir)
+                                      or {"available": False})
+            return self.fail(404, "not found")
+        except Exception as error:  # a broken page must not take the service down
+            self.log_message("error on %s: %s", path, error)
+            return self.fail(500, str(error))
+
+    def do_OPTIONS(self):
+        """The preflight Chrome sends before the app's mute request, with Local Network
+        Access's own header answered too."""
+        origin = self.public_app()
+        if origin is None:
+            return self.fail(403, "cross-origin request refused")
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self):
+        path, query = self.split_path()
+        if not self.same_origin():
+            return self.fail(403, "cross-origin request refused")
+        try:
+            if path == "/api/settings":
+                return self.api_settings_post()
+            if path == "/api/mute":
+                return self.api_mute_post()
+            if path == "/api/volume":
+                return self.api_volume_post()
+            if path == "/api/prayer-source":
+                return self.api_prayer_source_post()
+            if path == "/api/reset":
+                return self.api_reset_post()
+            if path == "/api/update":
+                return self.api_update_post()
+            if path == "/api/update/auto":
+                return self.api_update_auto_post()
+            if path == "/api/audio/check":
+                return self.api_audio_check_post()
+            if path == "/api/audio":
+                return self.api_audio_post(query)
+            if path == "/api/audio/delete":
+                return self.api_audio_delete_post()
+            if path == "/api/os-timezone":
+                return self.api_os_timezone_post()
+            if path == "/api/brightness":
+                return self.api_brightness_post()
+            return self.fail(404, "not found")
+        except Exception as error:
+            self.log_message("error on %s: %s", path, error)
+            return self.fail(500, str(error))
+
+    def split_path(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        path = urllib.parse.unquote(parsed.path)
+        if not path.startswith("/"):
+            path = "/" + path
+        return posixpath.normpath(path) + ("/" if path.endswith("/") and path != "/" else ""), \
+            urllib.parse.parse_qs(parsed.query)
+
+    def redirect(self, to):
+        self.send_response(301)
+        self.send_header("Location", to)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    # ---- files ------------------------------------------------------------
+    def serve_file(self, relative):
+        full = os.path.join(SITE_DIR, relative)
+        try:
+            with open(full, "rb") as handle:
+                body = handle.read()
+        except OSError:
+            return self.fail(404, "not found")
+        suffix = os.path.splitext(full)[1]
+        self.send_bytes(body, CONTENT_TYPES.get(suffix, "application/octet-stream"))
+
+    def serve_asset(self, name):
+        if name in FONTS:
+            return self.serve_font(name)
+        if name in ICONS:
+            return self.serve_icon(name)
+        if name not in ASSETS:
+            return self.fail(404, "not found")
+        self.serve_file(name)
+
+    def serve_icon(self, name):
+        body = self.device.icon(name)
+        if body is None:
+            # A missing icon is a page without one, not a page that fails to load.
+            return self.fail(404, "icon not installed")
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPES[".png"])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_font(self, name):
+        body = self.device.font(name)
+        if body is None:
+            # The page names a fallback stack, so a missing font is a plainer screen
+            # rather than a broken one.
+            return self.fail(404, "font not installed")
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPES[".ttf"])
+        self.send_header("Content-Length", str(len(body)))
+        # The one thing here that never changes between requests.
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
+
+    # ---- api --------------------------------------------------------------
+    def api_day(self, query):
+        self.device.reload_times()
+        raw = (query.get("date") or [None])[0]
+        try:
+            when = date_cls.fromisoformat(raw) if raw else datetime.now().date()
+        except ValueError:
+            return self.fail(400, "date must be YYYY-MM-DD")
+        payload = api.day_payload(when)
+        if payload is None:
+            return self.fail(404, f"no prayer times for {when.isoformat()}")
+        payload["now"] = datetime.now().isoformat(timespec="seconds")
+        self.send_json(payload)
+
+    def api_device(self):
+        self.send_json({
+            "hostname": socket.gethostname(),
+            "ip": local_ip(),
+            "now": datetime.now().isoformat(timespec="seconds"),
+            # Read per request rather than at startup: an update rewrites the file under
+            # a server that keeps running, and the daily page prints this the same way
+            # the touch screen's daily list does.
+            "version": device_info.installed_version(self.device.scheduler_dir),
+            "public_site": self.device.public_site(),
+        })
+
+    def api_settings_get(self):
+        self.send_json(api.settings_payload(self.device.ini_path,
+                                            self.device.scheduler_dir,
+                                            self.device.desktop_dir))
+
+    def api_settings_post(self):
+        submitted = self.read_json()
+        if submitted is None:
+            return self.fail(400, "expected a JSON object")
+
+        if not self.device.lock.acquire(blocking=False):
+            return self.fail(409, "جارٍ حفظ إعدادات أخرى، حاول بعد قليل")
+        try:
+            api.apply_submission(self.device.ini_path, self.device.scheduler_dir,
+                                 self.device.desktop_dir, submitted)
+        except api.Invalid as refusal:
+            return self.fail(400, str(refusal))
+        except api.NeedsConfirmation as question:
+            return self.send_json({"saved": False, "confirm": str(question)})
+        finally:
+            self.device.lock.release()
+
+        self.device.start_apply()
+        self.send_json({"saved": True})
+
+    def api_prayer_source_post(self):
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        if not self.device.lock.acquire(blocking=False):
+            return self.fail(409, "جارٍ حفظ إعدادات أخرى، حاول بعد قليل")
+        try:
+            chosen = api.choose_prayer_source(
+                self.device.ini_path, self.device.scheduler_dir, self.device.desktop_dir,
+                str(body.get("name") or ""), restore=bool(body.get("restore")),
+                confirmed=bool(body.get("confirmed")))
+        except api.Invalid as refusal:
+            return self.fail(400, str(refusal))
+        except api.NeedsConfirmation as question:
+            return self.send_json({"saved": False, "confirm": str(question)})
+        finally:
+            self.device.lock.release()
+        # The touch screen leaves this to its save button. Here there is no reason to wait:
+        # the new times are only in the schedule once it is rebuilt.
+        self.device.start_apply()
+        self.send_json({"saved": True, "chosen": chosen})
+
+    def api_audio_check_post(self):
+        """Asked before an upload, so a name already in the folder is asked about before
+        the file is sent rather than after."""
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        try:
+            question = audio_upload.exists_question(
+                self.device.scheduler_dir, str(body.get("folder") or ""),
+                str(body.get("name") or ""))
+        except audio_upload.UploadError as refusal:
+            return self.fail(400, str(refusal))
+        self.send_json({"confirm": question} if question else {})
+
+    def api_audio_post(self, query):
+        """The file itself, as the request body - no multipart to take apart, and the
+        folder and name in the query string. It is written straight to the card in pieces,
+        so a long recitation never sits whole in memory."""
+        def first(key):
+            return (query.get(key) or [""])[0]
+
+        try:
+            path = audio_upload.target(self.device.scheduler_dir, first("folder"), first("name"))
+            if os.path.exists(path) and first("replace") != "1":
+                raise audio_upload.UploadError("يوجد ملف بهذا الاسم في المجلد")
+            size = int(self.headers.get("Content-Length", ""))
+            saved = audio_upload.save(self.rfile, size, path)
+        except ValueError:
+            self.close_connection = True
+            return self.fail(411, "حجم الملف غير معروف")
+        except audio_upload.UploadError as refusal:
+            # Whatever of the body was not read is still on the connection, and would be
+            # taken for the next request.
+            self.close_connection = True
+            return self.fail(400, str(refusal))
+        self.log_message("audio: saved %s/%s", first("folder"), saved)
+        self.send_json({"saved": True, "folder": first("folder"), "name": saved,
+                        "available": audio_lists.available_audio(os.path.dirname(path))})
+
+    def api_audio_delete_post(self):
+        """Files deleted from one folder, asked about first. They are unticked at once,
+        and an event left with none ticked is switched off and the schedule rebuilt."""
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        folder = str(body.get("folder") or "")
+        names = body.get("names")
+        if not isinstance(names, list):
+            return self.fail(400, "expected a list of names")
+        names = [str(n) for n in names]
+        if not self.device.lock.acquire(blocking=False):
+            return self.fail(409, "جارٍ حفظ إعدادات أخرى، حاول بعد قليل")
+        try:
+            if not body.get("confirmed"):
+                return self.send_json({"confirm": audio_upload.delete_question(
+                    self.device.scheduler_dir, self.device.ini_path, folder, names)})
+            deleted, ticked, switched_off = audio_upload.delete(
+                self.device.scheduler_dir, self.device.ini_path, folder, names)
+        except audio_upload.UploadError as refusal:
+            return self.fail(400, str(refusal))
+        finally:
+            self.device.lock.release()
+        self.log_message("audio: deleted %s/%s", folder, ", ".join(deleted))
+        key = audio_upload.CHECKED_KEYS[folder]
+        if switched_off:
+            self.device.start_apply()
+        self.send_json({"deleted": deleted, "folder": folder, "checked": ticked,
+                        "switched_off": audio_lists.EVENT_ENABLE_KEYS[key] if switched_off
+                        else "",
+                        "available": audio_lists.available_audio(
+                            audio_lists.audio_dir(self.device.scheduler_dir, folder))})
+
+    def api_os_timezone_post(self):
+        """The clock's own zone, asked about first: the device reboots to take it."""
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        zone = str(body.get("zone") or "")
+        table, _ = api.timezones(self.device.scheduler_dir)
+        if not os_timezone.known(zone, table):
+            return self.fail(400, "المنطقة الزمنية غير معروفة")
+        if zone == os_timezone.current():
+            return self.fail(400, "ساعة الجهاز على هذه المنطقة الزمنية أصلًا")
+        if not body.get("confirmed"):
+            section = api.read_config(self.device.ini_path)["Settings"]
+            offered = os_timezone.prayer_offer(
+                zone, table, self.device.scheduler_dir,
+                section.get(prayer_source.SOURCE_LABEL_KEY, "")) or []
+            hand_edits = bool(offered) and prayer_source.may_hold_hand_edits(
+                section, prayer_source.reference_file(self.device.desktop_dir))
+            return self.send_json({"confirm": os_timezone.question(zone, table, offered,
+                                                                   hand_edits),
+                                   "prayer_files": offered})
+        # The schedule is rebuilt for the new zone on the way, so not beside another save.
+        if not self.device.lock.acquire(blocking=False):
+            return self.fail(409, "جارٍ حفظ إعدادات أخرى، حاول بعد قليل")
+        try:
+            os_timezone.change(zone, table, self.device.scheduler_dir, self.device.desktop_dir,
+                               str(body.get("prayer_file") or "") or None)
+        except os_timezone.ZoneError as error:
+            return self.fail(500, str(error))
+        finally:
+            self.device.lock.release()
+        self.log_message("os timezone: %s, rebooting", zone)
+        self.send_json({"rebooting": True, "zone": zone})
+
+    def api_brightness_post(self):
+        """{"percent": n} shows n on the screen at once and keeps it only for
+        BRIGHTNESS_PREVIEW_SECONDS; {"percent": n, "confirmed": true} keeps it;
+        {"cancel": true} goes back to the value from before the first preview."""
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        device = self.device
+        try:
+            with device.brightness_lock:
+                if device.brightness_timer is not None:
+                    device.brightness_timer.cancel()
+                    device.brightness_timer = None
+                if device.brightness_before is None:
+                    device.brightness_before = brightness.confirmed(device.scheduler_dir)
+                before = device.brightness_before
+                if body.get("cancel"):
+                    if before is not None:
+                        brightness.write(before)
+                    device.brightness_before = None
+                    self.log_message("brightness: back to %s%%", before)
+                elif body.get("confirmed"):
+                    value = brightness.save(device.scheduler_dir,
+                                            brightness.write(body.get("percent")))
+                    device.brightness_before = None
+                    self.log_message("brightness: %s%% -> %s%%", before, value)
+                else:
+                    value = brightness.write(body.get("percent"))
+                    device.brightness_timer = threading.Timer(
+                        BRIGHTNESS_PREVIEW_SECONDS, device.brightness_lapse)
+                    device.brightness_timer.daemon = True
+                    device.brightness_timer.start()
+                    return self.send_json(dict(brightness.status(device.scheduler_dir),
+                                               saved=before, before=before,
+                                               confirm=brightness.question(before, value)))
+        except brightness.BrightnessError as error:
+            return self.fail(400, str(error))
+        self.send_json(brightness.status(device.scheduler_dir) or {"available": False})
+
+    def api_reset_post(self):
+        if self.device.job_running(RESET_UNIT):
+            return self.fail(409, "جارٍ إعادة الضبط")
+        if not self.device.lock.acquire(blocking=False):
+            return self.fail(409, "جارٍ حفظ إعدادات أخرى، حاول بعد قليل")
+        try:
+            api.reset_settings(self.device.ini_path, self.device.scheduler_dir)
+        finally:
+            self.device.lock.release()
+        # Then setup, as the touch screen's reset runs it: applying the reset settings, and
+        # without the update check at its end, which would leave the countdown closed on a
+        # screen nobody is at.
+        reason = self.device.launch(
+            RESET_UNIT, ["/bin/bash", os.path.join(self.device.scheduler_dir, "config",
+                                                    "scripts", "init.sh")],
+            env={"SCHEDULER_INIT_NO_UPDATE_CHECK": "1", "SCHEDULER_INIT_APPLY_SETTINGS": "1"})
+        if reason:
+            self.log_message("reset: setup not started: %s", reason)
+            self.device.start_apply()
+        self.send_json({"reset": True, "setup": not reason})
+
+    def api_update_get(self):
+        check = updates.check_time(os.path.join(self.device.scheduler_dir, "config",
+                                                "crontab.txt"))
+        self.send_json({
+            "status": updates.status(self.device.scheduler_dir),
+            "check_time": api.minutes_to_clock(check[0] * 60 + check[1]) if check else None,
+            "running": self.device.job_running(UPDATE_UNIT),
+            "versions": dict(self.device.versions),
+        })
+
+    def start_update(self, args):
+        if self.device.job_running(UPDATE_UNIT):
+            return "جارٍ تحديث البرنامج"
+        reason = self.device.launch(UPDATE_UNIT, ["/bin/bash", updates.script(
+            self.device.scheduler_dir), "--remote", *args])
+        if reason:
+            self.log_message("update: not started: %s", reason)
+            return "تعذّر بدء التحديث من هنا، استخدم شاشة الجهاز."
+        return ""
+
+    def write_update_conf(self, key, value):
+        updates.write_conf(updates.conf_file(self.device.scheduler_dir), key, value)
+
+    def api_update_post(self):
+        """Update now, or install one version - up, or back down to an older one or the
+        backup kept on the device."""
+        body = self.read_json()
+        if body is None:
+            return self.fail(400, "expected a JSON object")
+        action = body.get("action")
+        if action == "now":
+            args = ["--now"]
+        elif action in ("target", "rollback"):
+            version = str(body.get("version") or "")
+            status = updates.status(self.device.scheduler_dir)
+            backup = status.get("rollback_to") or ""
+            if action == "rollback" and version and version == backup \
+                    and backup != status.get("installed"):
+                args = ["--rollback"]
+            elif version in self.device.versions["versions"]:
+                args = ["--target", version]
+            else:
+                return self.fail(400, "افتح القائمة واختر إصدارًا منها.")
+            auto = bool(status.get("enabled", True)) and not status.get("pinned")
+            if auto and version != self.device.versions["latest"]:
+                if not body.get("confirmed"):
+                    return self.send_json({"started": False,
+                                           "confirm": updates.hold_question(version)})
+                self.write_update_conf("ENABLED", "false")
+        else:
+            return self.fail(400, "unknown action")
+        refusal = self.start_update(args)
+        if refusal:
+            return self.fail(409, refusal)
+        self.send_json({"started": True})
+
+    def api_update_auto_post(self):
+        """The daily check on or off. On, it takes the device to the approved version at
+        once if it is not there - asked first, as the touch screen asks."""
+        body = self.read_json()
+        if body is None or not isinstance(body.get("enabled"), bool):
+            return self.fail(400, "expected {\"enabled\": true|false}")
+        if not body["enabled"]:
+            self.write_update_conf("ENABLED", "false")
+            return self.send_json({"saved": True, "started": False})
+        installed = updates.status(self.device.scheduler_dir).get("installed") or ""
+        latest = self.device.versions["latest"]
+        question = updates.enable_question(installed, latest)
+        if question and not body.get("confirmed"):
+            return self.send_json({"saved": False, "confirm": question})
+        self.write_update_conf("ENABLED", "true")
+        self.write_update_conf("PIN", "")
+        refusal = self.start_update(["--now"]) if question else ""
+        if refusal:
+            return self.fail(409, refusal)
+        self.send_json({"saved": True, "started": bool(question)})
+
+    def api_mute_get(self):
+        expiry = mute_lib.mute_expiry()
+        sink = mute_lib.audio_is_muted()
+        reason = mute_lib.last_error()
+        if sink is None and reason:
+            # Logged as well as sent: the page has room for one short line, and this is
+            # the sentence that says which of wpctl, PipeWire or XDG_RUNTIME_DIR is at
+            # fault. Without it "the speaker could not be reached" is a dead end.
+            self.log_message("mute: %s (XDG_RUNTIME_DIR=%s)", reason,
+                             os.environ.get("XDG_RUNTIME_DIR", "unset"))
+        self.send_json({
+            "muted": sink if sink is not None else mute_lib.is_muted(),
+            "flag_until": (datetime.fromtimestamp(expiry).isoformat(timespec="seconds")
+                           if expiry else None),
+            "sink_reachable": sink is not None,
+            "reason": reason if sink is None else "",
+            "runtime_dir": os.environ.get("XDG_RUNTIME_DIR", ""),
+            "minutes": mute_lib.MUTE_DURATION_MINUTES,
+        })
+
+    def api_mute_post(self):
+        body = self.read_json() or {}
+        want = body.get("muted")
+        if want is None:
+            want = not mute_lib.is_muted()
+        want = bool(want)
+
+        if want:
+            mute_lib.write_mute_flag()
+            # Only if the device cannot be silenced is the player killed instead. That
+            # silences it just as fast but cannot be undone, so it is the last resort -
+            # the same order the touch screen's own button uses.
+            if not mute_lib.audio_set_mute(True):
+                mute_lib.stop_current_audio()
+        else:
+            mute_lib.clear_mute_flag()
+            mute_lib.audio_set_mute(False)
+
+        self.api_mute_get()
+
+    def api_volume_get(self):
+        mute_lib.restore_lapsed_volume()
+        held = mute_lib.temporary_volume()
+        level = mute_lib.audio_volume()
+        self.send_json({
+            "volume": level,
+            "reachable": level is not None,
+            "until": (datetime.fromtimestamp(held["until"]).isoformat(timespec="seconds")
+                      if held else None),
+            "restore": held["restore"] if held else None,
+            "minutes": mute_lib.VOLUME_DURATION_MINUTES,
+            "default": mute_lib.DEFAULT_VOLUME,
+        })
+
+    def api_volume_post(self):
+        body = self.read_json() or {}
+        level = body.get("volume")
+        if isinstance(level, bool) or not isinstance(level, (int, float)) or not 0 <= level <= 100:
+            return self.fail(400, "volume must be a number from 0 to 100")
+        if not mute_lib.set_volume(round(level), permanent=bool(body.get("permanent"))):
+            self.log_message("volume: %s", mute_lib.last_error())
+            return self.fail(503, "تعذّر الوصول إلى مكبر الصوت")
+        self.api_volume_get()
+
+    def read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None
+        if length <= 0 or length > 1_000_000:
+            return None
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+
+def watch_volume():
+    """Puts back the volume a temporary one replaced once its hour is up, whether or not
+    any page is open - this server is the one part always running."""
+    while True:
+        try:
+            mute_lib.restore_lapsed_volume()
+        except Exception as error:  # the next round tries again
+            print(f"volume: {error}", file=sys.stderr, flush=True)
+        time.sleep(mute_lib.VOLUME_CHECK_SECONDS)
+
+
+def build_server(scheduler_dir, desktop_dir, port, bind="0.0.0.0"):
+    device = Device(scheduler_dir, desktop_dir)
+    device.reload_times()
+
+    handler = type("BoundHandler", (Handler,), {"device": device})
+    server = ThreadingHTTPServer((bind, port), handler)
+    server.daemon_threads = True
+    return server, device
+
+
+def main():
+    home = os.path.expanduser("~")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--bind", default="0.0.0.0")
+    parser.add_argument("--scheduler-dir",
+                        default=os.path.join(home, "Desktop", "scheduler"))
+    parser.add_argument("--desktop-dir", default=os.path.join(home, "Desktop"))
+    args = parser.parse_args()
+
+    server, device = build_server(args.scheduler_dir, args.desktop_dir, args.port, args.bind)
+    threading.Thread(target=device.restore_brightness, daemon=True).start()
+    threading.Thread(target=watch_volume, daemon=True).start()
+    address = local_ip() or args.bind
+    print(f"Prayer scheduler website on http://{socket.gethostname()}.local"
+          f"{'' if args.port == 80 else ':' + str(args.port)}"
+          f"  (http://{address}{'' if args.port == 80 else ':' + str(args.port)})",
+          flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

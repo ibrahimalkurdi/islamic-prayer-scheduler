@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-MAIN_DIR="/home/ihms/Desktop/scheduler"
+# Resolved dynamically - this is spawned by the audio-scheduler service, which runs as
+# a real desktop user (not root), so systemd already sets $HOME correctly for it.
+MAIN_DIR="$HOME/Desktop/scheduler"
 
 # -------------------------------
 # Logging
@@ -21,6 +23,7 @@ log() {
 PRAYER_NAME="${1:-}"
 AUDIO_MP3_LIST="${2:-}"
 LOCK_FILE="$MAIN_DIR/var/player.lock"
+MUTE_FLAG_FILE="$MAIN_DIR/var/mute.flag"
 AUDIO_DIR="$MAIN_DIR/audio"
 VLC_PID=""
 CURRENT_HOUR=$(date +%H)
@@ -29,6 +32,22 @@ PRIORITY_PRAYERS=("fajr" "dhuhr" "asr" "maghrib" "isha")
 PRAYER_NAME_LOWER="${PRAYER_NAME,,}"
 
 
+
+# -------------------------------
+# Mute
+# -------------------------------
+# Set from the prayer GUI's mute button. Checked here as well as in the scheduler so
+# that anything else invoking this script stays silent too. Deliberately placed before
+# the cleanup trap is armed: there is no lock and no player to tear down yet.
+# The flag holds the epoch second the mute lapses, so an expired one is ignored even
+# if nothing has got round to deleting it yet.
+if [[ -f "$MUTE_FLAG_FILE" ]]; then
+    MUTE_UNTIL="$(cat "$MUTE_FLAG_FILE" 2>/dev/null || true)"
+    if [[ "$MUTE_UNTIL" =~ ^[0-9]+$ ]] && (( $(date +%s) < MUTE_UNTIL )); then
+        log "Muted until $(date -d "@$MUTE_UNTIL" '+%H:%M') - skipping ${PRAYER_NAME:-unknown}"
+        exit 0
+    fi
+fi
 
 # -------------------------------
 # Cleanup handler
@@ -42,7 +61,7 @@ cleanup() {
         kill -KILL "$VLC_PID" 2>/dev/null || true
     fi
 
-    flock -u 200
+    flock -u 200 2>/dev/null || true
     rm -f "$LOCK_FILE"
 }
 
@@ -120,6 +139,9 @@ else
         maghrib)        PLAYER_DIR="$AUDIO_DIR/maghrib" ;;
         athkar_elmasa)  PLAYER_DIR="$AUDIO_DIR/athkar_elmasa" ;;
         isha)           PLAYER_DIR="$AUDIO_DIR/isha" ;;
+        # The schedule calls this event "sunrise"; its audio lives under the
+        # Arabic transliteration of the same prayer.
+        sunrise)        PLAYER_DIR="$AUDIO_DIR/shorooq" ;;
         tahajjud)       PLAYER_DIR="$AUDIO_DIR/tahajjud" ;;
         quran)          PLAYER_DIR="$AUDIO_DIR/quran" ;;
         # Surat Al-Kahf, played on Fridays only. A separate folder rather than a
@@ -128,7 +150,7 @@ else
         friday_quran)   PLAYER_DIR="$AUDIO_DIR/friday_quran" ;;
         *)
             log "ERROR: Unknown prayer '$PRAYER_NAME'"
-            log "Allowed: fajr, duha, athkar_elsabah, dhuhr, asr, maghrib, athkar_elmasa, isha, tahajjud, quran, friday_quran"
+            log "Allowed: fajr, sunrise, duha, athkar_elsabah, dhuhr, asr, maghrib, athkar_elmasa, isha, tahajjud, quran, friday_quran"
             exit 1
             ;;
     esac
@@ -147,6 +169,8 @@ if [[ "$PRAYER_NAME_LOWER" == "isha" && "$CURRENT_HOUR" -ge 22 ]]; then
     FILES=("$AUDIO_DIR/fajr"/*.mp3)
     shopt -u nullglob
 else
+    # Only the files ticked in Settings. None ticked plays nothing: Settings switches
+    # such an event off on save, and an empty list here must not mean "the whole folder".
     if [[ -n "$AUDIO_MP3_LIST" ]]; then
         IFS=',' read -ra AUDIO_NAMES <<< "$AUDIO_MP3_LIST"
 
@@ -159,10 +183,6 @@ else
                 log "WARNING: Audio file not found: $file"
             fi
         done
-    else
-        shopt -s nullglob
-        FILES=("$PLAYER_DIR"/*.mp3)
-        shopt -u nullglob
     fi
 fi
 

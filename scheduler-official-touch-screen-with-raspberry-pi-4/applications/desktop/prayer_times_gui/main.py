@@ -31,6 +31,7 @@ from shared.prayer_logic import (
     MAKROOH_LABEL, MAKROOH_NAFL_NOTICE, MAKROOH_AT_PERIOD_END, MAKROOH_KEEPS_RED,
 )
 from shared import device_info
+from shared.display import apply_screen_scale
 from shared.internet_status import InternetMonitor, OFFLINE_BG, SHORT_OFFLINE_MESSAGE
 from shared.wifi import WifiMonitor
 # The picker sits beside this file. Found from here rather than from the script's own
@@ -1759,6 +1760,7 @@ class AdhanCounter(QWidget):
 # Run app
 # -------------------------
 if __name__ == "__main__":
+    apply_screen_scale(SCHEDULER_DIR)
     app = QApplication(sys.argv)
     # The panel's task list is handed a window's app_id and nothing else, and for an
     # XWayland window that app_id is the WM_CLASS Qt derives from argv[0] - "main.py",

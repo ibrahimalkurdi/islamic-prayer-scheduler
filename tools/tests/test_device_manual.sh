@@ -75,6 +75,13 @@ chk "and says so" "$(grep -c "skipped" "$WORK/log")" "1"
 chk "and leaves nothing half-made" "$(ls "$WORK/home/Desktop" | grep -c pdf)" "0"
 run louay MANUAL_PYTHON=/usr/bin/false > "$WORK/log" 2>&1
 chk "no segno is skipped, exit 0" "$?" "0"
+printf 'MemTotal:         434308 kB\n' > "$WORK/meminfo-zero"
+run louay MEMINFO="$WORK/meminfo-zero" CHROMIUM=/bin/false > "$WORK/log" 2>&1
+chk "a Zero's 425 MB is skipped before chromium is started, exit 0" \
+    "$? $(grep -c "too little memory for chromium - skipped" "$WORK/log")" "0 1"
+printf 'MemTotal:         927760 kB\n' > "$WORK/meminfo-pi4"
+run louay MEMINFO="$WORK/meminfo-pi4" CHROMIUM=/bin/false > "$WORK/log" 2>&1
+chk "a 1 GB Pi 4 still goes on to print" "$(grep -c "too little memory" "$WORK/log")" "0"
 run "bad name" > "$WORK/log" 2>&1
 chk "a hostname that is no .local name is skipped" "$(grep -c "cannot be a .local name" "$WORK/log")" "1"
 mv "$SCHED/applications/manual_cover/cover.json" "$WORK/"

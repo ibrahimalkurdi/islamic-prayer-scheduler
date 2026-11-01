@@ -1,0 +1,13 @@
+[Unit]
+Description=Install the scheduler root helper this release ships
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# No User=, so this runs as root. set_device_user.sh rewrites only /home/ihms and an
+# anchored User=, so leaving it out is what keeps it root on every device.
+ExecStart=/home/ihms/Desktop/scheduler/config/scripts/install_helper.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

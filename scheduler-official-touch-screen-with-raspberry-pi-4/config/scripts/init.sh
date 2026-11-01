@@ -335,7 +335,14 @@ TARGET_HOSTNAME="${TARGET_HOSTNAME//[^a-z0-9-]/-}"
 TARGET_HOSTNAME="${TARGET_HOSTNAME#-}"
 TARGET_HOSTNAME="${TARGET_HOSTNAME%-}"
 
-if [[ -z "$TARGET_HOSTNAME" || "$TARGET_HOSTNAME" == "root" ]]; then
+AVAHI_NAME="$(sed -n 's/^[[:space:]]*host-name[[:space:]]*=[[:space:]]*//p' \
+    "${AVAHI_CONF:-/etc/avahi/avahi-daemon.conf}" 2> /dev/null | tail -n 1)"
+
+if [[ -n "$AVAHI_NAME" ]]; then
+    # Named by hand in avahi - ihms-k, a second device under the same user as ihms-lr. The
+    # user's name would give both one hostname, and the fleet page tells devices apart by it.
+    echo "Hostname kept as $(hostname) - reachable at $AVAHI_NAME.local"
+elif [[ -z "$TARGET_HOSTNAME" || "$TARGET_HOSTNAME" == "root" ]]; then
     # Running this as root would name the device "root" and leave the real user's
     # install half-done - every other path here already assumes a desktop user.
     echo "WARNING: no usable hostname from user '$USER' - leaving it as $(hostname)"

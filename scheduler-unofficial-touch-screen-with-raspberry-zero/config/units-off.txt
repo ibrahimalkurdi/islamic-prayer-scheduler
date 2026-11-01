@@ -1,0 +1,24 @@
+# Read by scheduler-apply-system (system_apply.sh): stopped and disabled on every setup and
+# nightly update, never uninstalled - `sudo systemctl enable --now <unit>` brings one back.
+#
+# The Zero 2 W has 512 MB, half of it held for the screen. Nothing on it prints, dials a
+# modem, manages colour profiles, mounts NFS or runs containers; together these held
+# about 30 MB.
+docker.service
+docker.socket
+containerd.service
+cups.service
+cups.socket
+cups.path
+cups-browsed.service
+ModemManager.service
+colord.service
+rpcbind.service
+rpcbind.socket
+nfs-blkmap.service
+
+# The Zero's old watchdog. It only pinged the router, which keeps answering while the
+# Wi-Fi is deaf to inbound traffic - the fault that took the Zero offline - and it
+# reconnected up to 150 times a day on false alarms. config/NetworkManager/dispatcher.d/
+# 99-promisc fixes that fault instead, and NetworkManager brings a dropped link back.
+wifi_connectivity_resolver.service

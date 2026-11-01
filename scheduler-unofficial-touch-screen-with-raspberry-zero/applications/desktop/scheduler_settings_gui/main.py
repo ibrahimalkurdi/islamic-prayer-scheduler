@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import sys
 import os
+import glob
 import configparser
 import subprocess
 import csv
-from datetime import datetime, timedelta
 import json
-import re
+import signal
+import threading
+import time
+from datetime import datetime, timedelta
 
 
 from PyQt5.QtWidgets import (
@@ -29,13 +32,23 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QComboBox,
     QDialog,
-    QProgressBar
+    QFileDialog,
+    QProgressBar,
+    QSlider,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
+    QScroller,
+    QAbstractItemView,
+    QAbstractButton,
+    QListView,
+    QGridLayout,
 )
-from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, QObject, QEvent, QPoint, QRect
 from PyQt5.QtGui import QFont, QFontMetrics, QIcon
 
 # ---------- ADD THIS ----------
-arabic_font_family = "Rasheeq"  # "Rasheeq" or "Lateef", "DejaVu Sans"
+arabic_font_family = "Amiri"  # "Rasheeq" or "Lateef", "DejaVu Sans"
 
 def apply_arabic_font(widget, family=None, size=17, bold=False):
     font = QFont(arabic_font_family, size)
@@ -44,18 +57,58 @@ def apply_arabic_font(widget, family=None, size=17, bold=False):
 
 # ---------------- Paths ----------------
 
-DESKTOP_DIR = "/home/ihms/Desktop"
+# Resolved dynamically (not hardcoded) so a freshly-deployed/updated copy of this file
+# always matches the real user, without depending on init.sh's one-time sed patch
+# (init.sh:68-81), which only ever runs once per device and won't re-fix a file that
+# gets overwritten later.
+DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Desktop")
 
 MAIN_DIR = os.path.join(DESKTOP_DIR, "scheduler")
 
 SETTINGS_INI_FILE = os.path.join(MAIN_DIR, "config", "config.ini")
+# What a new device starts with and what «إعادة ضبط الإعدادات» puts back. Shipped with
+# every release, unlike config.ini, which is the owner's and never travels.
+DEFAULT_SETTINGS_FILE = os.path.join(MAIN_DIR, "config", "default-config.ini")
 QURAN_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "quran")
 APPLY_SETTINGS_SCRIPT_FILE = os.path.join(MAIN_DIR, "config", "scripts", "apply_settings.sh")
 APPLY_SETTINGS_LOG_FILE = os.path.join(MAIN_DIR, "logs", "apply_settings.log")
+APPLY_SETTINGS_TIMEOUT_SECONDS = 180
+# The Desktop manual-entry file is THE single reference for prayer times - always.
+# Whether its content came from the user typing it by hand (per README Step 6), or
+# from picking a preset/Al Awail export in the Settings app, this is the one file
+# that matters; nothing else is ever treated as "the current input".
 PRAYER_CSV_FILE = os.path.join(DESKTOP_DIR, "إدخال-مواقيت-الصلاة-للمستخدم.csv")
 
-# ---- updates ----
+PRAYERS_CONFIG_DIR = os.path.join(MAIN_DIR, "config", "prayers-config")
 SCRIPTS_DIR = os.path.join(MAIN_DIR, "config", "scripts")
+
+# The settings rules and the audio listing live in applications/shared/, so the website
+# refuses what this app refuses, in the same words, and ticks the same files.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+from shared import audio_lists
+from shared import audio_duration
+from shared import audio_upload
+from shared import brightness
+from shared.display import apply_screen_scale
+from shared import internet_status
+from shared import os_timezone
+from shared import prayer_source
+from shared import settings_defaults
+from shared import settings_rules
+from shared import updates
+from shared.settings_rules import (
+    EXPECTED_CSV_HEADER, csv_is_valid_prayer_format, detect_csv_format, version_key,
+    duha_time_is_makrooh as duha_rule,
+    athkar_elsabah_conflicts_with_dhuhr as athkar_rule,
+    athkar_elsabah_clock_outside_fajr_dhuhr as athkar_clock_rule,
+    athkar_elsabah_mode as athkar_mode_of,
+    ATHKAR_ELSABAH_MODE_CLOCK, ATHKAR_ELSABAH_MODE_AFTER_FAJR,
+    DEFAULT_ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_CLOCK,
+    time_to_minutes as minutes_of,
+)
+
+# ---- updates ----
 CHECK_UPDATES_SCRIPT_FILE = os.path.join(SCRIPTS_DIR, "check_updates.sh")
 UPDATE_CONF_FILE = os.path.join(MAIN_DIR, "config", "update.conf")
 # Generous: an update downloads, installs, restarts both apps and waits for them to
@@ -63,6 +116,14 @@ UPDATE_CONF_FILE = os.path.join(MAIN_DIR, "config", "update.conf")
 # leave the button disabled forever with no popup and no way to retry.
 UPDATE_TIMEOUT_SECONDS = 600
 UPDATE_LIST_TIMEOUT_SECONDS = 30
+UPDATE_LIST_FRESH_FOR = timedelta(minutes=1)
+CRONTAB_TEMPLATE_FILE = os.path.join(MAIN_DIR, "config", "crontab.txt")
+
+
+def update_check_time():
+    """(hour, minute) of the daily update check, or None. Moving the check means editing
+    its crontab line, and the label follows without a code change."""
+    return updates.check_time(CRONTAB_TEMPLATE_FILE)
 # The update controls sit in a centred column rather than spanning the panel. Full-width
 # buttons on an 800px screen are a wall of colour with nothing for the eye to anchor on,
 # and a version list that wide is harder to read across, not easier. The rows still shrink
@@ -71,6 +132,48 @@ UPDATE_CONTROL_WIDTH = 430
 # Marks the one entry in the rollback list that is a real restore rather than a download.
 ROLLBACK_LOCAL_LABEL = "نسخة محفوظة"
 
+# A section's style is held to the section by name: a bare QFrame rule also reaches every
+# QLabel in it, since a label is a frame too, and drew a box around each one. The sections
+# that act at once are outlined darker, to stand apart from the saved box below them.
+SECTION_BORDER = "1px solid #ddd"
+INSTANT_SECTION_BORDER = "2px solid #555"
+TITLE_BACKGROUND = "#b3b3b3"
+
+# The upload and delete buttons stay grey until there is something for them to act on: a
+# folder to upload into, or a file ticked to delete. They still answer a press before
+# that, with what is missing. (normal, hover, pressed)
+AUDIO_BUTTON_IDLE = ("#4d4d4d", "#3d3d3d", "#2b2b2b")
+AUDIO_UPLOAD_READY = ("#198754", "#157347", "#0f5132")
+AUDIO_DELETE_READY = ("#b3261e", "#9a1f19", "#7f1913")
+
+
+def audio_button_style(colours):
+    normal, hover, pressed = colours
+    return (f"QPushButton {{ background-color: {normal}; color: white; font-size: 18px;"
+            " font-weight: bold; border-radius: 7px; padding: 8px; }"
+            f"QPushButton:hover {{ background-color: {hover}; }}"
+            f"QPushButton:pressed {{ background-color: {pressed}; }}"
+            "QPushButton:disabled { background-color: #9e9e9e; }")
+
+
+def section_style(border):
+    return ("QFrame#section { background-color: #f9f9f9; border: %s; border-radius: 10px; }"
+            % border)
+
+# prayer_dst.py owns the daylight-saving rules and the generated-file naming; import it
+# rather than restating either here.
+sys.path.insert(0, SCRIPTS_DIR)
+try:
+    import prayer_dst
+    from timezones_ar import COUNTRIES as TIMEZONE_COUNTRIES, DEFAULT_TIMEZONE
+except ImportError:
+    prayer_dst = None
+    TIMEZONE_COUNTRIES = []
+    DEFAULT_TIMEZONE = "Europe/Berlin"
+DEFAULT_PRAYERS_PRESET = os.path.join(PRAYERS_CONFIG_DIR, "برلين.csv")
+PRAYER_CSV_HASH_CONFIG_KEY = prayer_source.HASH_KEY
+PRAYER_SOURCE_LABEL_KEY = prayer_source.SOURCE_LABEL_KEY
+
 # ---- per-prayer audio directories (NEW) ----
 PRAYER_AUDIO_DIRS = {
     "fajr": os.path.join(MAIN_DIR, "audio", "fajr"),
@@ -78,6 +181,9 @@ PRAYER_AUDIO_DIRS = {
     "asr": os.path.join(MAIN_DIR, "audio", "asr"),
     "maghrib": os.path.join(MAIN_DIR, "audio", "maghrib"),
     "isha": os.path.join(MAIN_DIR, "audio", "isha"),
+    # The schedule calls this event "sunrise"; its audio lives under the Arabic
+    # transliteration of the same name.
+    "sunrise": os.path.join(MAIN_DIR, "audio", "shorooq"),
 }
 
 TAHAJJUD_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "tahajjud")
@@ -90,23 +196,37 @@ ATHKAR_ELMASA_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "athkar_elmasa")
 FRIDAY_QURAN_AUDIO_DIR = os.path.join(MAIN_DIR, "audio", "friday_quran")
 
 
-EXPECTED_CSV_HEADER = [
-    "Month", "Day", "Fajr", "Sunrise",
-    "Dhuhr", "Asr", "Maghrib", "Isha"
-]
+
+INIT_SCRIPT_FILE = os.path.join(
+    DESKTOP_DIR, "scheduler", "config", "scripts", "init.sh"
+)
+
+# =====================================================
+# Prayer-times source resolution helpers
+# =====================================================
+
+def scan_desktop_prayer_candidates():
+    return prayer_source.desktop_exports(DESKTOP_DIR)
 
 
-def version_key(text):
-    """Sort key for a version string, so 1.0.10 comes after 1.0.9 rather than before it.
+def compute_file_hash(path):
+    return prayer_source.file_hash(path)
 
-    Tolerant of anything that is not a plain number: an unparseable segment sorts as 0
-    rather than raising, because this only ever orders a dropdown.
-    """
-    parts = []
-    for chunk in str(text).split("."):
-        digits = "".join(c for c in chunk if c.isdigit())
-        parts.append(int(digits) if digits else 0)
-    return tuple(parts)
+
+def scan_prayers_config_candidates():
+    return prayer_source.presets(PRAYERS_CONFIG_DIR)
+
+
+def scan_prayer_sources():
+    """What the picker offers: the city presets first, then any Al Awail exports."""
+    return scan_prayers_config_candidates() + scan_desktop_prayer_candidates()
+
+
+def current_prayer_source(recorded):
+    return prayer_source.current_source(recorded, PRAYERS_CONFIG_DIR)
+
+
+isolated = prayer_source.isolated
 
 
 # ---------------- Defaults ----------------
@@ -115,6 +235,8 @@ TAHAJJUD_TIME = "tahajjud_time"
 
 ATHKAR_ELSABAH_ENABLE = "enable_athkar_elsabah"
 ATHKAR_ELSABAH_TIME = "athkar_elsabah_time"
+ATHKAR_ELSABAH_MODE = "athkar_elsabah_mode"
+ATHKAR_ELSABAH_CLOCK = "athkar_elsabah_clock"
 
 ATHKAR_ELMASA_ENABLE = "enable_athkar_elmasa"
 ATHKAR_ELMASA_TIME = "athkar_elmasa_time"
@@ -123,7 +245,7 @@ DUHA_ENABLE = "enable_duha_prayer"
 DUHA_TIME = "duha_time"
 
 QURAN_ENABLE = "enable_listen_to_quran"
-DEFAULT_CRON = "06:30"
+DEFAULT_CRON = settings_defaults.DEFAULT_CRON
 
 FRIDAY_QURAN_ENABLE = "enable_friday_quran"
 FRIDAY_QURAN_TIME = "friday_quran_time"
@@ -137,30 +259,69 @@ DEFAULT_FRIDAY_QURAN_POSITION = FRIDAY_QURAN_AFTER
 FRIDAY_QURAN_MAX_MINUTES = 300
 FRIDAY_WEEKDAY = 4  # date.weekday()
 
-DEFAULTS_INT = {
-    TAHAJJUD_TIME: 20,
-    DUHA_TIME: 60,
-    ATHKAR_ELSABAH_TIME: 240,
-    ATHKAR_ELMASA_TIME: 20,
-    FRIDAY_QURAN_TIME: 60,
-}
+# The daylight-saving choice of earlier releases. The shifts now follow the clock's own
+# zone (prayer_dst.py), so a save drops these rather than keep a choice nothing reads.
+RETIRED_DST_KEYS = ("enable_daylight_saving", "daylight_saving_timezone")
 
-DEFAULTS_BOOL = {
-    TAHAJJUD_ENABLE: True,
-    DUHA_ENABLE: True,
-    QURAN_ENABLE: True,
-    ATHKAR_ELSABAH_ENABLE: True,
-    ATHKAR_ELMASA_ENABLE: True,
-    FRIDAY_QURAN_ENABLE: True,
-}
+DEFAULTS_INT = settings_defaults.DEFAULTS_INT
+DEFAULTS_BOOL = settings_defaults.DEFAULTS_BOOL
+
+# QSpinBox requires *some* upper bound (its default is 99), so this is a widget bound
+# only, deliberately set past any real Fajr->Dhuhr gap so it never blocks a legitimate
+# value. The actual constraint (Athkar Elsabah must fall before Dhuhr) is enforced
+# against today's times by validate_athkar_elsabah_time(), and per-day across the whole
+# year by 01_add_fields.py when the schedule is generated.
+ATHKAR_ELSABAH_MAX_MINUTES = 1439  # minutes in a day - 1
 
 PRAYER_PREFIX = "enable_prayer_"
+
+
+def read_default_settings():
+    """The [Settings] of DEFAULT_SETTINGS_FILE, or {} when it is missing or unreadable -
+    then the constants above are the defaults, as they were before the file shipped."""
+    return settings_defaults.read_default_settings(DEFAULT_SETTINGS_FILE)
 
 # Every time this app puts on screen is a 12-hour clock, matching the daily prayer page
 # on the wall display. Only the display: the values written into config.ini stay 24-hour,
 # because the athan scheduler parses them.
 MERIDIEM_AM = "AM"
 MERIDIEM_PM = "PM"
+# Under each event's time: when the files ticked for it finish, played one after another
+# from that time.
+START_LABEL_TEXT = "يبدأ التشغيل:"
+END_LABEL_TEXT = "ينتهي التشغيل:"
+TIME_ROW_FONT = "15pt"
+OVERLAP_CHECK_MS = 1500
+TAP_SLOP = 20
+OVERLAP_RESTORED_TEXT = "أُعيدت الإعدادات إلى آخر أوقات لا تتداخل."
+QURAN_END_STYLE = ("background-color: #e4e4e4; color: #333; border: 1px solid #c8c8c8;"
+                   f" border-radius: 6px; padding: 4px 10px; font-size: {TIME_ROW_FONT};")
+
+
+def attention_text(attention):
+    """A warning the updater left, in Arabic only: the updater writes it in English for its
+    log. Setup it finishes by itself is said to be retried, and only a device without the
+    setup helper is sent to the icon. A name it carries stays as it is, isolated."""
+    def named(prefix):
+        return f"{LTR_ISOLATE}{attention.split(prefix, 1)[1].strip()}{POP_ISOLATE}"
+    if "setup" in attention:
+        return "لم يكتمل إعداد هذا التحديث بعد، وستُعاد المحاولة تلقائيًا عند فحص التحديث التالي."
+    if attention.startswith("systemd unit changed:"):
+        return (f"تغيّرت خدمة النظام {named(':')} في هذا التحديث، ويحتاج تثبيتها إلى إكمال يدوي"
+                " — افتح أيقونة «تثبيت مكونات النظام» من سطح المكتب.")
+    if attention.startswith("not backed up"):
+        return (f"لم تُحفظ نسخة احتياطية من {named(':')}، فلا يمكن التراجع عن هذا التحديث"
+                " في هذه الملفات.")
+    return "يحتاج هذا التحديث إلى مراجعة — راجع سجل التحديث على الجهاز."
+
+
+def duration_text(seconds):
+    minutes = round(seconds / 60)
+    if minutes < 1:
+        return "أقل من دقيقة"
+    if minutes < 60:
+        return f"{minutes} دقيقة"
+    return f"{LTR_ISOLATE}{minutes // 60}:{minutes % 60:02d}{POP_ISOLATE} ساعة"
 # Every label here is an Arabic sentence with a time inside it. Left to itself the bidi
 # algorithm splits "4:35 AM" in two - the digits are weak, AM is strong left-to-right -
 # and lays the halves out right to left, so the screen reads "AM 4:35". These wrap the
@@ -168,15 +329,36 @@ MERIDIEM_PM = "PM"
 # and stops it affecting the Arabic around it.
 LTR_ISOLATE = "\u2066"
 POP_ISOLATE = "\u2069"
+
+# (config key, display name, wording). Sunrise is listed here so it gets the same
+# section, checkbox and audio picker as the rest, but it is not a صلاة and has no أذان,
+# so it is worded as a تنبيه instead of reusing the prayer wording.
 PRAYER_TIMES = [
-    ("fajr", "الفجر"),
-    ("dhuhr", "الظهر"),
-    ("asr", "العصر"),
-    ("maghrib", "المغرب"),
-    ("isha", "العشاء"),
+    ("fajr", "الفجر", "prayer"),
+    ("sunrise", "الشروق", "notice"),
+    ("dhuhr", "الظهر", "prayer"),
+    ("asr", "العصر", "prayer"),
+    ("maghrib", "المغرب", "prayer"),
+    ("isha", "العشاء", "prayer"),
 ]
 
-for key, _ in PRAYER_TIMES:
+
+def event_labels(arabic_name, wording):
+    """Section headings for one event, in the wording its kind calls for."""
+    if wording == "prayer":
+        return {
+            "section": f"إعدادات صلاة {arabic_name}",
+            "enable": f"تفعيل أذان {arabic_name}",
+            "files": f"ملفات أذان {arabic_name}:",
+        }
+    return {
+        "section": f"إعدادات تنبيه {arabic_name}",
+        "enable": f"تفعيل تنبيه {arabic_name}",
+        "files": f"ملفات تنبيه {arabic_name}:",
+    }
+
+
+for key, *_ in PRAYER_TIMES:
     DEFAULTS_BOOL[f"{PRAYER_PREFIX}{key}"] = True
 
 PRAYER_SECTION_TITLE_STYLE = "font-size: 22px; font-weight: bold; margin-top: 15px;"
@@ -232,12 +414,706 @@ def arabic_error(parent, title, text):
 
 def arabic_confirm(parent, title, text):
     msg = QMessageBox(parent)
+    # A question the app waits on must never open behind the window that waits for it:
+    # on the Pi's compositor it could, leaving the Settings window dead to every tap.
+    msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
     msg.setIcon(QMessageBox.Question)
     msg.setWindowTitle(title)
     msg.setText(text)
     msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
     arabic_messagebox_buttons(msg)
     return msg.exec_() == QMessageBox.Yes
+
+# Every list here opens below its box, with a scroll bar, rather than over it with the
+# chosen entry under the finger and arrows that scroll the list when touched. Set on each
+# list, not once on the app: an app-wide style sheet takes over how every widget is
+# drawn, and the labels lost the app's Arabic font to it.
+COMBO_STYLE = "font-size: 18px; padding: 5px; combobox-popup: 0;"
+
+# Qt's own: what tells a double tap from two taps, and the release of the tap that opened
+# a list from one that chooses in it. Not desktop-settings-aware (see the app's start),
+# the app was left with -1 under qt5ct.
+DOUBLE_CLICK_INTERVAL_MS = 400
+
+
+def finger_scroll(view):
+    """A list scrolls under a swiping finger, and only a tap that stays put reaches its
+    entries. Without it a swipe was a tap: it chose, or ticked, the entry it lifted on."""
+    view.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+    QScroller.grabGesture(view.viewport(), QScroller.LeftMouseButtonGesture)
+    if DEBUG_LOG is not None:
+        QScroller.scroller(view.viewport()).stateChanged.connect(
+            lambda state, v=view: debug_log(f"{widget_name(v)} scroll {scroller_state(state)}"))
+
+
+# --debug: every tap, what it landed on and what came of it, in logs/settings_debug.log,
+# to find out afterwards what a finger did that the screen did not show.
+DEBUG_LOG_FILE = os.path.join(MAIN_DIR, "logs", "settings_debug.log")
+DEBUG_LOG = None
+
+
+def debug_log(message):
+    if DEBUG_LOG is not None:
+        DEBUG_LOG.write(f"{datetime.now():%Y-%m-%d %H:%M:%S.%f}"[:-3] + f" {message}\n")
+
+
+def scroller_state(state):
+    return {QScroller.Inactive: "ended", QScroller.Pressed: "pressed",
+            QScroller.Dragging: "dragging", QScroller.Scrolling: "coasting"}.get(state, str(state))
+
+
+def widget_name(widget):
+    while widget is not None:
+        if widget.objectName() and not widget.objectName().startswith("qt_"):
+            return widget.objectName()
+        widget = widget.parentWidget()
+    return "?"
+
+
+def describe_target(widget, pos):
+    what = type(widget).__name__
+    view = widget.parentWidget() if widget.objectName() == "qt_scrollarea_viewport" else widget
+    if isinstance(view, QAbstractItemView):
+        index = view.indexAt(view.viewport().mapFrom(widget, pos) if view is widget else pos)
+        what = f"list {widget_name(view)} entry " + (repr(index.data()) if index.isValid() else "none")
+        if view.property("open_list"):
+            what = "open " + what
+    elif isinstance(widget, QComboBox):
+        what = f"menu {widget_name(widget)} showing {widget.currentText()!r}"
+    elif isinstance(widget, QAbstractButton):
+        what = f"button {widget.text()!r}"
+    else:
+        what += f" {widget_name(widget)}"
+    return what
+
+
+class InputLog(QObject):
+    KINDS = {QEvent.MouseButtonPress: "press", QEvent.MouseButtonRelease: "release",
+             QEvent.MouseButtonDblClick: "double", QEvent.TouchBegin: "touch down",
+             QEvent.TouchEnd: "touch up", QEvent.TouchCancel: "touch cancel"}
+
+    def __init__(self):
+        super().__init__()
+        self.moves = 0
+        self.down_at = None
+        self.last_logged = None
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if not isinstance(obj, QWidget):
+            return False
+        if kind == QEvent.MouseMove and event.buttons():
+            self.moves += 1
+        elif kind in self.KINDS:
+            if kind in (QEvent.TouchBegin, QEvent.TouchEnd, QEvent.TouchCancel):
+                points = event.touchPoints()
+                where = points[0].screenPos().toPoint() if points else None
+                local = obj.mapFromGlobal(where) if where is not None else None
+            else:
+                where, local = event.globalPos(), event.pos()
+            extra = ""
+            if kind == QEvent.MouseButtonPress:
+                self.moves, self.down_at = 0, where
+            elif kind == QEvent.MouseButtonRelease and self.down_at is not None and where is not None:
+                extra = (f" after {self.moves} moves, {abs(where.x() - self.down_at.x())}"
+                         f"x{abs(where.y() - self.down_at.y())}px from the press")
+            # Qt hands an event nobody took to each parent in turn; the first is the one hit.
+            seen = (kind, event.timestamp(), where.x() if where is not None else None,
+                    where.y() if where is not None else None)
+            if seen == self.last_logged:
+                return False
+            self.last_logged = seen
+            spot = f" at {where.x()},{where.y()}" if where is not None else ""
+            target = describe_target(obj, local) if local is not None else type(obj).__name__
+            debug_log(f"{self.KINDS[kind]}{spot} on {target}{extra}")
+        return False
+
+
+def start_debug_log(app, path=DEBUG_LOG_FILE):
+    global DEBUG_LOG
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    DEBUG_LOG = open(path, "a", encoding="utf-8", buffering=1)
+    debug_log(f"=== Settings started in debug mode, pid {os.getpid()}")
+    app.debug_filter = InputLog()
+    app.installEventFilter(app.debug_filter)
+
+
+class TouchComboBox(QComboBox):
+    """A list that opens when the finger lifts, not when it lands. Opened on the press,
+    the release that follows belongs to the list: a tap held longer than a double-click
+    closed it again at once, or chose whatever entry lay under the finger. Opened on the
+    release, there is no release left to do either.
+
+    The open list is drawn inside the app's own window, not in a window of its own as Qt
+    draws it. The panel's taps reach the app as a mouse that labwc makes of the finger,
+    and in a window of its own the list got them at the wrong spot: a tap on an entry
+    landed beside the list, which closed it on the old choice. It scrolls under a swiping
+    finger, and only a tap that stays put chooses."""
+
+    LIST_STYLE = ("QListView { background: white; border: 1px solid #555; }"
+                  " QListView::item { padding: 6px 5px; }"
+                  " QListView::item:selected { background: #308cc6; color: white; }")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.list_view = None
+        self.eat_release = False
+
+    def build_list(self, host):
+        view = QListView(host)
+        view.setProperty("open_list", True)
+        view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        view.setStyleSheet(self.LIST_STYLE)
+        view.clicked.connect(self.choose)
+        view.hide()
+        finger_scroll(view)
+        return view
+
+    def showPopup(self):
+        host = self.window()
+        if self.list_view is None or self.list_view.parentWidget() is not host:
+            self.list_view = self.build_list(host)
+        view = self.list_view
+        view.setObjectName(widget_name(self))
+        view.setModel(self.model())
+        view.setModelColumn(self.modelColumn())
+        view.setFont(self.font())
+        view.setLayoutDirection(self.layoutDirection())
+        view.ensurePolished()
+        rows = min(self.count(), self.maxVisibleItems())
+        height = sum(view.sizeHintForRow(row) for row in range(rows)) + 2 * view.frameWidth()
+        box = QRect(self.mapTo(host, QPoint(0, 0)), self.size())
+        below, above = host.height() - box.bottom() - 1, box.top()
+        if height > below and above > below:
+            height = min(height, above)
+            top = box.top() - height
+        else:
+            height = min(height, below)
+            top = box.bottom() + 1
+        view.setGeometry(box.left(), top, box.width(), height)
+        current = self.model().index(self.currentIndex(), self.modelColumn(), self.rootModelIndex())
+        view.setCurrentIndex(current)
+        view.scrollTo(current, QAbstractItemView.PositionAtCenter)
+        debug_log(f"menu {widget_name(self)} opens its list, showing {self.currentText()!r}")
+        view.show()
+        view.raise_()
+        QApplication.instance().installEventFilter(self)
+
+    def hidePopup(self):
+        if self.list_view is None or not self.list_view.isVisible():
+            return
+        if not self.eat_release:
+            QApplication.instance().removeEventFilter(self)
+        self.list_view.hide()
+        debug_log(f"menu {widget_name(self)} closes its list, showing {self.currentText()!r}")
+
+    def choose(self, index):
+        self.hidePopup()
+        self.setCurrentIndex(index.row())
+        self.activated[int].emit(index.row())
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.MouseButtonRelease and self.eat_release:
+            self.eat_release = False
+            QApplication.instance().removeEventFilter(self)
+            return True
+        if (not self.list_view.isVisible() or not isinstance(obj, QWidget)
+                or obj is self.list_view or self.list_view.isAncestorOf(obj)):
+            return False
+        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick, QEvent.Wheel):
+            debug_log(f"a tap beside the open list of {widget_name(self)} only closes it")
+            self.eat_release = kind != QEvent.Wheel
+            self.hidePopup()
+            return True
+        if kind == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.hidePopup()
+            return True
+        return False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self.mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            event.accept()
+            if self.rect().contains(event.pos()):
+                self.showPopup()
+        else:
+            super().mouseReleaseEvent(event)
+
+
+class FetchingComboBox(TouchComboBox):
+    """A list that asks before it opens, so its contents are fetched on the tap that
+    wants them. before_popup returning False keeps it shut."""
+
+    def __init__(self, before_popup):
+        super().__init__()
+        self.before_popup = before_popup
+
+    def showPopup(self):
+        if self.before_popup(self):
+            super().showPopup()
+
+
+class RightAlignedComboBox(TouchComboBox):
+    """A list whose chosen entry sits at the right edge of the box, against the label it
+    answers. Qt draws it beside the arrow, which in a box wider than the entry - one
+    sized for the longest of ~175 country names - leaves it at the far left."""
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        text = option.currentText
+        option.currentText = ""
+        painter.drawComplexControl(QStyle.CC_ComboBox, option)
+        field = self.style().subControlRect(QStyle.CC_ComboBox, option,
+                                            QStyle.SC_ComboBoxEditField, self)
+        self.style().drawItemText(painter, field.adjusted(0, 0, -6, 0),
+                                  Qt.AlignRight | Qt.AlignVCenter, option.palette,
+                                  self.isEnabled(), text, self.foregroundRole())
+
+
+# The time app, which this one is opened from with its ⚙ button. Found beside this file,
+# as it is on a device and in a staging copy alike.
+COUNTDOWN_APP = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "prayer_times_gui", "main.py")
+
+
+class NumberPad(QWidget):
+    """Digits for a number field, over the window. The screen's own keyboard serves
+    Wayland apps only and this one is drawn through X, so a tap in a field otherwise
+    selects the number and offers nothing to type with. Inside the window, not one of its
+    own, for the reason TouchComboBox gives."""
+
+    KEY_STYLE = ("QPushButton { background: #f3f4f6; color: #111; border: 1px solid #bbb;"
+                 " border-radius: 8px; font-size: 24px; }"
+                 " QPushButton:pressed { background: #d1d5db; }")
+    OK_STYLE = ("QPushButton { background: #4CAF50; color: white; border: none;"
+                " border-radius: 8px; font-size: 20px; }"
+                " QPushButton:pressed { background: #3e8e41; }")
+    CANCEL_STYLE = ("QPushButton { background: #9e9e9e; color: white; border: none;"
+                    " border-radius: 8px; font-size: 20px; }"
+                    " QPushButton:pressed { background: #757575; }")
+
+    def __init__(self, parent, verify=lambda: True):
+        super().__init__(parent)
+        self.verify = verify
+        self.spin = None
+        self.typed = ""
+        self.fresh = True
+        self.setObjectName("numberPadShade")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("#numberPadShade { background: rgba(0, 0, 0, 120); }")
+        self.card = QFrame(self)
+        self.card.setObjectName("numberPadCard")
+        self.card.setStyleSheet("#numberPadCard { background: white; border-radius: 12px; }")
+        self.card.setFixedWidth(380)
+        self.card.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(self.card)
+        layout.setContentsMargins(16, 10, 16, 12)
+        layout.setSpacing(6)
+        self.title = QLabel()
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setLayoutDirection(Qt.RightToLeft)
+        self.title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.display = QLabel()
+        self.display.setAlignment(Qt.AlignCenter)
+        self.display.setFixedHeight(46)
+        self.display.setStyleSheet("font-size: 30px; border: 1px solid #999; border-radius: 6px;"
+                                   " background: #fafafa;")
+        self.hint = QLabel()
+        self.hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title)
+        layout.addWidget(self.display)
+        layout.addWidget(self.hint)
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for index, digit in enumerate("123456789"):
+            grid.addWidget(self.key(digit, lambda _=False, d=digit: self.type(d)),
+                           index // 3, index % 3)
+        grid.addWidget(self.key("⌫", self.erase), 3, 0)
+        grid.addWidget(self.key("0", lambda: self.type("0")), 3, 1)
+        grid.addWidget(self.key("C", self.clear_typed), 3, 2)
+        keys = QWidget()
+        keys.setLayoutDirection(Qt.LeftToRight)
+        keys.setLayout(grid)
+        layout.addWidget(keys)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.ok_btn = self.key("موافق", self.accept, self.OK_STYLE)
+        self.cancel_btn = self.key("إلغاء", self.hide, self.CANCEL_STYLE)
+        buttons.addWidget(self.ok_btn)
+        buttons.addWidget(self.cancel_btn)
+        layout.addLayout(buttons)
+        self.hide()
+
+    def key(self, text, handler, style=None):
+        button = QPushButton(text)
+        button.setFocusPolicy(Qt.NoFocus)
+        button.setFixedHeight(50)
+        button.setStyleSheet(style or self.KEY_STYLE)
+        button.clicked.connect(handler)
+        return button
+
+    def open(self, spin, title):
+        self.spin = spin
+        self.typed = str(spin.value())
+        self.fresh = True
+        self.title.setText(title)
+        self.show_hint(False)
+        self.paint()
+        self.setGeometry(self.parentWidget().rect())
+        self.card.adjustSize()
+        self.card.move((self.width() - self.card.width()) // 2,
+                       max(0, (self.height() - self.card.height()) // 2))
+        self.show()
+        self.raise_()
+
+    def show_hint(self, wrong):
+        self.hint.setText(f"من {LTR_ISOLATE}{self.spin.minimum()}{POP_ISOLATE} "
+                          f"إلى {LTR_ISOLATE}{self.spin.maximum()}{POP_ISOLATE}")
+        self.hint.setStyleSheet("font-size: 15px; color: %s;" % ("#c62828" if wrong else "#555"))
+
+    def paint(self):
+        self.display.setText(self.typed)
+
+    def type(self, digit):
+        if self.fresh:
+            self.typed = ""
+            self.fresh = False
+        if len(self.typed) < len(str(self.spin.maximum())):
+            self.typed = (self.typed + digit).lstrip("0") or "0"
+        self.show_hint(False)
+        self.paint()
+
+    def erase(self):
+        self.fresh = False
+        self.typed = self.typed[:-1]
+        self.paint()
+
+    def clear_typed(self):
+        self.fresh = False
+        self.typed = ""
+        self.paint()
+
+    def accept(self):
+        if not self.typed or not self.spin.minimum() <= int(self.typed) <= self.spin.maximum():
+            self.show_hint(True)
+            return
+        """Closes only once the value has been checked and kept. One that is refused - a
+        Duha time too near Dhuhr, a time that runs into another event - is put back by
+        the warning, and the pad stays open on the value kept, for another try."""
+        spin = self.spin
+        wanted = int(self.typed)
+        spin.setValue(wanted)
+        spin.lineEdit().deselect()
+        spin.editingFinished.emit()
+        if self.verify() and spin.value() == wanted:
+            self.hide()
+            return
+        self.typed = str(spin.value())
+        self.fresh = True
+        self.show_hint(False)
+        self.paint()
+        self.raise_()
+
+    def mousePressEvent(self, event):
+        if not self.card.geometry().contains(event.pos()):
+            self.hide()
+        event.accept()
+
+
+def countdown_running():
+    try:
+        return subprocess.run(["pgrep", "-f", "prayer_times_gui/main\\.py"],
+                              capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        # Not knowing is not a reason to start a second countdown over the first.
+        return True
+
+
+def launch_countdown():
+    """Start the time app the way its desktop entry does."""
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY", ":0"), QT_QPA_PLATFORM="xcb")
+    subprocess.Popen(["python3", COUNTDOWN_APP], env=env, start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class StartupAborted(Exception):
+    """Raised when the user quits from the mandatory prayer-source dialog, so startup
+    stops instead of falling through into the main window in an invalid state."""
+
+
+# =====================================================
+# Prayer-times source picker dialog
+# =====================================================
+
+class PrayerSourceDialog(QDialog):
+    """Picks the prayer times the device runs on. Whatever is picked is copied into
+    PRAYER_CSV_FILE, the one file the schedule is built from, and the yellow note says
+    so. «استعادة مواقيت المدينة» copies the current source in again, undoing hand edits.
+    When mandatory=True the dialog cannot be closed/cancelled without a valid pick."""
+
+    def __init__(self, parent, mandatory=False, current_source=None):
+        super().__init__(parent)
+        self.mandatory = mandatory
+        self.current_source = current_source
+        self.selected_path = None
+        self.restore = False
+        self.user_quit = False
+
+        self.setWindowTitle("اختيار ملف مواقيت الصلاة")
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+
+        info_text = (
+            "لم يتم العثور على ملف مواقيت صلاة صالح.\nالرجاء اختيار مواقيت الصلاة للمتابعة:"
+            if mandatory else
+            "مواقيت الصلاة التي سيعمل بها الجهاز:"
+        )
+        info = QLabel(info_text)
+        apply_arabic_font(info, size=16, bold=True)
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.combo = RightAlignedComboBox()
+        self.combo.setLayoutDirection(Qt.RightToLeft)
+        self.combo.setStyleSheet(COMBO_STYLE)
+        self.combo.setFixedHeight(45)
+        layout.addWidget(self.combo)
+
+        reference = os.path.basename(PRAYER_CSV_FILE)
+        self.note = QLabel(
+            f"سيتم نسخ المواقيت التي تختارها إلى الملف «{isolated(reference)}» على سطح "
+            "المكتب، ويمكنك تعديله إن لزم. بعد الاختيار أو التعديل اضغط "
+            "«حفظ وتطبيق الإعدادات»."
+        )
+        self.note.setObjectName("prayerSourceNote")
+        self.note.setWordWrap(True)
+        self.note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.note.setStyleSheet(
+            "QLabel#prayerSourceNote { background: #FFF8C5; border: 1px solid #D4A72C;"
+            " border-radius: 6px; padding: 8px 10px; font-size: 15px; color: #1f2328; }")
+        layout.addWidget(self.note)
+
+        btn_row = QHBoxLayout()
+        self.ok_btn = QPushButton("اختيار")
+        self.ok_btn.setFixedHeight(50)
+        self.ok_btn.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.ok_btn.clicked.connect(self.accept_selection)
+        btn_row.addWidget(self.ok_btn)
+
+        if not mandatory:
+            cancel_btn = QPushButton("إلغاء")
+            cancel_btn.setFixedHeight(50)
+            cancel_btn.clicked.connect(self.reject)
+            btn_row.addWidget(cancel_btn)
+
+        layout.addLayout(btn_row)
+
+        restore_row = QHBoxLayout()
+        self.restore_btn = QPushButton("استعادة مواقيت المدينة")
+        self.restore_btn.setFixedHeight(44)
+        self.restore_btn.clicked.connect(self.accept_restore)
+        restore_row.addWidget(self.restore_btn)
+        self.restore_note = QLabel()
+        self.restore_note.setWordWrap(True)
+        self.restore_note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.restore_note.setStyleSheet("font-size: 14px; color: #555;")
+        restore_row.addWidget(self.restore_note, 1)
+        layout.addLayout(restore_row)
+        if current_source:
+            self.restore_note.setText(
+                f"يعيد نسخ «{isolated(os.path.basename(current_source))}» إلى "
+                f"«{isolated(reference)}»، فتُلغى أي تعديلات عليه.")
+        else:
+            self.restore_btn.setEnabled(False)
+            self.restore_note.setText("لا يوجد ملف معروف تمت منه آخر عملية نسخ.")
+
+        # Safety valve: even in mandatory mode (no window-close button), the user must
+        # always have a way out instead of being trapped by an unexpectedly empty list.
+        if mandatory:
+            quit_btn = QPushButton("إغلاق التطبيق")
+            quit_btn.setFixedHeight(40)
+            quit_btn.setStyleSheet("color: #a33; font-size: 14px;")
+            quit_btn.clicked.connect(self.quit_app)
+            layout.addWidget(quit_btn)
+
+        self.populate()
+
+    def populate(self):
+        self.combo.clear()
+        candidates = scan_prayer_sources()
+        if not candidates:
+            self.combo.addItem("لا توجد ملفات مواقيت", None)
+            self.ok_btn.setEnabled(False)
+            return
+        for path in candidates:
+            self.combo.addItem(os.path.basename(path), path)
+        self.ok_btn.setEnabled(True)
+        if self.current_source:
+            index = self.combo.findData(self.current_source)
+            if index >= 0:
+                self.combo.setCurrentIndex(index)
+
+    def quit_app(self):
+        # Can't use QApplication.quit() here: this dialog runs from ControlApp.__init__,
+        # before app.exec_() has started, so quit() would only unwind this nested loop
+        # and startup would continue into the main window anyway. Signal the caller
+        # instead and let it abort startup properly.
+        self.user_quit = True
+        self.mandatory = False  # allow reject() to go through
+        self.reject()
+
+    def accept_selection(self):
+        path = self.combo.currentData()
+        if not path:
+            return
+        self.selected_path = path
+        self.accept()
+
+    def accept_restore(self):
+        if not self.current_source:
+            return
+        if not arabic_confirm(
+                self, "استعادة مواقيت المدينة",
+                f"سيتم استبدال محتوى «{isolated(os.path.basename(PRAYER_CSV_FILE))}» بمواقيت "
+                f"«{isolated(os.path.basename(self.current_source))}»، وتُلغى أي تعديلات عليه.\n\n"
+                "هل أنت متأكد من المتابعة؟"):
+            return
+        self.selected_path = self.current_source
+        self.restore = True
+        self.accept()
+
+
+# =====================================================
+# Background worker for apply_settings.sh
+# =====================================================
+
+class UpdateWorker(QThread):
+    """Runs check_updates.sh off the UI thread.
+
+    Same shape as ApplySettingsWorker below, and for the same reason: the touchscreen
+    must stay responsive, and the popup has to report what actually happened rather
+    than assume success the moment the script is launched."""
+
+    finished_result = pyqtSignal(bool, str)
+
+    def __init__(self, args, parent=None):
+        super().__init__(parent)
+        self.args = args
+
+    def run(self):
+        success = False
+        output = ""
+        try:
+            result = subprocess.run(
+                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, *self.args],
+                capture_output=True, text=True, timeout=UPDATE_TIMEOUT_SECONDS
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            success = result.returncode == 0
+        except subprocess.TimeoutExpired:
+            output = f"انتهت المهلة بعد {UPDATE_TIMEOUT_SECONDS} ثانية"
+        except OSError as error:
+            output = str(error)
+        self.finished_result.emit(success, output.strip())
+
+
+class AudioCopyWorker(QThread):
+    """Copies a chosen recitation into its folder off the UI thread: a whole surah from
+    a USB stick takes long enough to freeze the touch screen otherwise."""
+
+    finished_result = pyqtSignal(str, str)
+
+    def __init__(self, source, target, parent=None):
+        super().__init__(parent)
+        self.source = source
+        self.target = target
+
+    def run(self):
+        try:
+            self.finished_result.emit(audio_upload.copy(self.source, self.target), "")
+        except audio_upload.UploadError as error:
+            self.finished_result.emit("", str(error))
+
+
+class ZoneChangeWorker(QThread):
+    """Rebuilds the schedule for a new zone and sets it, off the UI thread: the rebuild
+    is the whole of apply_settings.sh."""
+
+    finished_result = pyqtSignal(str)
+
+    def __init__(self, zone, preset=None, parent=None):
+        super().__init__(parent)
+        self.zone = zone
+        self.preset = preset
+
+    def run(self):
+        try:
+            os_timezone.change(self.zone, TIMEZONE_COUNTRIES, MAIN_DIR, DESKTOP_DIR, self.preset)
+            self.finished_result.emit("")
+        except os_timezone.ZoneError as error:
+            self.finished_result.emit(str(error))
+
+
+class ApplySettingsWorker(QThread):
+    """Runs apply_settings.sh off the UI thread and reports back real success/failure
+    so Save can never claim success while the script actually failed."""
+
+    finished_result = pyqtSignal(bool, str)
+
+    def run(self):
+        success = False
+        try:
+            os.makedirs(os.path.dirname(APPLY_SETTINGS_LOG_FILE), exist_ok=True)
+            with open(APPLY_SETTINGS_LOG_FILE, "w", encoding="utf-8") as log_file:
+                # A timeout is essential: without it a blocked script (a sudo password
+                # prompt, a hanging systemctl restart) would never emit finished_result,
+                # leaving the Save button locked with no popup and no way to retry.
+                result = subprocess.run(
+                    ["/bin/bash", APPLY_SETTINGS_SCRIPT_FILE],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    timeout=APPLY_SETTINGS_TIMEOUT_SECONDS
+                )
+            success = result.returncode == 0
+        except subprocess.TimeoutExpired:
+            try:
+                with open(APPLY_SETTINGS_LOG_FILE, "a", encoding="utf-8") as log_file:
+                    log_file.write(
+                        f"\nTimed out after {APPLY_SETTINGS_TIMEOUT_SECONDS}s - "
+                        "apply_settings.sh did not finish.\n"
+                    )
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                with open(APPLY_SETTINGS_LOG_FILE, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"\nFailed to run apply_settings.sh: {e}\n")
+            except Exception:
+                pass
+
+        log_tail = ""
+        try:
+            with open(APPLY_SETTINGS_LOG_FILE, "r", encoding="utf-8") as log_file:
+                log_tail = "".join(log_file.readlines()[-15:])
+        except Exception:
+            pass
+
+        self.finished_result.emit(success, log_tail)
+
 
 
 # Resolved from this file rather than from $HOME: the icons sit beside the code in the
@@ -264,33 +1140,6 @@ def app_icon():
 
 
 # ---------------- Main App ----------------
-class UpdateWorker(QThread):
-    """Runs check_updates.sh off the UI thread, so the touchscreen stays responsive and
-    the popup reports what actually happened instead of assuming success."""
-
-    finished_result = pyqtSignal(bool, str)
-
-    def __init__(self, args, parent=None):
-        super().__init__(parent)
-        self.args = args
-
-    def run(self):
-        success = False
-        output = ""
-        try:
-            result = subprocess.run(
-                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, *self.args],
-                capture_output=True, text=True, timeout=UPDATE_TIMEOUT_SECONDS
-            )
-            output = (result.stdout or "") + (result.stderr or "")
-            success = result.returncode == 0
-        except subprocess.TimeoutExpired:
-            output = f"انتهت المهلة بعد {UPDATE_TIMEOUT_SECONDS} ثانية"
-        except OSError as error:
-            output = str(error)
-        self.finished_result.emit(success, output.strip())
-
-
 class ControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -300,6 +1149,7 @@ class ControlApp(QMainWindow):
         self.setGeometry(0, 0, 800, 480)
         self.config = configparser.ConfigParser(interpolation=None)
         self.load_config()
+        self.ensure_prayer_source_configured()
 
         # ---------------- Scroll Area ----------------
         scroll = QScrollArea()
@@ -312,57 +1162,117 @@ class ControlApp(QMainWindow):
         scroll.setWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
         main_layout.setAlignment(Qt.AlignTop)
-        main_layout.setSpacing(30)
-        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
 
         # ---------------- Title ----------------
         title = QLabel(" الإعدادت ")
         title.setAlignment(Qt.AlignCenter)
-        apply_arabic_font(title, size=62, bold=True)
+        apply_arabic_font(title, size=50, bold=True)
         # title.setStyleSheet("font-size: 42px; font-weight: bold;")
         main_layout.addWidget(title)
 
+        # ---------------- Sections that act at once ----------------
+        # Each has its own button; the save button below keeps only what is in its box.
+        if brightness.device() is not None:
+            main_layout.addWidget(self.build_brightness_section())
+
+        # ---------------- Updates Section ----------------
+        # Empty until a version list is first opened: what has been published is not
+        # knowable without asking, and both lists are filled from the one answer.
+        self.update_published_versions = []
+        self.update_versions_fetched_at = None
+        self.update_rollback_backup = ""
+        main_layout.addWidget(self.build_updates_section())
+        main_layout.addWidget(self.build_audio_upload_section())
+        main_layout.addWidget(self.build_os_timezone_section())
+
+        # ---------------- Prayer Source Section ----------------
+        self.prayer_source_frame = self.create_section_frame(
+            "ملف مواقيت الصلاة الحالي", font_family="Amiri", font_size=22, bold=True
+        )
+        source_layout = self.prayer_source_frame.layout()
+
+        self.prayer_source_label = QLabel()
+        self.prayer_source_label.setStyleSheet("font-size: 16px; padding: 5px;")
+        self.prayer_source_label.setWordWrap(True)
+        source_layout.addWidget(self.prayer_source_label)
+        self.update_prayer_source_label()
+
+        change_source_btn = QPushButton("تغيير ملف مواقيت الصلاة")
+        change_source_btn.setFixedHeight(50)
+        change_source_btn.setCursor(Qt.PointingHandCursor)
+        change_source_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4d4d4d;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 7px;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #3d3d3d; }
+            QPushButton:pressed { background-color: #2b2b2b; }
+        """)
+        change_source_btn.clicked.connect(lambda: self.run_prayer_source_picker(mandatory=False))
+        self.add_update_row(source_layout, (change_source_btn, 1))
+
+        main_layout.addWidget(self.prayer_source_frame)
+        for i in range(main_layout.count()):
+            section = main_layout.itemAt(i).widget()
+            if section is not None and section.objectName() == "section":
+                section.setStyleSheet(section_style(INSTANT_SECTION_BORDER))
+
+        # ---------------- Saved Box ----------------
+        # Everything the save button keeps, with the save and reset buttons at its foot.
+        saved_box = self.build_saved_box()
+        saved_layout = saved_box.layout()
+        main_layout.addWidget(saved_box)
+        saved_layout.addWidget(self.build_internet_warning_section())
+
         # ---------------- Prayer Times Section ----------------
-        self.prayer_frame = self.create_section_frame("ضبط الأذان والأذكار", font_family="Rasheeq", font_size=42, bold=True)
+        self.prayer_frame = self.create_section_frame("الأذان", font_family="Amiri", font_size=30, bold=True)
 
         prayer_layout = self.prayer_frame.layout()
 
         self.prayer_checkboxes = {}
         self.prayer_audio_lists = {}
+        self.end_labels = {}
+        self.audio_seconds = {}
 
-        for key, arabic_name in PRAYER_TIMES:
+        for key, arabic_name, wording in PRAYER_TIMES:
             cfg_key = f"{PRAYER_PREFIX}{key}"
+            labels = event_labels(arabic_name, wording)
 
             # -------- Prayer sub-box --------
             prayer_box = self.create_sub_section_frame()
             box_layout = prayer_box.layout()
 
-            prayer_title = QLabel(f"إعدادات صلاة {arabic_name}")
+            prayer_title = QLabel(labels["section"])
             apply_arabic_font(prayer_title, size=24, bold=True)
             prayer_title.setStyleSheet("""
-                background-color: #dcdcdc;       /* Light gray background */
+                background-color: %s;
                 padding: 8px;
                 border-radius: 6px;
-            """)
+            """ % TITLE_BACKGROUND)
             box_layout.addWidget(prayer_title)
 
-            chk = QCheckBox(f"تفعيل صوت أذان {arabic_name}")
+            chk = QCheckBox(labels["enable"])
             chk.setChecked(self.config["Settings"].getboolean(cfg_key))
-            chk.setStyleSheet("font-size: 22px; padding: 5px;")
+            chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
             chk.setLayoutDirection(Qt.RightToLeft)
             box_layout.addWidget(chk)
             self.prayer_checkboxes[cfg_key] = chk
 
-            lbl_time = QLabel(f"وقت صلاة {arabic_name}: --")
-            lbl_time.setStyleSheet("font-size: 20px; color: black;")
-            box_layout.addWidget(lbl_time)
+            lbl_time = self.time_row(box_layout, START_LABEL_TEXT)
 
             if not hasattr(self, "prayer_time_labels"):
                 self.prayer_time_labels = {}
             self.prayer_time_labels[key] = lbl_time
+            self.end_labels[key] = self.time_row(box_layout, END_LABEL_TEXT)
 
-            lbl = QLabel(f"ملفات أذان {arabic_name}:")
-            lbl.setStyleSheet("font-size: 22px")
+            lbl = QLabel(labels["files"])
+            lbl.setStyleSheet("font-size: 20px; font-weight: bold;")
             box_layout.addWidget(lbl)
 
             audio_list = self.create_checkable_audio_list(PRAYER_AUDIO_DIRS[key])
@@ -385,162 +1295,135 @@ class ControlApp(QMainWindow):
 
             prayer_layout.addWidget(prayer_box)
 
-        # ✅ THIS WAS MISSING
-        main_layout.addWidget(self.prayer_frame)
+        saved_layout.addWidget(self.prayer_frame)
 
 
 
         # ---------------- Tahajjud Section ----------------
-        self.tahajjud_frame, tahajjud_layout, tahajjud_title = self.create_arabic_section("صلاة التهجد")
-
-        tahajjud_layout = self.tahajjud_frame.layout()
-
-        self.tahajjud_chk = QCheckBox("تشغيل نداء التهجد")
-        self.tahajjud_chk.setChecked(self.config["Settings"].getboolean(TAHAJJUD_ENABLE))
-        self.tahajjud_chk.setStyleSheet("font-size: 22px; padding: 5px;")
-        self.tahajjud_chk.setLayoutDirection(Qt.RightToLeft)
-        tahajjud_layout.addWidget(self.tahajjud_chk)
-
-
-        self.tahajjud_spin = self.create_spinbox(
-            self.config["Settings"].get(TAHAJJUD_TIME, DEFAULTS_INT[TAHAJJUD_TIME])
-        )
-        tahajjud_form = QFormLayout()
-        self.add_spinbox_row(tahajjud_form, "وقت صلاة التهجد قبل صلاة الفجر (دقيقة)", self.tahajjud_spin)
-        tahajjud_layout.addLayout(tahajjud_form)
-
-        # --- Calculated Tahajjud time (HH:MM) ---
-        self.tahajjud_time_label = QLabel("وقت صلاة التهجد: --")
-        self.tahajjud_time_label.setStyleSheet("font-size: 18px; color: #555;")
-        tahajjud_layout.addWidget(self.tahajjud_time_label)
-
-
-        self.tahajjud_audio_list = self.create_checkable_audio_list(TAHAJJUD_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.tahajjud_frame,
+            self.tahajjud_chk,
+            self.tahajjud_spin,
+            self.tahajjud_time_label,
             self.tahajjud_audio_list,
-            "tahajjud_audio_checked"
+            tahajjud_form
+        ) = self.build_time_audio_section(
+            "صلاة التهجد",
+            TAHAJJUD_ENABLE,
+            TAHAJJUD_TIME,
+            DEFAULTS_INT[TAHAJJUD_TIME],
+            TAHAJJUD_AUDIO_DIR,
+            "tahajjud_audio_checked",
+            "تشغيل نداء التهجد",
+            "وقت صلاة التهجد قبل صلاة الفجر (دقيقة)"
         )
-        tahajjud_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        tahajjud_layout.addWidget(self.tahajjud_audio_list)
-        self.link_checkbox_to_list(self.tahajjud_chk, self.tahajjud_audio_list)
 
-        main_layout.addWidget(self.tahajjud_frame)
+        saved_layout.addWidget(self.tahajjud_frame)
+
 
         # ---------------- Duha Section ----------------
-        self.duha_frame, duha_layout, duha_title = self.create_arabic_section("صلاة الضحى")
-
-        duha_layout = self.duha_frame.layout()
-
-        self.duha_chk = QCheckBox("تفعيل نداء الضحى")
-        self.duha_chk.setChecked(self.config["Settings"].getboolean(DUHA_ENABLE))
-        self.duha_chk.setStyleSheet("font-size: 22px; padding: 5px;")
-        self.duha_chk.setLayoutDirection(Qt.RightToLeft)
-        duha_layout.addWidget(self.duha_chk)
-
-        self.duha_spin = self.create_spinbox(
-            self.config["Settings"].get(DUHA_TIME, DEFAULTS_INT[DUHA_TIME])
-        )
-        duha_form = QFormLayout()
-        self.add_spinbox_row(duha_form, "وقت صلاة الضحى قبل صلاة الظهر (دقيقة)", self.duha_spin)
-        duha_layout.addLayout(duha_form)
-
-        # --- Calculated Duha time (HH:MM) ---
-        self.duha_time_label = QLabel("وقت صلاة الضحى: --")
-        self.duha_time_label.setStyleSheet("font-size: 18px; color: #555;")
-        duha_layout.addWidget(self.duha_time_label)
-
-        self.duha_audio_list = self.create_checkable_audio_list(DUHA_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.duha_frame,
+            self.duha_chk,
+            self.duha_spin,
+            self.duha_time_label,
             self.duha_audio_list,
-            "duha_audio_checked"
+            duha_form
+        ) = self.build_time_audio_section(
+            "صلاة الضحى",
+            DUHA_ENABLE,
+            DUHA_TIME,
+            DEFAULTS_INT[DUHA_TIME],
+            DUHA_AUDIO_DIR,
+            "duha_audio_checked",
+            "تفعيل نداء الضحى",
+            "وقت صلاة الضحى قبل صلاة الظهر (دقيقة)"
         )
-        duha_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        duha_layout.addWidget(self.duha_audio_list)
-        self.link_checkbox_to_list(self.duha_chk, self.duha_audio_list)
 
-        main_layout.addWidget(self.duha_frame)
+        saved_layout.addWidget(self.duha_frame)
+
 
         # ---------------- ATHKAR ALSABAH Section ----------------
-        self.athkar_elsabah_frame, athkar_elsabah_layout, athkar_elsabah_title = self.create_arabic_section("أذكار الصباح")
-
-        
-        athkar_elsabah_layout = self.athkar_elsabah_frame.layout()
-
-        self.athkar_elsabah_chk = QCheckBox("تفعيل أذكار الصباح")
-        self.athkar_elsabah_chk.setChecked(self.config["Settings"].getboolean(ATHKAR_ELSABAH_ENABLE))
-        self.athkar_elsabah_chk.setStyleSheet("font-size: 22px; padding: 5px;")
-        self.athkar_elsabah_chk.setLayoutDirection(Qt.RightToLeft)
-        athkar_elsabah_layout.addWidget(self.athkar_elsabah_chk)
-
-        self.athkar_elsabah_spin = self.create_spinbox(
-            self.config["Settings"].get(ATHKAR_ELSABAH_TIME, DEFAULTS_INT[ATHKAR_ELSABAH_TIME])
-        )
-        athkar_elsabah_form = QFormLayout()
-        self.add_spinbox_row(athkar_elsabah_form, "وقت أذكار الصباح بعد صلاة الفجر (دقيقة)", self.athkar_elsabah_spin)
-        athkar_elsabah_layout.addLayout(athkar_elsabah_form)
-
-        # --- Calculated Athkar El-Sabah time (HH:MM) ---
-        self.athkar_elsabah_time_label = QLabel("وقت أذكار الصباح: --")
-        self.athkar_elsabah_time_label.setStyleSheet("font-size: 18px; color: #555;")
-        athkar_elsabah_layout.addWidget(self.athkar_elsabah_time_label)
-
-
-        self.athkar_elsabah_audio_list = self.create_checkable_audio_list(ATHKAR_ELSABAH_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.athkar_elsabah_frame,
+            self.athkar_elsabah_chk,
+            self.athkar_elsabah_spin,
+            self.athkar_elsabah_time_label,
             self.athkar_elsabah_audio_list,
-            "athkar_elsabah_audio_checked"
+            athkar_elsabah_form
+        ) = self.build_time_audio_section(
+            "أذكار الصباح",
+            ATHKAR_ELSABAH_ENABLE,
+            ATHKAR_ELSABAH_TIME,
+            DEFAULTS_INT[ATHKAR_ELSABAH_TIME],
+            ATHKAR_ELSABAH_AUDIO_DIR,
+            "athkar_elsabah_audio_checked",
+            "تفعيل أذكار الصباح",
+            "وقت أذكار الصباح بعد صلاة الفجر (دقيقة)",
+            max_val=ATHKAR_ELSABAH_MAX_MINUTES
         )
-        athkar_elsabah_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        athkar_elsabah_layout.addWidget(self.athkar_elsabah_audio_list)
-        # Enable/disable list based on checkbox
-        self.link_checkbox_to_list(self.athkar_elsabah_chk, self.athkar_elsabah_audio_list)
 
-        main_layout.addWidget(self.athkar_elsabah_frame)
+        # A fixed time or minutes after Fajr, chosen above the value it qualifies, the
+        # same way Surat Al-Kahf's before/after sits above its minutes.
+        self.athkar_elsabah_mode_combo = TouchComboBox()
+        self.athkar_elsabah_mode_combo.setLayoutDirection(Qt.RightToLeft)
+        self.athkar_elsabah_mode_combo.setStyleSheet(COMBO_STYLE)
+        self.athkar_elsabah_mode_combo.setFixedHeight(45)
+        # As wide as its longest choice, not the row: stretched, the choice it shows lands
+        # at the far end of the box, away from the label it answers.
+        self.athkar_elsabah_mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.athkar_elsabah_mode_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.athkar_elsabah_mode_combo.addItem("وقت محدد يوميًا", ATHKAR_ELSABAH_MODE_CLOCK)
+        self.athkar_elsabah_mode_combo.addItem("بعد صلاة الفجر", ATHKAR_ELSABAH_MODE_AFTER_FAJR)
+        athkar_elsabah_form.insertRow(0, "موعد الأذكار", self.athkar_elsabah_mode_combo)
+
+        clock_hour, clock_minute = self.athkar_elsabah_clock_parts(
+            self.config["Settings"].get(ATHKAR_ELSABAH_CLOCK, DEFAULT_ATHKAR_ELSABAH_CLOCK))
+        self.athkar_elsabah_hour_spin = self.create_spinbox(clock_hour, 0, 23)
+        self.athkar_elsabah_min_spin = self.create_spinbox(clock_minute, 0, 59)
+        self.add_spinbox_row(athkar_elsabah_form, "الساعة", self.athkar_elsabah_hour_spin)
+        self.add_spinbox_row(athkar_elsabah_form, "الدقيقة", self.athkar_elsabah_min_spin)
+
+        self.select_athkar_elsabah_mode(
+            self.config["Settings"].get(ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_MODE))
+        self.athkar_elsabah_form = athkar_elsabah_form
+        self.athkar_elsabah_mode_combo.currentIndexChanged.connect(
+            self.show_athkar_elsabah_mode)
+        self.show_athkar_elsabah_mode()
+
+        saved_layout.addWidget(self.athkar_elsabah_frame)
+
 
         # ---------------- ATHKAR ELMASA Section ----------------
-        self.athkar_elmasa_frame, athkar_elmasa_layout, athkar_elmasa_title = self.create_arabic_section("أذكار المساء")
-
-        athkar_elmasa_layout = self.athkar_elmasa_frame.layout()
-
-        self.athkar_elmasa_chk = QCheckBox("تفعيل أذكار المساء")
-        self.athkar_elmasa_chk.setChecked(self.config["Settings"].getboolean(ATHKAR_ELMASA_ENABLE))
-        self.athkar_elmasa_chk.setStyleSheet("font-size: 22px; padding: 5px;")
-        self.athkar_elmasa_chk.setLayoutDirection(Qt.RightToLeft)
-        athkar_elmasa_layout.addWidget(self.athkar_elmasa_chk)
-
-        self.athkar_elmasa_spin = self.create_spinbox(
-            self.config["Settings"].get(ATHKAR_ELMASA_TIME, DEFAULTS_INT[ATHKAR_ELMASA_TIME])
-        )
-        athkar_elmasa_form = QFormLayout()
-        self.add_spinbox_row(athkar_elmasa_form, "وقت أذكار المساء بعد صلاة المغرب (دقيقة)", self.athkar_elmasa_spin)
-        athkar_elmasa_layout.addLayout(athkar_elmasa_form)
-
-        # --- Calculated Athkar El-Masa time (HH:MM) ---
-        self.athkar_elmasa_time_label = QLabel("وقت أذكار المساء: --")
-        self.athkar_elmasa_time_label.setStyleSheet("font-size: 18px; color: #555;")
-        athkar_elmasa_layout.addWidget(self.athkar_elmasa_time_label)
-
-        self.athkar_elmasa_audio_list = self.create_checkable_audio_list(ATHKAR_ELMASA_AUDIO_DIR)
-        self.load_audio_checked_state(
+        (
+            self.athkar_elmasa_frame,
+            self.athkar_elmasa_chk,
+            self.athkar_elmasa_spin,
+            self.athkar_elmasa_time_label,
             self.athkar_elmasa_audio_list,
-            "athkar_elmasa_audio_checked"
+            athkar_elmasa_form
+        ) = self.build_time_audio_section(
+            "أذكار المساء",
+            ATHKAR_ELMASA_ENABLE,
+            ATHKAR_ELMASA_TIME,
+            DEFAULTS_INT[ATHKAR_ELMASA_TIME],
+            ATHKAR_ELMASA_AUDIO_DIR,
+            "athkar_elmasa_audio_checked",
+            "تفعيل أذكار المساء",
+            "وقت أذكار المساء بعد صلاة المغرب (دقيقة)"
         )
-        athkar_elmasa_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        athkar_elmasa_layout.addWidget(self.athkar_elmasa_audio_list)
-        # Enable/disable list based on checkbox
-        self.link_checkbox_to_list(self.athkar_elmasa_chk, self.athkar_elmasa_audio_list)
+
+        saved_layout.addWidget(self.athkar_elmasa_frame)
 
 
-        main_layout.addWidget(self.athkar_elmasa_frame)
-
-        # ---------------- Cron Section ----------------
-        self.cron_frame = self.create_section_frame("توقيت قراءة سور مختارة من القرآن الكريم", font_family="Rasheeq", font_size=38, bold=True)
+        # ---------------- Quran Section ----------------
+        self.cron_frame = self.create_section_frame("توقيت قراءة سور مختارة من القرآن الكريم", font_family="Amiri", font_size=25, bold=True)
 
         cron_layout = self.cron_frame.layout()
 
         self.cron_chk = QCheckBox("تفعيل جدولة قراءة القرآ ن الكريم")
         self.cron_chk.setChecked(self.config["Settings"].getboolean(QURAN_ENABLE))
-        self.cron_chk.setStyleSheet("font-size: 22px; padding: 5px;")
+        self.cron_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
         self.cron_chk.setLayoutDirection(Qt.RightToLeft)
         cron_layout.addWidget(self.cron_chk)
 
@@ -551,7 +1434,7 @@ class ControlApp(QMainWindow):
             hour_val = int(hour)
             minute_val = int(minute)
         except (ValueError, AttributeError):
-            hour_val, minute_val = 6, 30
+            hour_val, minute_val = (int(part) for part in DEFAULT_CRON.split(":"))
 
 
         self.cron_hour_spin = self.create_spinbox(hour_val, 0, 23)
@@ -562,7 +1445,7 @@ class ControlApp(QMainWindow):
         cron_form.setFormAlignment(Qt.AlignRight)
 
         comment_lbl = QLabel(" تحديد وقت قراءة المختارات من القرآن الكريم يوميا:")
-        comment_lbl.setStyleSheet("font-size: 22px;")
+        comment_lbl.setStyleSheet("font-size: 20px; font-weight: bold;")
 
         comment_layout = QHBoxLayout()
         comment_layout.setDirection(QBoxLayout.RightToLeft)
@@ -571,6 +1454,11 @@ class ControlApp(QMainWindow):
 
         self.add_spinbox_row(cron_form, "الساعة", self.cron_hour_spin)
         self.add_spinbox_row(cron_form, "الدقيقة", self.cron_min_spin)
+        self.quran_end_label = QLabel()
+        self.quran_end_label.setStyleSheet(QURAN_END_STYLE)
+        self.quran_end_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.add_spinbox_row(cron_form, END_LABEL_TEXT, self.quran_end_label)
+        self.end_labels["quran"] = self.quran_end_label
 
         cron_layout.addLayout(cron_form)
 
@@ -592,69 +1480,52 @@ class ControlApp(QMainWindow):
         self.quran_audio_list.setEnabled(True)
 
 
-        main_layout.addWidget(self.cron_frame)
+        saved_layout.addWidget(self.cron_frame)
+
 
         # ---------------- Friday Quran (Surat Al-Kahf) Section ----------------
-        self.friday_quran_frame, friday_quran_layout, friday_quran_title = \
-            self.create_arabic_section("قراءة سورة الكهف يوم الجمعة")
-
-        friday_quran_layout = self.friday_quran_frame.layout()
-
-        self.friday_quran_chk = QCheckBox("تفعيل قراءة سورة الكهف يوم الجمعة")
-        self.friday_quran_chk.setChecked(self.config["Settings"].getboolean(FRIDAY_QURAN_ENABLE))
-        self.friday_quran_chk.setStyleSheet("font-size: 22px; padding: 5px;")
-        self.friday_quran_chk.setLayoutDirection(Qt.RightToLeft)
-        friday_quran_layout.addWidget(self.friday_quran_chk)
+        (
+            self.friday_quran_frame,
+            self.friday_quran_chk,
+            self.friday_quran_spin,
+            self.friday_quran_time_label,
+            self.friday_quran_audio_list,
+            friday_quran_form
+        ) = self.build_time_audio_section(
+            "قراءة سورة الكهف يوم الجمعة",
+            FRIDAY_QURAN_ENABLE,
+            FRIDAY_QURAN_TIME,
+            DEFAULTS_INT[FRIDAY_QURAN_TIME],
+            FRIDAY_QURAN_AUDIO_DIR,
+            "friday_quran_audio_checked",
+            "تفعيل قراءة سورة الكهف يوم الجمعة",
+            "عدد الدقائق بالنسبة لصلاة الجمعة (دقيقة)",
+            max_val=FRIDAY_QURAN_MAX_MINUTES
+        )
 
         # Before-or-after sits above the number it qualifies: on its own "60 minutes" says
         # nothing, and the pair is really one setting.
-        self.friday_quran_position_combo = QComboBox()
+        self.friday_quran_position_combo = TouchComboBox()
         self.friday_quran_position_combo.setLayoutDirection(Qt.RightToLeft)
-        self.friday_quran_position_combo.setStyleSheet("font-size: 20px; padding: 5px;")
+        self.friday_quran_position_combo.setStyleSheet(COMBO_STYLE)
         self.friday_quran_position_combo.setFixedHeight(45)
+        # As wide as its longest choice, not the row: stretched, the choice it shows lands
+        # at the far end of the box, away from the label it answers.
+        self.friday_quran_position_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.friday_quran_position_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.friday_quran_position_combo.addItem("بعد صلاة الجمعة", FRIDAY_QURAN_AFTER)
         self.friday_quran_position_combo.addItem("قبل صلاة الجمعة", FRIDAY_QURAN_BEFORE)
         self.select_friday_quran_position(
             self.config["Settings"].get(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION))
+        friday_quran_form.insertRow(0, "موعد القراءة", self.friday_quran_position_combo)
 
-        self.friday_quran_spin = self.create_spinbox(
-            self.config["Settings"].get(FRIDAY_QURAN_TIME, DEFAULTS_INT[FRIDAY_QURAN_TIME]),
-            max_val=FRIDAY_QURAN_MAX_MINUTES
-        )
-        friday_quran_form = QFormLayout()
-        friday_quran_form.addRow("موعد القراءة", self.friday_quran_position_combo)
-        friday_quran_form.setLabelAlignment(Qt.AlignRight)
-        self.add_spinbox_row(friday_quran_form,
-                             "عدد الدقائق بالنسبة لصلاة الجمعة (دقيقة)",
-                             self.friday_quran_spin)
-        friday_quran_layout.addLayout(friday_quran_form)
+        saved_layout.addWidget(self.friday_quran_frame)
 
-        self.friday_quran_time_label = QLabel("وقت قراءة سورة الكهف: --")
-        self.friday_quran_time_label.setStyleSheet("font-size: 18px; color: #555;")
-        friday_quran_layout.addWidget(self.friday_quran_time_label)
-
-        self.friday_quran_audio_list = self.create_checkable_audio_list(FRIDAY_QURAN_AUDIO_DIR)
-        self.load_audio_checked_state(
-            self.friday_quran_audio_list,
-            "friday_quran_audio_checked"
-        )
-        friday_quran_layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
-        friday_quran_layout.addWidget(self.friday_quran_audio_list)
-        self.link_checkbox_to_list(self.friday_quran_chk, self.friday_quran_audio_list)
-
-        main_layout.addWidget(self.friday_quran_frame)
-
-        # ---------------- Updates Section ----------------
-        # Empty until جلب الإصدارات is pressed: what has been published is not knowable
-        # without asking, and both version lists are filled from the one answer.
-        self.update_published_versions = []
-        self.update_rollback_backup = ""
-        main_layout.addWidget(self.build_updates_section())
 
         # ---------------- Buttons ----------------
         btn_layout = QVBoxLayout()
         btn_layout.setSpacing(15)
-        apply_btn = QPushButton("حفظ وتفعيل الإعدادت")
+        apply_btn = QPushButton("حفظ وتطبيق الإعدادات")
         apply_btn.setFocusPolicy(Qt.NoFocus) # Fixes the "click twice" issue
         apply_btn.setAttribute(Qt.WA_AcceptTouchEvents) # Optimizes for touch
         reset_btn = QPushButton("إعادة ضبط الإعدادات")
@@ -667,7 +1538,7 @@ class ControlApp(QMainWindow):
                 background-color: #4CAF50;
                 color: white;
                 font-size: 22px;
-                border-radius: 14px;
+                border-radius: 7px;
             }
             QPushButton:hover { background-color: #45a049; }
             QPushButton:pressed { background-color: #3e8e41; }
@@ -678,7 +1549,7 @@ class ControlApp(QMainWindow):
                 background-color: #FF9800;
                 color: white;
                 font-size: 22px;
-                border-radius: 14px;
+                border-radius: 7px;
             }
             QPushButton:hover { background-color: #FB8C00; }
             QPushButton:pressed { background-color: #EF6C00; }
@@ -689,7 +1560,7 @@ class ControlApp(QMainWindow):
                 background-color: #F44336;
                 color: white;
                 font-size: 22px;
-                border-radius: 14px;
+                border-radius: 7px;
             }
             QPushButton:hover { background-color: #D32F2F; }
             QPushButton:pressed { background-color: #B71C1C; }
@@ -699,15 +1570,68 @@ class ControlApp(QMainWindow):
         reset_btn.clicked.connect(self.reset_settings)
         close_btn.clicked.connect(self.close)
 
-        for b in [apply_btn, reset_btn, close_btn]:
+        for b in [apply_btn, reset_btn]:
             btn_layout.addWidget(b)
 
-        main_layout.addLayout(btn_layout)
-        self.setCentralWidget(scroll)
+        saved_layout.addLayout(btn_layout)
+        main_layout.addWidget(close_btn)
+
+        # The no-internet banner sits above the scroll area rather than in it, so it is on
+        # screen whichever section is scrolled into view.
+        self.internet = internet_status.InternetMonitor(SETTINGS_INI_FILE)
+        self.internet_bar = QFrame()
+        self.internet_bar.setObjectName("internetBar")
+        self.internet_bar.setLayoutDirection(Qt.RightToLeft)
+        bar_layout = QHBoxLayout(self.internet_bar)
+        bar_layout.setContentsMargins(8, 4, 8, 4)
+        self.internet_banner = QLabel("")
+        self.internet_banner.setAlignment(Qt.AlignCenter)
+        self.internet_banner.setWordWrap(True)
+        bar_layout.addWidget(self.internet_banner, 1)
+        # Closes the warning for the rest of this outage; the green "back" message goes
+        # by itself.
+        self.internet_close = QPushButton("✕")
+        self.internet_close.setFocusPolicy(Qt.NoFocus)
+        self.internet_close.setFixedSize(40, 40)
+        self.internet_close.setStyleSheet(
+            "QPushButton { background: rgba(0, 0, 0, 0.25); color: white; border: none;"
+            " border-radius: 20px; font-size: 20px; font-weight: bold; }"
+            " QPushButton:pressed { background: rgba(0, 0, 0, 0.45); }")
+        self.internet_close.clicked.connect(self.close_internet_banner)
+        bar_layout.addWidget(self.internet_close)
+        self.internet_bar.hide()
+        # Full screen, like a page of the app it is opened from, so the way back is at the
+        # top where it can be seen without scrolling to «إغلاق».
+        back_bar = QWidget()
+        back_bar.setLayoutDirection(Qt.RightToLeft)
+        back_layout = QHBoxLayout(back_bar)
+        back_layout.setContentsMargins(10, 6, 10, 6)
+        self.back_btn = QPushButton("→ رجوع")
+        self.back_btn.setFocusPolicy(Qt.NoFocus)
+        self.back_btn.setFixedHeight(44)
+        self.back_btn.setStyleSheet(
+            "QPushButton { font-size: 20px; padding: 0 18px; border: 1px solid #ccc;"
+            " border-radius: 8px; background: #f3f4f6; }"
+            " QPushButton:pressed { background: #e5e7eb; }")
+        self.back_btn.clicked.connect(self.close)
+        self.from_desktop = False
+        back_layout.addWidget(self.back_btn)
+        back_layout.addStretch()
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(back_bar)
+        central_layout.addWidget(self.internet_bar)
+        central_layout.addWidget(scroll)
+        self.setCentralWidget(central)
+        self.internet_timer = QTimer(self)
+        self.internet_timer.timeout.connect(self.refresh_internet_banner)
+        self.internet_timer.start(1000)
 
         # ---------------- Increase form label fonts ----------------
         label_font = QFont()
-        label_font.setPointSize(16)
+        label_font.setPointSize(15)
         for layout in [tahajjud_form, duha_form, athkar_elsabah_form, athkar_elmasa_form, cron_form,
                        friday_quran_form]:
             for i in range(layout.rowCount()):
@@ -721,6 +1645,9 @@ class ControlApp(QMainWindow):
         self.setup_checkbox_link(self.tahajjud_chk, self.tahajjud_spin)
         self.setup_checkbox_link(self.duha_chk, self.duha_spin)
         self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_spin)
+        self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_mode_combo)
+        self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_hour_spin)
+        self.setup_checkbox_link(self.athkar_elsabah_chk, self.athkar_elsabah_min_spin)
         self.setup_checkbox_link(self.athkar_elmasa_chk, self.athkar_elmasa_spin)
         self.setup_checkbox_link(self.cron_chk, self.cron_hour_spin)
         self.setup_checkbox_link(self.cron_chk, self.cron_min_spin)
@@ -728,30 +1655,527 @@ class ControlApp(QMainWindow):
         self.setup_checkbox_link(self.friday_quran_chk, self.friday_quran_position_combo)
         self.last_valid_duha = self.duha_spin.value()
         self.duha_spin.editingFinished.connect(self.validate_duha_time)
+        self.last_valid_athkar_elsabah = self.athkar_elsabah_spin.value()
+        self.athkar_elsabah_spin.editingFinished.connect(self.validate_athkar_elsabah_time)
 
         # --- Live update calculated times ---
         self.duha_spin.valueChanged.connect(self.update_all_time_labels)
         self.tahajjud_spin.valueChanged.connect(self.update_all_time_labels)
         self.athkar_elsabah_spin.valueChanged.connect(self.update_all_time_labels)
+        self.athkar_elsabah_mode_combo.currentIndexChanged.connect(self.update_all_time_labels)
+        self.athkar_elsabah_hour_spin.valueChanged.connect(self.update_all_time_labels)
+        self.athkar_elsabah_min_spin.valueChanged.connect(self.update_all_time_labels)
         self.athkar_elmasa_spin.valueChanged.connect(self.update_all_time_labels)
         self.friday_quran_spin.valueChanged.connect(self.update_all_time_labels)
         self.friday_quran_position_combo.currentIndexChanged.connect(self.update_all_time_labels)
 
+        self.event_audio = {key: (self.prayer_audio_lists[key], PRAYER_AUDIO_DIRS[key])
+                            for key, _name, _wording in PRAYER_TIMES}
+        self.event_audio.update({
+            "tahajjud": (self.tahajjud_audio_list, TAHAJJUD_AUDIO_DIR),
+            "duha": (self.duha_audio_list, DUHA_AUDIO_DIR),
+            "athkar_elsabah": (self.athkar_elsabah_audio_list, ATHKAR_ELSABAH_AUDIO_DIR),
+            "athkar_elmasa": (self.athkar_elmasa_audio_list, ATHKAR_ELMASA_AUDIO_DIR),
+            "quran": (self.quran_audio_list, QURAN_AUDIO_DIR),
+            "friday_quran": (self.friday_quran_audio_list, FRIDAY_QURAN_AUDIO_DIR),
+        })
+        self.overlap_timer = QTimer(self)
+        self.overlap_timer.setSingleShot(True)
+        self.overlap_timer.setInterval(OVERLAP_CHECK_MS)
+        self.overlap_timer.timeout.connect(self.warn_new_overlaps)
+        self.commit_timer = QTimer(self)
+        self.commit_timer.setSingleShot(True)
+        self.commit_timer.setInterval(0)
+        self.commit_timer.timeout.connect(self.warn_new_overlaps)
+        timing = [self.cron_hour_spin, self.cron_min_spin, self.tahajjud_spin, self.duha_spin,
+                  self.athkar_elsabah_spin, self.athkar_elsabah_hour_spin,
+                  self.athkar_elsabah_min_spin, self.athkar_elmasa_spin, self.friday_quran_spin]
+        for spin in timing:
+            spin.valueChanged.connect(self.timing_changed)
+        for combo in (self.athkar_elsabah_mode_combo, self.friday_quran_position_combo):
+            combo.currentIndexChanged.connect(self.timing_committed)
+        for chk in [*self.prayer_checkboxes.values(), self.tahajjud_chk, self.duha_chk,
+                    self.athkar_elsabah_chk, self.athkar_elmasa_chk, self.cron_chk,
+                    self.friday_quran_chk]:
+            chk.stateChanged.connect(self.timing_committed)
+        for audio_list, _directory in self.event_audio.values():
+            audio_list.itemChanged.connect(self.timing_committed)
+        self.timing_spins = timing
+        self.timing_combos = [self.athkar_elsabah_mode_combo, self.friday_quran_position_combo]
+        self.timing_checks = [*self.prayer_checkboxes.values(), self.tahajjud_chk, self.duha_chk,
+                              self.athkar_elsabah_chk, self.athkar_elmasa_chk, self.cron_chk,
+                              self.friday_quran_chk]
+        self.restoring_timing = False
+
         # --- Initial calculation ---
         self.update_all_time_labels()
+        self.known_overlaps = self.current_overlaps()
+        self.good_timing = self.timing_snapshot()
+        self.number_pad = NumberPad(self, self.verify_timing)
+        for spin in self.findChildren(QSpinBox):
+            spin.lineEdit().installEventFilter(self)
+        if DEBUG_LOG is not None:
+            self.watch_for_debug()
+
+    def watch_for_debug(self):
+        for name, widget in vars(self).items():
+            if isinstance(widget, (QComboBox, QListWidget)) and not widget.objectName():
+                widget.setObjectName(name)
+        for combo in self.findChildren(QComboBox):
+            combo.currentIndexChanged.connect(
+                lambda _, c=combo: debug_log(f"menu {widget_name(c)} chose {c.currentText()!r}"))
+        for audio_list in self.findChildren(QListWidget):
+            audio_list.itemChanged.connect(
+                lambda item, l=audio_list: debug_log(
+                    f"list {widget_name(l)} {'ticked' if item.checkState() == Qt.Checked else 'unticked'}"
+                    f" {item.text()!r}"))
 
 
     # ---------------- Helpers ----------------
+    def create_bold_label(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("font-size: 20px; font-weight: bold;")
+        return lbl
+
+    def time_to_minutes(self, hhmm: str) -> int:
+        return minutes_of(hhmm)
+
+    # --- Convert minutes since midnight to the clock people read ---
+    def minutes_to_clock(self, minutes: int) -> str:
+        """For display only. No leading zero and no pad - these sit inside a sentence,
+        not in a column, so there is nothing to line up with.
+
+        Wrapped into a day first, because the callers can hand this an offset that
+        leaves one: Tahajjud is Fajr minus up to five hours, which goes negative on a
+        summer Fajr, and Athkar Elmasa is Maghrib plus up to five, which runs past
+        midnight. Without the wrap those land on the right digits with the wrong marker.
+
+        Returned inside a left-to-right isolate, so the Arabic sentence it is dropped
+        into shows it as "4:35 AM" and not "AM 4:35". The marks are invisible; strip
+        LTR_ISOLATE and POP_ISOLATE if the text is ever compared rather than shown."""
+        hour, minute = divmod(minutes % (24 * 60), 60)
+        mark = MERIDIEM_AM if hour < 12 else MERIDIEM_PM
+        return f"{LTR_ISOLATE}{hour % 12 or 12}:{minute:02d} {mark}{POP_ISOLATE}"
+
+    def effective_prayer_csv(self):
+        """The file whose times actually get scheduled: the daylight-saving copy when
+        that has been generated and not switched off, otherwise the reference file."""
+        if prayer_dst is not None and prayer_dst.adjustment_enabled(self.config["Settings"]):
+            adjusted = prayer_dst.dst_output_path(datetime.now().year,
+                                                  os.path.join(MAIN_DIR, "config"))
+            if os.path.isfile(adjusted):
+                return adjusted
+        return PRAYER_CSV_FILE
+
+    def load_prayer_row_for(self, date):
+        with open(self.effective_prayer_csv(), newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if int(row["Month"]) == date.month and int(row["Day"]) == date.day:
+                    return row
+
+        raise ValueError(f"Prayer times not found for {date.day:02d}/{date.month:02d}")
+
+    def load_today_prayer_row(self):
+        return self.load_prayer_row_for(datetime.now().date())
+
+    
+    def get_today_sunrise_dhuhr(self):
+        row = self.load_today_prayer_row()
+        sunrise = self.time_to_minutes(row["Sunrise"])
+        dhuhr = self.time_to_minutes(row["Dhuhr"])
+        return sunrise, dhuhr
+
+    def selected_athkar_elsabah_mode(self):
+        return athkar_mode_of(self.athkar_elsabah_mode_combo.currentData())
+
+    def select_athkar_elsabah_mode(self, value):
+        index = self.athkar_elsabah_mode_combo.findData(athkar_mode_of(value))
+        self.athkar_elsabah_mode_combo.setCurrentIndex(max(index, 0))
+
+    def athkar_elsabah_clock_parts(self, value):
+        """(hour, minute) of a saved HH:MM, or of the default when it is not one."""
+        try:
+            hour, minute = (int(part) for part in str(value).split(":"))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return hour, minute
+        except ValueError:
+            pass
+        hour, minute = DEFAULT_ATHKAR_ELSABAH_CLOCK.split(":")
+        return int(hour), int(minute)
+
+    def athkar_elsabah_clock_minutes(self):
+        return self.athkar_elsabah_hour_spin.value() * 60 + self.athkar_elsabah_min_spin.value()
+
+    def show_athkar_elsabah_mode(self):
+        """Only the half of the choice in use is shown. The other keeps its value, so
+        switching back finds it where it was left."""
+        fixed = self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK
+        for widget, visible in ((self.athkar_elsabah_spin, not fixed),
+                                (self.athkar_elsabah_hour_spin, fixed),
+                                (self.athkar_elsabah_min_spin, fixed)):
+            widget.setVisible(visible)
+            label = self.athkar_elsabah_form.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+
+    def athkar_elsabah_minutes_today(self, times):
+        """When Athkar Elsabah plays today, as 01_add_fields.py will place it: a fixed
+        time is moved inside Fajr..Dhuhr on a day it would not fit. Returns
+        (minutes, moved)."""
+        if self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK:
+            wanted = self.athkar_elsabah_clock_minutes()
+            when = min(max(wanted, times["fajr"] + 1), times["dhuhr"] - 1)
+            return when, when != wanted
+        return times["fajr"] + self.athkar_elsabah_spin.value(), False
+
+    def athkar_elsabah_conflicts_with_dhuhr(self):
+        """Athkar Elsabah must land strictly before Dhuhr - and, as a fixed time, after
+        Fajr. Checked against today's actual Fajr/Dhuhr, the same times shown in the label
+        under the section. Shows the warning and returns True when the value is invalid."""
+        times = self.get_today_prayer_times()
+        if self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK:
+            conflicts, message = athkar_clock_rule(self.athkar_elsabah_clock_minutes(),
+                                                   times["fajr"], times["dhuhr"],
+                                                   self.minutes_to_clock)
+        else:
+            conflicts, message = athkar_rule(self.athkar_elsabah_spin.value(),
+                                             times["fajr"], times["dhuhr"],
+                                             self.minutes_to_clock)
+        if conflicts:
+            arabic_warning(self, "تنبيه", message)
+        return conflicts
+
+    def year_moves_message(self):
+        """The question to ask before saving an Athkar Elsabah or Surat Al-Kahf time that
+        does not fit every day of the year, or "" when it does."""
+        rows = settings_rules.prayer_year_rows(self.effective_prayer_csv())
+        athkar = []
+        if self.athkar_elsabah_chk.isChecked():
+            athkar = settings_rules.athkar_elsabah_moves(
+                rows, self.selected_athkar_elsabah_mode(),
+                self.athkar_elsabah_clock_minutes(), self.athkar_elsabah_spin.value())
+        friday = []
+        if self.friday_quran_chk.isChecked():
+            friday = settings_rules.friday_quran_moves(
+                rows, datetime.now().year, self.selected_friday_quran_position(),
+                self.friday_quran_spin.value())
+        return settings_rules.year_moves_message(athkar, friday, self.minutes_to_clock)
+
+    def confirm_year_moves(self):
+        """Asks, when a time has to move on some days; False when the answer is no."""
+        message = self.year_moves_message()
+        return not message or arabic_confirm(self, "تنبيه", message)
+
+    def validate_athkar_elsabah_time(self):
+        try:
+            if self.athkar_elsabah_conflicts_with_dhuhr():
+                self.athkar_elsabah_spin.setValue(self.last_valid_athkar_elsabah)
+                return
+
+            self.last_valid_athkar_elsabah = self.athkar_elsabah_spin.value()
+
+        except Exception as e:
+            arabic_error(
+                self,
+                "خطأ",
+                f"فشل التحقق من وقت أذكار الصباح:\n{e}"
+            )
+            self.athkar_elsabah_spin.setValue(self.last_valid_athkar_elsabah)
+
+
+        # --- Read today's prayer times from CSV ---
+    def get_today_prayer_times(self):
+        row = self.load_today_prayer_row()
+
+        return {
+            "fajr": self.time_to_minutes(row["Fajr"]),
+            "sunrise": self.time_to_minutes(row["Sunrise"]),
+            "dhuhr": self.time_to_minutes(row["Dhuhr"]),
+            "asr": self.time_to_minutes(row["Asr"]),
+            "maghrib": self.time_to_minutes(row["Maghrib"]),
+            "isha": self.time_to_minutes(row["Isha"]),
+        }
+
+
+
+    def update_all_time_labels(self):
+        try:
+            times = self.get_today_prayer_times()  # get Fajr/Dhuhr/...
+            # --- Update prayer labels ---
+            for key, _name, _wording in PRAYER_TIMES:
+                self.prayer_time_labels[key].setText(self.minutes_to_clock(times[key]))
+
+            # --- Update Duha/Tahajjud/Athkar ---
+            sunrise, dhuhr = self.get_today_sunrise_dhuhr()
+            # Duha
+            duha_time = dhuhr - self.duha_spin.value()
+            self.duha_time_label.setText(self.minutes_to_clock(duha_time))
+            # Tahajjud
+            fajr = times["fajr"]
+            tahajjud_time = fajr - self.tahajjud_spin.value()
+            self.tahajjud_time_label.setText(self.minutes_to_clock(tahajjud_time))
+            # Athkar Sabh
+            athkar_sabah_time, moved = self.athkar_elsabah_minutes_today(times)
+            athkar_sabah_text = self.minutes_to_clock(athkar_sabah_time)
+            if moved:
+                athkar_sabah_text += " (تم تعديله ليقع بين الفجر والظهر)"
+            self.athkar_elsabah_time_label.setText(athkar_sabah_text)
+            fixed = self.selected_athkar_elsabah_mode() == ATHKAR_ELSABAH_MODE_CLOCK
+            self.athkar_elsabah_time_label.setVisible(not fixed or moved)
+            self.athkar_elsabah_time_label.parentWidget().setVisible(not fixed or moved)
+            # Athkar Masa
+            maghrib = times["maghrib"]
+            athkar_masa_time = maghrib + self.athkar_elmasa_spin.value()
+            self.athkar_elmasa_time_label.setText(self.minutes_to_clock(athkar_masa_time))
+
+            # Surat Al-Kahf. Read against the coming Friday's own times rather than today's,
+            # because that is the day it plays on - and in its own try, so a source CSV
+            # missing that one row cannot blank the labels above.
+            try:
+                self.friday_quran_time_label.setText(self.friday_quran_label_text())
+            except Exception as friday_error:
+                print("Failed to update the Surat Al-Kahf time label:", friday_error)
+                self.friday_quran_time_label.setText("--")
+
+        except Exception as e:
+            print("Failed to update time labels:", e)
+        self.paint_end_times()
+            # Optional: clear labels if error
+
+
+
+    def selected_friday_quran_position(self):
+        value = self.friday_quran_position_combo.currentData()
+        return value if value in (FRIDAY_QURAN_BEFORE, FRIDAY_QURAN_AFTER) \
+            else DEFAULT_FRIDAY_QURAN_POSITION
+
+    def select_friday_quran_position(self, value):
+        index = self.friday_quran_position_combo.findData(str(value).strip().lower())
+        self.friday_quran_position_combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def next_friday(self):
+        """Today when today is Friday, otherwise the Friday coming."""
+        today = datetime.now().date()
+        return today + timedelta(days=(FRIDAY_WEEKDAY - today.weekday()) % 7)
+
+    def clamp_friday_quran(self, minutes, row):
+        """The window the audio scheduler enforces per Friday: strictly between Sunrise and
+        Asr. One offset is applied to every Friday of the year, and the Dhuhr->Asr gap is
+        nearly two hours shorter in December than in June, so a value that is comfortable
+        in summer would otherwise land on top of the Asr athan in winter."""
+        asr = self.time_to_minutes(row["Asr"])
+        sunrise = self.time_to_minutes(row["Sunrise"])
+        if minutes >= asr:
+            minutes = asr - 1
+        if minutes <= sunrise:
+            minutes = sunrise + 1
+        return minutes
+
+    def friday_quran_label_text(self):
+        friday = self.next_friday()
+        row = self.load_prayer_row_for(friday)
+        dhuhr = self.time_to_minutes(row["Dhuhr"])
+        offset = self.friday_quran_spin.value()
+
+        wanted = dhuhr - offset if self.selected_friday_quran_position() == FRIDAY_QURAN_BEFORE \
+            else dhuhr + offset
+        when = self.clamp_friday_quran(wanted, row)
+
+        text = (f"{self.minutes_to_clock(when)} "
+                f"(الجمعة {LTR_ISOLATE}{friday.day:02d}/{friday.month:02d}{POP_ISOLATE})")
+        if when != wanted:
+            text += " (تم تعديله ليقع بين الشروق والعصر)"
+        return text
+
+    def clear_all_time_labels(self):
+        """Clears any existing displayed actual time labels in the UI."""
+        for attr in ['duha_label', 'tahajjud_label', 'athkar_elsabah_label', 'athkar_elmasa_label']:
+            if hasattr(self, attr):
+                lbl = getattr(self, attr)
+                lbl.setText("")
+
+
+
+    def duha_time_is_makrooh(self):
+        """Duha must be at least 20 minutes before Dhuhr and at least 20 minutes after
+        sunrise. Shows the matching warning and returns True when the current value
+        falls in either makrooh window."""
+        sunrise, dhuhr = self.get_today_sunrise_dhuhr()
+        makrooh, message = duha_rule(self.duha_spin.value(), sunrise, dhuhr)
+        if makrooh:
+            arabic_warning(self, "تنبيه", message)
+        return makrooh
+
+    def validate_duha_time(self):
+        try:
+            if self.duha_time_is_makrooh():
+                self.duha_spin.setValue(self.last_valid_duha)
+                return
+
+            self.last_valid_duha = self.duha_spin.value()
+
+        except Exception as e:
+            arabic_error(
+                self,
+                "خطأ",
+                f"فشل التحقق من وقت الضحى:\n{e}"
+            )
+            self.duha_spin.setValue(self.last_valid_duha)
+
+    def calculate_all_times(self):
+        """
+        Returns a dictionary with actual times for Duha, Tahajjud, Athkar Elsabah, Athkar Elmasa
+        in HH:MM format, based on today’s prayer times and user-configured minutes.
+        """
+        times = {}
+        try:
+            sunrise, dhuhr = self.get_today_sunrise_dhuhr()
+
+            # Duha: dhuhr - duha_spin
+            duha_minutes = dhuhr - self.duha_spin.value()
+            times['duha'] = f"{duha_minutes//60:02d}:{duha_minutes%60:02d}"
+
+            # Tahajjud: fajr - tahajjud_spin
+            with open(self.effective_prayer_csv(), newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                today = datetime.now()
+                for row in reader:
+                    if int(row["Month"]) == today.month and int(row["Day"]) == today.day:
+                        fajr = self.time_to_minutes(row["Fajr"])
+                        break
+            tahajjud_minutes = fajr - self.tahajjud_spin.value()
+            times['tahajjud'] = f"{tahajjud_minutes//60:02d}:{tahajjud_minutes%60:02d}"
+
+            # Athkar Elsabah: fajr + athkar_elsabah_spin
+            athkar_sabah_minutes, _ = self.athkar_elsabah_minutes_today(
+                {"fajr": fajr, "dhuhr": dhuhr})
+            times['athkar_elsabah'] = f"{athkar_sabah_minutes//60:02d}:{athkar_sabah_minutes%60:02d}"
+
+            # Athkar Elmasa: maghrib + athkar_elmasa_spin
+            maghrib = self.time_to_minutes(row["Maghrib"])
+            athkar_masa_minutes = maghrib + self.athkar_elmasa_spin.value()
+            times['athkar_elmasa'] = f"{athkar_masa_minutes//60:02d}:{athkar_masa_minutes%60:02d}"
+
+        except Exception as e:
+            print("Failed to calculate actual times:", e)
+            times = {}
+
+        return times
+
+
+    def create_checkable_audio_list(self, directory):
+        list_widget = QListWidget()
+        if not hasattr(self, "audio_list_widgets"):
+            self.audio_list_widgets = {}
+        self.audio_list_widgets[os.path.normpath(directory)] = list_widget
+        list_widget.setFixedHeight(220)
+        list_widget.setLayoutDirection(Qt.RightToLeft)
+        list_widget.setStyleSheet("""
+            QListWidget {
+                font-size: 20px;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+            }
+        """)
+
+        if not os.path.isdir(directory):
+            item = QListWidgetItem("❌ مجلد الملفات غير موجود")
+            item.setFlags(Qt.NoItemFlags)
+            list_widget.addItem(item)
+            return list_widget
+
+        for fname in audio_lists.available_audio(directory):
+            item = QListWidgetItem(fname)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            list_widget.addItem(item)
+
+        return list_widget
+
+    def load_audio_checked_state(self, list_widget, config_key):
+        checked_set = audio_lists.checked_from_config(
+            self.config["Settings"].get(config_key, ""))
+
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            item.setCheckState(
+                Qt.Checked if item.text() in checked_set else Qt.Unchecked
+            )
+
+
+    def reset_audio_list(self, list_widget, config_key):
+        items = [list_widget.item(i) for i in range(list_widget.count())
+                 if list_widget.item(i).flags() & Qt.ItemIsUserCheckable]
+        wanted = set(settings_defaults.reset_audio(
+            self.config["Settings"].get(config_key, ""), [item.text() for item in items]))
+        for item in items:
+            item.setCheckState(Qt.Checked if item.text() in wanted else Qt.Unchecked)
+        self.save_audio_checked_state(list_widget, config_key)
+
+    def event_switches(self):
+        """Each event's checkbox with the list of files it plays."""
+        pairs = [
+            (self.tahajjud_chk, self.tahajjud_audio_list),
+            (self.duha_chk, self.duha_audio_list),
+            (self.athkar_elsabah_chk, self.athkar_elsabah_audio_list),
+            (self.athkar_elmasa_chk, self.athkar_elmasa_audio_list),
+            (self.cron_chk, self.quran_audio_list),
+            (self.friday_quran_chk, self.friday_quran_audio_list),
+        ]
+        for prayer_key, list_widget in self.prayer_audio_lists.items():
+            pairs.append((self.prayer_checkboxes[f"{PRAYER_PREFIX}{prayer_key}"], list_widget))
+        return pairs
+
+    def untick_events_without_audio(self):
+        """An event plays only the files ticked for it, so one left on with none ticked
+        is switched off - on the screen too, so what is shown is what will happen."""
+        for chk, list_widget in self.event_switches():
+            ticked = any(list_widget.item(i).checkState() == Qt.Checked
+                         for i in range(list_widget.count()))
+            if chk.isChecked() and not ticked:
+                chk.setChecked(False)
+
+    def save_audio_checked_state(self, list_widget, config_key):
+        checked_files = []
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item.checkState() == Qt.Checked:
+                checked_files.append(item.text())
+
+        self.config["Settings"][config_key] = audio_lists.checked_to_config(checked_files)
+
+    def load_quran_audio_checked_state(self):
+        """Load checked state from config.ini"""
+        checked_files = self.config["Settings"].get("quran_audio_checked", "")
+        checked_set = set(f.strip() for f in checked_files.split(",") if f.strip())
+        for i in range(self.quran_audio_list.count()):
+            item = self.quran_audio_list.item(i)
+            if item.text() in checked_set:
+                item.setCheckState(Qt.Checked)
+            else:
+                item.setCheckState(Qt.Unchecked)
+
+
+    def save_quran_audio_checked_state(self):
+        checked_files = []
+        for i in range(self.quran_audio_list.count()):
+            item = self.quran_audio_list.item(i)
+            if item.checkState() == Qt.Checked:
+                checked_files.append(item.text())
+        self.config["Settings"]["quran_audio_checked"] = ",".join(checked_files)
+
+    # ---------------- Daylight saving ----------------
     def build_updates_section(self):
         """Version, and the three things anyone would want to do about it: take the
         newest one, go to a particular one, or go back to the one that worked."""
         frame = self.create_section_frame(
-            "تحديثات البرنامج", font_family="Rasheeq", font_size=38, bold=True
+            "تحديثات البرنامج", font_family="Amiri", font_size=22, bold=True
         )
         layout = frame.layout()
 
         self.update_status_label = QLabel("")
-        self.update_status_label.setStyleSheet("font-size: 22px; padding: 4px;")
+        self.update_status_label.setStyleSheet("font-size: 18px; padding: 4px;")
         self.update_status_label.setWordWrap(True)
         layout.addWidget(self.update_status_label)
 
@@ -759,7 +2183,7 @@ class ControlApp(QMainWindow):
         # unit. The update itself is applied; this is the part a person has to finish.
         self.update_attention_label = QLabel("")
         self.update_attention_label.setStyleSheet(
-            "font-size: 18px; padding: 6px; color: #7a4b00;"
+            "font-size: 16px; padding: 6px; color: #7a4b00;"
             " background-color: #fff3cd; border: 1px solid #ffe08a; border-radius: 6px;"
         )
         self.update_attention_label.setWordWrap(True)
@@ -767,20 +2191,33 @@ class ControlApp(QMainWindow):
         layout.addWidget(self.update_attention_label)
 
         self.update_auto_chk = QCheckBox("تحديث تلقائي يومي")
-        self.update_auto_chk.setStyleSheet("font-size: 22px; padding: 5px; font-weight: bold;")
+        self.update_auto_chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
         self.update_auto_chk.setLayoutDirection(Qt.RightToLeft)
-        self.update_auto_chk.stateChanged.connect(self.save_update_enabled)
+        # clicked, not stateChanged: stateChanged fires in the middle of Qt's own click
+        # handling, where unticking the box again (a "no" below) leaves the checkbox
+        # believing it already announced the tick - so the next tap shows a tick and
+        # runs nothing, with ENABLED still false. clicked fires once the click is done.
+        self.update_auto_chk.clicked.connect(self.save_update_enabled)
         layout.addWidget(self.update_auto_chk)
 
-        # Shown only while PIN is set, which is a state a device is not normally in - it
-        # gets there by someone choosing a version below, or by being prepared that way.
-        # A pin is invisible otherwise: the daily check quietly stops following the fleet,
-        # and there is no SSH into a device once it is in someone's home. So the pin says
-        # so in words, and the way out is a button that exists only when there is
-        # something to undo - rather than a permanently ticked checkbox that does nothing.
+        check_time = update_check_time()
+        self.update_schedule_label = QLabel(
+            f"يُفحص عن تحديث ويُثبَّت يوميًا الساعة"
+            f" {self.minutes_to_clock(check_time[0] * 60 + check_time[1])}"
+            if check_time else "")
+        self.update_schedule_label.setStyleSheet(
+            "font-size: 17px; padding: 2px 18px; color: #6c757d;")
+        self.update_schedule_label.setWordWrap(True)
+        self.update_schedule_label.hide()
+        layout.addWidget(self.update_schedule_label)
+
+        # The checkbox is the only thing that stops the device following the fleet, so
+        # while it is off the device says so in red, naming the version it is held on.
+        # Choosing a version below never does this by itself: a hold nobody noticed
+        # setting is what left devices behind with the box still ticked.
         self.update_pin_label = QLabel("")
         self.update_pin_label.setStyleSheet(
-            "font-size: 19px; padding: 2px 18px; color: #6c757d;")
+            "font-size: 17px; padding: 2px 18px; color: #dc3545; font-weight: bold;")
         self.update_pin_label.setWordWrap(True)
         self.update_pin_label.hide()
         layout.addWidget(self.update_pin_label)
@@ -796,28 +2233,13 @@ class ControlApp(QMainWindow):
         self.update_pointer_label.hide()
         layout.addWidget(self.update_pointer_label)
 
-        self.update_unpin_btn = QPushButton("العودة إلى التحديث المركزي")
-        self.update_unpin_btn.setStyleSheet(self.update_button_style("#6c757d"))
-        self.update_unpin_btn.setMinimumHeight(54)
-        self.update_unpin_btn.clicked.connect(self.clear_update_pin)
-        self.update_unpin_btn.hide()
-        self.add_update_row(layout, (self.update_unpin_btn, 1))
-
-        # Above both groups rather than inside either: one fetch fills the version list
-        # and the rollback list alike, so it does not belong to one of them.
-        self.update_refresh_btn = QPushButton("جلب الإصدارات")
-        self.update_refresh_btn.setStyleSheet(self.update_button_style("#6c757d"))
-        self.update_refresh_btn.setMinimumHeight(60)
-        self.update_refresh_btn.clicked.connect(self.load_available_versions)
-        self.add_update_row(layout, (self.update_refresh_btn, 1))
-
         # "Latest" here means the version VERSIONS.json names for this variant, which is the
         # latest one approved for these devices - not whatever is newest on GitHub. A build
         # can be published and tried on one device before the fleet is pointed at it, and
         # the button must not be the thing that undoes that.
         self.update_now_btn = QPushButton("التحديث إلى أحدث إصدار")
         self.update_now_btn.setStyleSheet(self.update_button_style("#198754"))
-        self.update_now_btn.setMinimumHeight(60)
+        self.update_now_btn.setMinimumHeight(48)
         self.update_now_btn.clicked.connect(self.run_update_now)
         self.add_update_row(layout, (self.update_now_btn, 1))
 
@@ -830,7 +2252,7 @@ class ControlApp(QMainWindow):
 
         self.update_pin_btn = QPushButton("تثبيت الإصدار المحدد")
         self.update_pin_btn.setStyleSheet(self.update_button_style("#0d6efd"))
-        self.update_pin_btn.setMinimumHeight(60)
+        self.update_pin_btn.setMinimumHeight(48)
         self.update_pin_btn.clicked.connect(self.install_selected_version)
         self.add_update_row(layout, (self.update_pin_btn, 1))
 
@@ -848,7 +2270,7 @@ class ControlApp(QMainWindow):
 
         self.update_rollback_btn = QPushButton("الرجوع إلى الإصدار السابق")
         self.update_rollback_btn.setStyleSheet(self.update_button_style("#dc3545"))
-        self.update_rollback_btn.setMinimumHeight(60)
+        self.update_rollback_btn.setMinimumHeight(48)
         self.update_rollback_btn.clicked.connect(self.run_update_rollback)
         self.add_update_row(layout, (self.update_rollback_btn, 1))
 
@@ -857,19 +2279,19 @@ class ControlApp(QMainWindow):
 
     def create_update_heading(self, text):
         label = QLabel(text)
-        label.setStyleSheet("font-size: 22px; padding: 8px 2px 0 2px; font-weight: bold;")
+        label.setStyleSheet("font-size: 18px; padding: 8px 2px 0 2px; font-weight: bold;")
         return label
 
     def create_version_combo(self):
-        combo = QComboBox()
+        combo = FetchingComboBox(self.fetch_versions_before_popup)
         combo.setLayoutDirection(Qt.RightToLeft)
         # combobox-popup: 0 is what makes setMaxVisibleItems bind - the default popup sizes
         # itself to its contents and ignores the limit. Releases only accumulate, and this
         # is a touchscreen: past five the list is taller than the panel and the older
         # versions are out of reach. Five at a time, newest first, the rest a scroll away.
-        combo.setStyleSheet("QComboBox { font-size: 22px; padding: 5px; combobox-popup: 0; }")
+        combo.setStyleSheet("QComboBox { font-size: 18px; padding: 5px; combobox-popup: 0; }")
         combo.setMaxVisibleItems(5)
-        combo.setFixedHeight(50)
+        combo.setFixedHeight(45)
         return combo
 
     def add_update_row(self, layout, *widgets):
@@ -896,7 +2318,7 @@ class ControlApp(QMainWindow):
     def update_button_style(self, colour):
         return (
             f"QPushButton {{ background-color: {colour}; color: white;"
-            " font-size: 22px; font-weight: bold; border: none; border-radius: 8px;"
+            " font-size: 18px; font-weight: bold; border: none; border-radius: 8px;"
             " padding: 8px; }"
             "QPushButton:disabled { background-color: #adb5bd; }"
         )
@@ -918,6 +2340,7 @@ class ControlApp(QMainWindow):
         status = self.read_update_status()
         installed = status.get("installed") or "غير معروف"
         pinned = status.get("pinned") or ""
+        self.update_installed_version = installed
 
         lines = [f"الإصدار المثبَّت: {installed}"]
         outcome = {
@@ -937,23 +2360,16 @@ class ControlApp(QMainWindow):
 
         attention = status.get("needs_attention")
         if attention:
-            self.update_attention_label.setText(
-                "هذا التحديث يحتاج إلى إكمال يدوي — افتح أيقونة «تثبيت مكونات النظام» من سطح المكتب.\n"
-                f"({attention})"
-            )
+            self.update_attention_label.setText(attention_text(attention))
             self.update_attention_label.show()
         else:
             self.update_attention_label.hide()
 
         self.populate_rollback_versions()
-        self.update_auto_chk.blockSignals(True)
-        self.update_auto_chk.setChecked(bool(status.get("enabled", True)))
-        self.update_auto_chk.blockSignals(False)
-
-        self.update_pin_label.setText(
-            f"مثبَّت على الإصدار {pinned} — لا يتبع التحديث المركزي" if pinned else "")
-        self.update_pin_label.setVisible(bool(pinned))
-        self.update_unpin_btn.setVisible(bool(pinned))
+        # A PIN left by an older release, or set over SSH, holds the device just as
+        # ENABLED=false does, so it shows as off too - and ticking the box clears it.
+        self.set_update_auto_ticked(bool(status.get("enabled", True)) and not pinned)
+        self.show_update_hold(pinned or installed)
 
         custom_pointer = "" if status.get("pointer_is_default", True) else status.get("pointer", "")
         self.update_pointer_label.setText(
@@ -961,42 +2377,92 @@ class ControlApp(QMainWindow):
         self.update_pointer_label.setVisible(bool(custom_pointer))
 
     def write_update_conf(self, key, value):
-        """update.conf is plain shell, and the updater sources it - so a value is
-        rewritten in place rather than the file regenerated, which would lose anything
-        the owner had set by hand."""
         try:
-            with open(UPDATE_CONF_FILE, encoding="utf-8") as handle:
-                text = handle.read()
-        except OSError:
-            text = ""
-        line = f"{key}={value}"
-        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
-        text = pattern.sub(line, text) if pattern.search(text) else (text.rstrip("\n") + f"\n{line}\n")
-        try:
-            with open(UPDATE_CONF_FILE, "w", encoding="utf-8") as handle:
-                handle.write(text)
+            updates.write_conf(UPDATE_CONF_FILE, key, value)
             return True
         except OSError as error:
             arabic_error(self, "تعذر حفظ إعدادات التحديث", str(error))
             return False
 
-    def clear_update_pin(self):
-        """Back to whatever VERSIONS.json names. Only reachable while pinned.
+    def show_update_hold(self, version):
+        held = not self.update_auto_chk.isChecked()
+        self.update_pin_label.setText(
+            f"التحديث التلقائي متوقف — الجهاز ثابت على الإصدار {version}، ولن يُحدَّث"
+            " تلقائيًا حتى تفعيل «تحديث تلقائي يومي»" if held else "")
+        self.update_pin_label.setVisible(held)
+        self.update_schedule_label.setVisible(
+            not held and bool(self.update_schedule_label.text()))
 
-        Clearing the pin does not itself move the device - the next daily check does, or
-        التحديث إلى أحدث إصدار right now. Pinning is the other direction, and lives with the version
-        list below, which is the only place a version is actually chosen.
-        """
-        if self.write_update_conf("PIN", ""):
-            self.refresh_update_status()
+    def read_latest_version(self):
+        """The version the daily check would install - VERSIONS.json's, not the newest
+        published. Empty when the pointer cannot be reached."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = subprocess.run(
+                ["/bin/bash", CHECK_UPDATES_SCRIPT_FILE, "--latest"],
+                capture_output=True, text=True, timeout=UPDATE_LIST_TIMEOUT_SECONDS
+            )
+            return result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def confirm_update_hold(self, version):
+        """Anything but the latest release would be undone by that night's check, so
+        taking one turns the daily check off - but only once the user has said yes."""
+        if not self.update_auto_chk.isChecked() or version == self.read_latest_version():
+            return True
+        if not arabic_confirm(self, "ليس أحدث إصدار", updates.hold_question(version)):
+            return False
+        self.update_auto_chk.setChecked(False)
+        self.save_update_enabled()
+        return True
+
+    def set_update_auto_ticked(self, ticked):
+        self.update_auto_chk.blockSignals(True)
+        self.update_auto_chk.setChecked(ticked)
+        self.update_auto_chk.blockSignals(False)
 
     def save_update_enabled(self):
-        self.write_update_conf("ENABLED", "true" if self.update_auto_chk.isChecked() else "false")
+        enabled = self.update_auto_chk.isChecked()
+        move_to = ""
+        if enabled:
+            # Unticked until the answer is in, so the screen never shows a tick that
+            # nothing has saved yet.
+            self.set_update_auto_ticked(False)
+            installed = getattr(self, "update_installed_version", "")
+            latest = self.read_latest_version()
+            question = updates.enable_question(installed, latest)
+            if question:
+                if not arabic_confirm(self, "تفعيل التحديث التلقائي", question):
+                    return
+                move_to = latest
+            self.set_update_auto_ticked(True)
+        self.write_update_conf("ENABLED", "true" if enabled else "false")
+        if enabled:
+            self.write_update_conf("PIN", "")
+        self.show_update_hold(getattr(self, "update_installed_version", ""))
+        if move_to:
+            self.start_update(["--now"], f"جارٍ الانتقال إلى {move_to}…")
+
+    def fetch_versions_before_popup(self, combo):
+        """Either list, on being opened. A fetch less than a minute old is reused, so
+        opening one list after the other does not ask twice.
+
+        The rollback list still opens when the fetch fails, as long as it holds the
+        retained backup - that one needs no network.
+        """
+        fresh = (self.update_versions_fetched_at is not None
+                 and datetime.now() - self.update_versions_fetched_at < UPDATE_LIST_FRESH_FOR)
+        if fresh or self.load_available_versions():
+            return True
+        arabic_error(self, "تعذر جلب الإصدارات",
+                     "تأكد من اتصال الجهاز بالإنترنت ثم أعد المحاولة.")
+        return combo is self.update_rollback_combo and combo.count() > 1
 
     def load_available_versions(self):
-        self.update_refresh_btn.setEnabled(False)
-        self.update_refresh_btn.setText("جارٍ الجلب…")
-        QApplication.processEvents()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         versions = []
         try:
             result = subprocess.run(
@@ -1006,15 +2472,12 @@ class ControlApp(QMainWindow):
             versions = [v.strip() for v in result.stdout.splitlines() if v.strip()]
         except (OSError, subprocess.SubprocessError):
             pass
-        self.update_refresh_btn.setEnabled(True)
-        self.update_refresh_btn.setText("جلب الإصدارات")
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not versions:
+            return False
 
         self.update_version_combo.clear()
-        if not versions:
-            self.update_version_combo.addItem("تعذر جلب الإصدارات", "")
-            arabic_error(self, "تعذر جلب الإصدارات",
-                         "تأكد من اتصال الجهاز بالإنترنت ثم أعد المحاولة.")
-            return
         self.update_version_combo.addItem("اختر إصدارًا…", "")
         for version in sorted(versions, key=version_key, reverse=True):
             self.update_version_combo.addItem(version, version)
@@ -1022,7 +2485,9 @@ class ControlApp(QMainWindow):
         # The same fetch fills the rollback list, which until now held only whatever backup
         # is on disk - the older releases are not knowable without asking.
         self.update_published_versions = versions
+        self.update_versions_fetched_at = datetime.now()
         self.populate_rollback_versions()
+        return True
 
     def make_update_busy_dialog(self, text):
         """Owns the screen for the whole update.
@@ -1041,12 +2506,12 @@ class ControlApp(QMainWindow):
         layout = QVBoxLayout(dialog)
         label = QLabel(text)
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("font-size: 22px; padding: 10px;")
+        label.setStyleSheet("font-size: 20px; padding: 10px;")
         bar = QProgressBar()
         # Indeterminate - check_updates.sh reports no progress, only a final result.
         bar.setRange(0, 0)
         bar.setTextVisible(False)
-        bar.setFixedHeight(22)
+        bar.setFixedHeight(18)
         layout.addWidget(label)
         layout.addWidget(bar)
         dialog.setMinimumWidth(380)
@@ -1071,24 +2536,24 @@ class ControlApp(QMainWindow):
         version = self.update_version_combo.currentData()
         if not version:
             arabic_error(self, "لم يتم اختيار إصدار",
-                         "اضغط «جلب الإصدارات» ثم اختر إصدارًا من القائمة.")
+                         "افتح القائمة واختر إصدارًا منها.")
             return
-        # Pinned as well as installed: without the pin the daily check would pull the
-        # device straight back to the newest release, which is the opposite of what
-        # choosing a particular version means.
-        self.write_update_conf("PIN", version)
+        if not self.confirm_update_hold(version):
+            return
         self.start_update(["--target", version], f"جارٍ التثبيت {version}…")
 
     def run_update_rollback(self):
         version = self.update_rollback_combo.currentData()
         if not version:
-            arabic_error(self, "لم يتم اختيار إصدار",
-                         "اختر إصدارًا من القائمة أعلاه. إن كانت فارغة فاضغط «جلب الإصدارات».")
+            if self.update_rollback_combo.count() < 2:
+                arabic_error(self, "لا يوجد إصدار سابق",
+                             "لا يوجد على الجهاز ولا على الإنترنت إصدار أقدم للرجوع إليه.")
+            else:
+                arabic_error(self, "لم يتم اختيار إصدار",
+                             "افتح القائمة أعلاه واختر إصدارًا منها.")
             return
-        # Going back on purpose has to stick. Without the pin, that night's check would put
-        # the device straight back on the version it was just taken off - the same reason
-        # installing a chosen version pins. الرجوع إلى التحديث المركزي undoes it.
-        self.write_update_conf("PIN", version)
+        if not self.confirm_update_hold(version):
+            return
         if version == self.update_rollback_backup:
             # On disk already: no download, and the exact bytes that were verified healthy.
             self.start_update(["--rollback"], f"جارٍ الرجوع إلى {version}…")
@@ -1104,15 +2569,9 @@ class ControlApp(QMainWindow):
         status = self.read_update_status()
         installed = status.get("installed") or ""
         backup = status.get("rollback_to") or ""
-        # After a rollback the backup directory still holds the version now running, and
-        # there is no going back to where you already are.
-        if backup == installed:
-            backup = ""
+        backup, older = updates.rollback_choices(installed, backup,
+                                                 self.update_published_versions)
         self.update_rollback_backup = backup
-
-        older = [v for v in self.update_published_versions
-                 if v != backup and (not installed or version_key(v) < version_key(installed))]
-        older.sort(key=version_key, reverse=True)
 
         previous = self.update_rollback_combo.currentData()
         self.update_rollback_combo.blockSignals(True)
@@ -1133,7 +2592,9 @@ class ControlApp(QMainWindow):
 
     def update_rollback_button_text(self):
         version = self.update_rollback_combo.currentData()
-        self.update_rollback_btn.setEnabled(bool(version))
+        # Red even with nothing chosen, as on the website: a tap then says to choose one.
+        # Only an update in progress greys it out.
+        self.update_rollback_btn.setEnabled(getattr(self, "update_busy", None) is None)
         if version:
             self.update_rollback_btn.setText(f"الرجوع إلى الإصدار {version}")
         elif self.update_rollback_combo.count() > 1:
@@ -1193,393 +2654,853 @@ class ControlApp(QMainWindow):
                          "لم يكتمل التحديث، وتمت إعادة الجهاز إلى الإصدار السابق.\n\n"
                          + (tail or "راجع سجل logs/check_updates.log على الجهاز."))
 
-    def create_bold_label(self, text):
+    def build_saved_box(self):
+        """The box around the sections the save button keeps. Its own style is held to
+        it by name, so the sections inside keep theirs."""
+        box = QFrame()
+        box.setObjectName("savedBox")
+        box.setStyleSheet("""
+            QFrame#savedBox {
+                background-color: #eef7ee;
+                border: 3px solid #4CAF50;
+                border-radius: 12px;
+            }
+        """)
+        box.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(15)
+
+        title = QLabel("إعدادات الأذان والتلاوات")
+        title.setAlignment(Qt.AlignCenter)
+        apply_arabic_font(title, size=32, bold=True)
+        title.setStyleSheet("color: #2e7d32; padding: 6px;")
+        layout.addWidget(title)
+
+        hint = QLabel("تُحفظ هذه الإعدادات معًا بزر «حفظ وتطبيق الإعدادات» في أسفلها.")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet("font-size: 16px; color: #555; padding: 2px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        return box
+
+    def build_internet_warning_section(self):
+        frame = self.create_section_frame(
+            "تنبيه انقطاع الإنترنت", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
+
+        self.internet_warning_chk = QCheckBox("إظهار تنبيه عند انقطاع الإنترنت")
+        self.internet_warning_chk.setChecked(self.config["Settings"].getboolean(
+            internet_status.ENABLE_KEY, fallback=internet_status.DEFAULT_ENABLED))
+        self.internet_warning_chk.setStyleSheet(
+            "font-size: 20px; padding: 5px; font-weight: bold;")
+        self.internet_warning_chk.setLayoutDirection(Qt.RightToLeft)
+        layout.addWidget(self.internet_warning_chk)
+
+        hint = QLabel(
+            "يأخذ الجهاز الوقت من الإنترنت، فإذا انقطع قد تصبح مواقيت الأذان غير دقيقة، "
+            "خاصةً إذا انقطعت الكهرباء أثناء ذلك.\nيظهر التنبيه على شاشة مواقيت الصلاة "
+            "وفي تطبيق الإعدادات فور فتحهما إذا كان الجهاز غير متصل، أو بعد ٥ دقائق من "
+            "انقطاع الاتصال، ويختفي عند عودته أو عند إغلاقه بالزر ✕.\n"
+            "وإذا انقطع الواي فاي نفسه دقيقتين، تظهر نافذة لاختيار شبكة المنزل وكتابة "
+            "كلمة مرورها."
+        )
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        # Its own height and no more: a wrapped label leaves Qt reserving room for more
+        # lines than it ends up needing, and the title box took the slack.
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def audio_folder_combo(self):
+        combo = RightAlignedComboBox()
+        combo.setLayoutDirection(Qt.RightToLeft)
+        combo.setStyleSheet(COMBO_STYLE)
+        combo.setFixedHeight(45)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        combo.addItem("اختر المجلد…", "")
+        for folder, label in audio_upload.folders(MAIN_DIR):
+            combo.addItem(f"{label} ({folder})", folder)
+        return combo
+
+    def audio_part_label(self, text):
         lbl = QLabel(text)
-        lbl.setStyleSheet("font-size: 22px")
+        lbl.setStyleSheet("font-size: 21px; font-weight: bold; color: #1f5f8b; "
+                          "border: none; padding: 4px 2px;")
         return lbl
 
-    def time_to_minutes(self, hhmm: str) -> int:
-        """Convert HH:MM to minutes since midnight"""
-        hour, minute = hhmm.split(":")
-        return int(hour) * 60 + int(minute)
+    def build_audio_upload_section(self):
+        frame = self.create_section_frame(
+            "إدارة الملفات الصوتية", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
 
-    # --- Convert minutes since midnight to the clock people read ---
-    def minutes_to_clock(self, minutes: int) -> str:
-        """For display only. No leading zero and no pad - these sit inside a sentence,
-        not in a column, so there is nothing to line up with.
+        layout.addWidget(self.audio_part_label("رفع ملف"))
+        layout.addWidget(self.create_bold_label("المجلد:"))
+        self.upload_folder_combo = self.audio_folder_combo()
+        layout.addWidget(self.upload_folder_combo, alignment=Qt.AlignLeading)
 
-        Wrapped into a day first, because the callers can hand this an offset that
-        leaves one: Tahajjud is Fajr minus up to five hours, which goes negative on a
-        summer Fajr, and Athkar Elmasa is Maghrib plus up to five, which runs past
-        midnight. Without the wrap those land on the right digits with the wrong marker.
+        self.upload_btn = QPushButton("اختيار الملف الصوتي ورفعه")
+        self.upload_btn.setFixedHeight(50)
+        self.upload_btn.setCursor(Qt.PointingHandCursor)
+        self.upload_btn.clicked.connect(self.upload_audio_file)
+        self.upload_folder_combo.currentIndexChanged.connect(self.paint_upload_button)
+        self.paint_upload_button()
+        self.add_update_row(layout, (self.upload_btn, 1))
 
-        Returned inside a left-to-right isolate, so the Arabic sentence it is dropped
-        into shows it as "4:35 AM" and not "AM 4:35". The marks are invisible; strip
-        LTR_ISOLATE and POP_ISOLATE if the text is ever compared rather than shown."""
-        hour, minute = divmod(minutes % (24 * 60), 60)
-        mark = MERIDIEM_AM if hour < 12 else MERIDIEM_PM
-        return f"{LTR_ISOLATE}{hour % 12 or 12}:{minute:02d} {mark}{POP_ISOLATE}"
-    
-    def get_today_sunrise_dhuhr(self):
-        """
-        Returns (sunrise_minutes, dhuhr_minutes) for today
-        from إدخال-مواقيت-الصلاة-للمستخدم.csv
-        """
-        from datetime import datetime
+        hint = QLabel(
+            "ملف MP3 فقط، من الجهاز أو من ذاكرة USB موصولة به. يظهر الملف بعد رفعه في "
+            "قائمة ملفات المجلد غير محدد؛ حدّده ثم اضغط «حفظ وتطبيق الإعدادات» ليُشغَّل."
+        )
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
-        today = datetime.now()
-        month = today.month
-        day = today.day
+        layout.addSpacing(10)
+        layout.addWidget(self.audio_part_label("حذف ملفات"))
+        layout.addWidget(self.create_bold_label("المجلد:"))
+        self.remove_folder_combo = self.audio_folder_combo()
+        self.remove_folder_combo.currentIndexChanged.connect(self.fill_remove_list)
+        layout.addWidget(self.remove_folder_combo, alignment=Qt.AlignLeading)
 
-        with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-
-            for row in reader:
-                if int(row["Month"]) == month and int(row["Day"]) == day:
-                    sunrise = self.time_to_minutes(row["Sunrise"])
-                    dhuhr = self.time_to_minutes(row["Dhuhr"])
-                    return sunrise, dhuhr
-
-        raise ValueError("لم يتم العثور على مواقيت الصلاة لليوم الحالي")
-
-        # --- Read today's prayer times from CSV ---
-    def get_today_prayer_times(self):
-        from datetime import datetime
-
-        today = datetime.now()
-        month, day = today.month, today.day
-
-        with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if int(row["Month"]) == month and int(row["Day"]) == day:
-                    return {
-                        "fajr": self.time_to_minutes(row["Fajr"]),
-                        "sunrise": self.time_to_minutes(row["Sunrise"]),
-                        "dhuhr": self.time_to_minutes(row["Dhuhr"]),
-                        "asr": self.time_to_minutes(row["Asr"]),
-                        "maghrib": self.time_to_minutes(row["Maghrib"]),
-                        "isha": self.time_to_minutes(row["Isha"]),
-                    }
-
-
-        raise ValueError("Prayer times not found for today")
-
-
-    def update_all_time_labels(self):
-        try:
-            times = self.get_today_prayer_times()  # get Fajr/Dhuhr/...
-            # --- Update prayer labels ---
-            for key, arabic_name in PRAYER_TIMES:
-                self.prayer_time_labels[key].setText(
-                    f"وقت صلاة {arabic_name}: {self.minutes_to_clock(times[key])}"
-                )
-
-            # --- Update Duha/Tahajjud/Athkar ---
-            sunrise, dhuhr = self.get_today_sunrise_dhuhr()
-            # Duha
-            duha_time = dhuhr - self.duha_spin.value()
-            self.duha_time_label.setText(f"وقت صلاة الضحى: {self.minutes_to_clock(duha_time)}")
-            # Tahajjud
-            fajr = times["fajr"]
-            tahajjud_time = fajr - self.tahajjud_spin.value()
-            self.tahajjud_time_label.setText(f"وقت صلاة التهجد: {self.minutes_to_clock(tahajjud_time)}")
-            # Athkar Sabh
-            athkar_sabah_time = fajr + self.athkar_elsabah_spin.value()
-            self.athkar_elsabah_time_label.setText(f"وقت أذكار الصباح: {self.minutes_to_clock(athkar_sabah_time)}")
-            # Athkar Masa
-            maghrib = times["maghrib"]
-            athkar_masa_time = maghrib + self.athkar_elmasa_spin.value()
-            self.athkar_elmasa_time_label.setText(f"وقت أذكار المساء: {self.minutes_to_clock(athkar_masa_time)}")
-
-            # Surat Al-Kahf. Read against the coming Friday's own times rather than today's,
-            # because that is the day it plays on - and in its own try, so a source CSV
-            # missing that one row cannot blank the labels above.
-            try:
-                self.friday_quran_time_label.setText(self.friday_quran_label_text())
-            except Exception as friday_error:
-                print("Failed to update the Surat Al-Kahf time label:", friday_error)
-                self.friday_quran_time_label.setText("--")
-
-        except Exception as e:
-            print("Failed to update time labels:", e)
-            # Optional: clear labels if error
-
-
-
-    def load_prayer_row_for(self, date):
-        with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                if int(row["Month"]) == date.month and int(row["Day"]) == date.day:
-                    return row
-
-        raise ValueError(f"Prayer times not found for {date.day:02d}/{date.month:02d}")
-
-    def selected_friday_quran_position(self):
-        value = self.friday_quran_position_combo.currentData()
-        return value if value in (FRIDAY_QURAN_BEFORE, FRIDAY_QURAN_AFTER) \
-            else DEFAULT_FRIDAY_QURAN_POSITION
-
-    def select_friday_quran_position(self, value):
-        index = self.friday_quran_position_combo.findData(str(value).strip().lower())
-        self.friday_quran_position_combo.setCurrentIndex(index if index >= 0 else 0)
-
-    def next_friday(self):
-        """Today when today is Friday, otherwise the Friday coming."""
-        today = datetime.now().date()
-        return today + timedelta(days=(FRIDAY_WEEKDAY - today.weekday()) % 7)
-
-    def clamp_friday_quran(self, minutes, row):
-        """The window the audio scheduler enforces per Friday: strictly between Sunrise and
-        Asr. One offset is applied to every Friday of the year, and the Dhuhr->Asr gap is
-        nearly two hours shorter in December than in June, so a value that is comfortable
-        in summer would otherwise land on top of the Asr athan in winter."""
-        asr = self.time_to_minutes(row["Asr"])
-        sunrise = self.time_to_minutes(row["Sunrise"])
-        if minutes >= asr:
-            minutes = asr - 1
-        if minutes <= sunrise:
-            minutes = sunrise + 1
-        return minutes
-
-    def friday_quran_label_text(self):
-        friday = self.next_friday()
-        row = self.load_prayer_row_for(friday)
-        dhuhr = self.time_to_minutes(row["Dhuhr"])
-        offset = self.friday_quran_spin.value()
-
-        wanted = dhuhr - offset if self.selected_friday_quran_position() == FRIDAY_QURAN_BEFORE \
-            else dhuhr + offset
-        when = self.clamp_friday_quran(wanted, row)
-
-        text = (f"وقت قراءة سورة الكهف يوم الجمعة {friday.day:02d}/{friday.month:02d}: "
-                f"{self.minutes_to_clock(when)}")
-        if when != wanted:
-            text += " (تم تعديله ليقع بين الشروق والعصر)"
-        return text
-
-    def clear_all_time_labels(self):
-        """Clears any existing displayed actual time labels in the UI."""
-        for attr in ['duha_label', 'tahajjud_label', 'athkar_elsabah_label', 'athkar_elmasa_label']:
-            if hasattr(self, attr):
-                lbl = getattr(self, attr)
-                lbl.setText("")
-
-
-
-    def validate_duha_time(self):
-        try:
-            U = self.duha_spin.value()  # user minutes before Dhuhr
-
-            # -------- Case 1: too close to Dhuhr --------
-            if U < 30:
-                arabic_warning(
-                    self,
-                    "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة من صلاة الظهر"
-                )
-                self.duha_spin.setValue(self.last_valid_duha)
-                return
-
-            # -------- Get prayer times --------
-            sunrise, dhuhr = self.get_today_sunrise_dhuhr()
-
-            duha_time = dhuhr - U
-            min_after_sunrise = sunrise + 30
-
-            # -------- Case 2: too close to sunrise --------
-            if duha_time <= min_after_sunrise:
-                arabic_warning(
-                    self,
-                    "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة بعد طلوع الشمس"
-                )
-                self.duha_spin.setValue(self.last_valid_duha)
-                return
-
-            # -------- Valid --------
-            self.last_valid_duha = U
-
-        except Exception as e:
-            arabic_error(
-                self,
-                "خطأ",
-                f"فشل التحقق من وقت الضحى:\n{e}"
-            )
-            self.duha_spin.setValue(self.last_valid_duha)
-
-    def calculate_all_times(self):
-        """
-        Returns a dictionary with actual times for Duha, Tahajjud, Athkar Elsabah, Athkar Elmasa
-        in HH:MM format, based on today’s prayer times and user-configured minutes.
-        """
-        from datetime import datetime
-
-        times = {}
-        try:
-            sunrise, dhuhr = self.get_today_sunrise_dhuhr()
-
-            # Duha: dhuhr - duha_spin
-            duha_minutes = dhuhr - self.duha_spin.value()
-            times['duha'] = f"{duha_minutes//60:02d}:{duha_minutes%60:02d}"
-
-            # Tahajjud: fajr - tahajjud_spin
-            with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                today = datetime.now()
-                for row in reader:
-                    if int(row["Month"]) == today.month and int(row["Day"]) == today.day:
-                        fajr = self.time_to_minutes(row["Fajr"])
-                        break
-            tahajjud_minutes = fajr - self.tahajjud_spin.value()
-            times['tahajjud'] = f"{tahajjud_minutes//60:02d}:{tahajjud_minutes%60:02d}"
-
-            # Athkar Elsabah: fajr + athkar_elsabah_spin
-            athkar_sabah_minutes = fajr + self.athkar_elsabah_spin.value()
-            times['athkar_elsabah'] = f"{athkar_sabah_minutes//60:02d}:{athkar_sabah_minutes%60:02d}"
-
-            # Athkar Elmasa: maghrib + athkar_elmasa_spin
-            maghrib = self.time_to_minutes(row["Maghrib"])
-            athkar_masa_minutes = maghrib + self.athkar_elmasa_spin.value()
-            times['athkar_elmasa'] = f"{athkar_masa_minutes//60:02d}:{athkar_masa_minutes%60:02d}"
-
-        except Exception as e:
-            print("Failed to calculate actual times:", e)
-            times = {}
-
-        return times
-
-
-    def create_checkable_audio_list(self, directory):
-        list_widget = QListWidget()
-        list_widget.setFixedHeight(220)
-        list_widget.setLayoutDirection(Qt.RightToLeft)
-        list_widget.setStyleSheet("""
+        self.remove_list = QListWidget()
+        finger_scroll(self.remove_list)
+        self.remove_list.setFixedHeight(220)
+        self.remove_list.setLayoutDirection(Qt.RightToLeft)
+        self.remove_list.setStyleSheet("""
             QListWidget {
                 font-size: 20px;
                 border: 1px solid #ccc;
                 border-radius: 6px;
+                background: white;
             }
         """)
+        layout.addWidget(self.remove_list)
 
-        if not os.path.isdir(directory):
-            item = QListWidgetItem("❌ مجلد الملفات غير موجود")
-            item.setFlags(Qt.NoItemFlags)
-            list_widget.addItem(item)
-            return list_widget
+        self.remove_btn = QPushButton("حذف الملفات المحددة")
+        self.remove_btn.setFixedHeight(50)
+        self.remove_btn.setCursor(Qt.PointingHandCursor)
+        self.remove_btn.clicked.connect(self.delete_audio_files)
+        self.remove_list.itemChanged.connect(self.paint_remove_button)
+        self.add_update_row(layout, (self.remove_btn, 1))
+        self.fill_remove_list()
 
-        for fname in sorted(f for f in os.listdir(directory) if f.lower().endswith(".mp3")):
-            item = QListWidgetItem(fname)
+        remove_hint = QLabel(
+            "يُحذف الملف من الجهاز نهائيًا. إن كان محددًا للتشغيل أُزيل من قائمة المجلد، "
+            "وإن لم يبقَ للحدث ملف محدد يتم إيقافه."
+        )
+        remove_hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        remove_hint.setWordWrap(True)
+        layout.addWidget(remove_hint)
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def time_row(self, layout, text):
+        holder = QWidget()
+        holder.setLayoutDirection(Qt.RightToLeft)
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(text)
+        title.setStyleSheet(f"font-size: {TIME_ROW_FONT};")
+        box = QLabel("--")
+        box.setStyleSheet(QURAN_END_STYLE)
+        box.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        row.addWidget(title)
+        row.addWidget(box)
+        row.addStretch()
+        layout.addWidget(holder)
+        return box
+
+    def timing_values(self):
+        """The timing settings as the form has them now, under their config keys."""
+        values = {settings_rules.EVENT_ENABLE_KEYS[key]: chk.isChecked()
+                  for key, chk in ((key.removeprefix(PRAYER_PREFIX), chk)
+                                   for key, chk in self.prayer_checkboxes.items())}
+        values.update({
+            TAHAJJUD_ENABLE: self.tahajjud_chk.isChecked(),
+            DUHA_ENABLE: self.duha_chk.isChecked(),
+            ATHKAR_ELSABAH_ENABLE: self.athkar_elsabah_chk.isChecked(),
+            ATHKAR_ELMASA_ENABLE: self.athkar_elmasa_chk.isChecked(),
+            QURAN_ENABLE: self.cron_chk.isChecked(),
+            FRIDAY_QURAN_ENABLE: self.friday_quran_chk.isChecked(),
+            TAHAJJUD_TIME: self.tahajjud_spin.value(),
+            DUHA_TIME: self.duha_spin.value(),
+            ATHKAR_ELSABAH_MODE: self.selected_athkar_elsabah_mode(),
+            ATHKAR_ELSABAH_CLOCK: f"{self.athkar_elsabah_hour_spin.value():02d}:"
+                                  f"{self.athkar_elsabah_min_spin.value():02d}",
+            ATHKAR_ELSABAH_TIME: self.athkar_elsabah_spin.value(),
+            ATHKAR_ELMASA_TIME: self.athkar_elmasa_spin.value(),
+            "listen_to_quran": f"{self.cron_hour_spin.value():02d}:"
+                               f"{self.cron_min_spin.value():02d}",
+            FRIDAY_QURAN_POSITION: self.selected_friday_quran_position(),
+            FRIDAY_QURAN_TIME: self.friday_quran_spin.value(),
+        })
+        return values
+
+    def ticked_audio(self, event):
+        audio_list, _directory = self.event_audio[event]
+        return [audio_list.item(i).text() for i in range(audio_list.count())
+                if audio_list.item(i).checkState() == Qt.Checked]
+
+    def event_seconds(self):
+        """{event: seconds its ticked files play}, and the events with a file whose
+        length could not be read."""
+        seconds, unread = {}, set()
+        for event, (_list, directory) in self.event_audio.items():
+            lengths = [self.file_seconds(directory, name) for name in self.ticked_audio(event)]
+            seconds[event] = sum(length or 0 for length in lengths)
+            if None in lengths:
+                unread.add(event)
+        return seconds, unread
+
+    def day_windows(self, values, seconds, friday):
+        times = (settings_rules.prayer_minutes_for(self.effective_prayer_csv(),
+                                                   self.next_friday())
+                 if friday else self.get_today_prayer_times())
+        starts = settings_rules.event_starts(values, times, friday=friday)
+        return settings_rules.playing_windows(starts, seconds)
+
+    def timing_changed(self, *_):
+        self.paint_end_times()
+        if not self.restoring_timing:
+            self.overlap_timer.start()
+
+    def timing_committed(self, *_):
+        """A choice made in one tap is checked as soon as it is made, as the website does,
+        once the tap has finished."""
+        self.paint_end_times()
+        if not self.restoring_timing:
+            self.overlap_timer.stop()
+            self.commit_timer.start()
+
+    def verify_timing(self):
+        """The overlap check at once, rather than when the typing has settled. False when
+        it warned and put the form back."""
+        self.overlap_timer.stop()
+        self.commit_timer.stop()
+        return not self.warn_new_overlaps()
+
+    def timing_snapshot(self):
+        """Everything that decides when an event plays, as the form has it now."""
+        return {
+            "spins": [spin.value() for spin in self.timing_spins],
+            "combos": [combo.currentIndex() for combo in self.timing_combos],
+            "checks": [chk.isChecked() for chk in self.timing_checks],
+            "audio": {event: [audio_list.item(i).checkState() for i in range(audio_list.count())]
+                      for event, (audio_list, _directory) in self.event_audio.items()},
+        }
+
+    def restore_timing(self, snapshot):
+        """Puts the form back as it was in `snapshot`. A list whose files changed since
+        keeps its ticks: the snapshot no longer says which file is which."""
+        self.restoring_timing = True
+        try:
+            for spin, value in zip(self.timing_spins, snapshot["spins"]):
+                spin.setValue(value)
+            for combo, index in zip(self.timing_combos, snapshot["combos"]):
+                combo.setCurrentIndex(index)
+            for chk, checked in zip(self.timing_checks, snapshot["checks"]):
+                chk.setChecked(checked)
+            for event, states in snapshot["audio"].items():
+                audio_list, _directory = self.event_audio[event]
+                if audio_list.count() == len(states):
+                    for i, state in enumerate(states):
+                        audio_list.item(i).setCheckState(state)
+        finally:
+            self.restoring_timing = False
+        self.overlap_timer.stop()
+        self.commit_timer.stop()
+        self.last_valid_duha = self.duha_spin.value()
+        self.last_valid_athkar_elsabah = self.athkar_elsabah_spin.value()
+        self.update_all_time_labels()
+
+    def paint_end_times(self, *_):
+        if not hasattr(self, "event_audio"):
+            return
+        seconds, unread = self.event_seconds()
+        values = dict(self.timing_values(), **{key: True for key
+                                               in settings_rules.EVENT_ENABLE_KEYS.values()})
+        try:
+            starts = settings_rules.event_starts(values, self.get_today_prayer_times())
+            starts["friday_quran"] = settings_rules.event_starts(
+                values, settings_rules.prayer_minutes_for(self.effective_prayer_csv(),
+                                                          self.next_friday()),
+                friday=True)["friday_quran"]
+        except (OSError, ValueError, KeyError):
+            starts = {}
+        for event, label in self.end_labels.items():
+            if not self.ticked_audio(event):
+                what = "السور" if event == "quran" else "الملفات"
+                label.setText(f"اختر {what} أدناه لمعرفة وقت الانتهاء")
+                continue
+            if event not in starts:
+                label.setText("--")
+                continue
+            text = (f"حتى {self.minutes_to_clock(starts[event] + round(seconds[event] / 60))}"
+                    f" · المدة {duration_text(seconds[event])}")
+            if event in unread:
+                text += " (تعذّرت قراءة مدة بعض الملفات)"
+            label.setText(text)
+
+    def current_overlaps(self):
+        """The pairs of switched-on events that play at once, with the windows each pair
+        was found in."""
+        seconds, _unread = self.event_seconds()
+        values = self.timing_values()
+        found = {}
+        try:
+            today = self.day_windows(values, seconds, friday=False)
+            for pair in settings_rules.overlapping_pairs(today):
+                found[pair] = today
+            friday = self.day_windows(values, seconds, friday=True)
+            for pair in settings_rules.overlapping_pairs(friday):
+                if "friday_quran" in pair:
+                    found[pair] = friday
+        except (OSError, ValueError, KeyError):
+            pass
+        return found
+
+    def warn_new_overlaps(self):
+        found = self.current_overlaps()
+        new = {pair: windows for pair, windows in found.items()
+               if pair not in self.known_overlaps}
+        if not new:
+            self.known_overlaps = found
+            self.good_timing = self.timing_snapshot()
+            return False
+        messages = []
+        for windows in {id(w): w for w in new.values()}.values():
+            pairs = [pair for pair, owner in new.items() if owner is windows]
+            messages.append(settings_rules.overlap_message(pairs, windows,
+                                                           self.minutes_to_clock))
+        arabic_warning(self, "تنبيه: تداخل في أوقات التشغيل",
+                       "\n\n".join(messages) + "\n\n" + OVERLAP_RESTORED_TEXT)
+        self.restore_timing(self.good_timing)
+        self.known_overlaps = self.current_overlaps()
+        return True
+
+    def file_seconds(self, directory, name):
+        path = os.path.join(directory, name)
+        try:
+            stamp = os.stat(path)
+        except OSError:
+            return None
+        key = (path, stamp.st_size, stamp.st_mtime)
+        if key not in self.audio_seconds:
+            self.audio_seconds[key] = audio_duration.mp3_seconds(path)
+        return self.audio_seconds[key]
+
+    def paint_upload_button(self, *_):
+        ready = bool(self.upload_folder_combo.currentData())
+        self.upload_btn.setStyleSheet(
+            audio_button_style(AUDIO_UPLOAD_READY if ready else AUDIO_BUTTON_IDLE))
+
+    def paint_remove_button(self, *_):
+        ready = any(self.remove_list.item(i).checkState() == Qt.Checked
+                    for i in range(self.remove_list.count()))
+        self.remove_btn.setStyleSheet(
+            audio_button_style(AUDIO_DELETE_READY if ready else AUDIO_BUTTON_IDLE))
+
+    def fill_remove_list(self, *_):
+        """Hidden until a folder is chosen: before that there is nothing to tick, and an
+        empty box under the menu reads as one that belongs to nothing."""
+        self.remove_list.clear()
+        self.paint_remove_button()
+        folder = self.remove_folder_combo.currentData()
+        self.remove_list.setVisible(bool(folder))
+        if not folder:
+            return
+        names = audio_lists.available_audio(audio_lists.audio_dir(MAIN_DIR, folder))
+        for name in names:
+            item = QListWidgetItem(name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
-            list_widget.addItem(item)
+            self.remove_list.addItem(item)
+        if names:
+            return
+        item = QListWidgetItem("لا توجد ملفات صوتية في هذا المجلد")
+        item.setFlags(Qt.NoItemFlags)
+        self.remove_list.addItem(item)
 
-        return list_widget
-
-    def load_audio_checked_state(self, list_widget, config_key):
-        checked_files = self.config["Settings"].get(config_key, "")
-        checked_set = {f.strip() for f in checked_files.split(",") if f.strip()}
-
-        for i in range(list_widget.count()):
-            item = list_widget.item(i)
-            item.setCheckState(
-                Qt.Checked if item.text() in checked_set else Qt.Unchecked
-            )
-
-
-    def save_audio_checked_state(self, list_widget, config_key):
-        checked_files = []
-        for i in range(list_widget.count()):
-            item = list_widget.item(i)
-            if item.checkState() == Qt.Checked:
-                checked_files.append(item.text())
-
-        self.config["Settings"][config_key] = ",".join(checked_files)
-
-    def load_quran_audio_checked_state(self):
-        """Load checked state from config.ini"""
-        checked_files = self.config["Settings"].get("quran_audio_checked", "")
-        checked_set = set(f.strip() for f in checked_files.split(",") if f.strip())
-        for i in range(self.quran_audio_list.count()):
-            item = self.quran_audio_list.item(i)
-            if item.text() in checked_set:
-                item.setCheckState(Qt.Checked)
-            else:
-                item.setCheckState(Qt.Unchecked)
-
-
-    def save_quran_audio_checked_state(self):
-        checked_files = []
-        for i in range(self.quran_audio_list.count()):
-            item = self.quran_audio_list.item(i)
-            if item.checkState() == Qt.Checked:
-                checked_files.append(item.text())
-        self.config["Settings"]["quran_audio_checked"] = ",".join(checked_files)
-
-    def validate_prayer_csv(self):
-        # 1 Check file existence
-        if not os.path.isfile(PRAYER_CSV_FILE):
-            arabic_error(
-                self,
-                "خطأ",
-                "ملف إدخال-مواقيت-الصلاة-للمستخدم.csv غير موجود على سطح المكتب"
-            )
-            return False
-
+    def delete_audio_files(self):
+        folder = self.remove_folder_combo.currentData()
+        if not folder:
+            arabic_error(self, "لم يتم اختيار مجلد",
+                         "افتح القائمة واختر المجلد الذي ستُحذف منه الملفات.")
+            return
+        names = [self.remove_list.item(i).text() for i in range(self.remove_list.count())
+                 if self.remove_list.item(i).checkState() == Qt.Checked]
+        if not names:
+            arabic_error(self, "لم يتم تحديد ملفات", "حدّد الملفات التي تريد حذفها.")
+            return
         try:
-            with open(PRAYER_CSV_FILE, newline="", encoding="utf-8") as csvfile:
-                reader = csv.reader(csvfile)
-                rows = list(reader)
+            question = audio_upload.delete_question(MAIN_DIR, SETTINGS_INI_FILE, folder, names)
+            if not arabic_confirm(self, "تأكيد حذف الملفات", question):
+                return
+            deleted, _ticked, switched_off = audio_upload.delete(
+                MAIN_DIR, SETTINGS_INI_FILE, folder, names)
+        except audio_upload.UploadError as error:
+            self.fill_remove_list()
+            arabic_error(self, "تعذّر حذف الملفات", str(error))
+            return
+        self.forget_deleted_audio(folder, deleted, switched_off)
+        self.fill_remove_list()
+        label = audio_upload.FOLDER_LABELS.get(folder, folder)
+        message = (f"تم حذف {'الملف' if len(deleted) == 1 else f'{len(deleted)} ملفات'} "
+                   f"من مجلد «{label}».")
+        if switched_off:
+            message += "\nلم يبقَ له ملف محدد، فتم إيقافه."
+            self.delete_apply_worker = ApplySettingsWorker()
+            self.delete_apply_worker.finished_result.connect(self.on_delete_apply_finished)
+            self.delete_apply_worker.start()
+        arabic_info(self, "تم حذف الملفات", message)
 
-            # 2 Check empty file
-            if not rows:
-                raise ValueError("empty file")
+    def forget_deleted_audio(self, folder, deleted, switched_off):
+        """The deleted files out of their event's list and out of the settings this
+        screen will save, so a later save does not tick a file that is gone."""
+        key = audio_upload.CHECKED_KEYS[folder]
+        settings = self.config["Settings"]
+        kept = [n for n in audio_lists.checked_from_config(settings.get(key, ""))
+                if n not in deleted]
+        settings[key] = audio_lists.checked_to_config(sorted(kept))
+        directory = os.path.normpath(audio_lists.audio_dir(MAIN_DIR, folder))
+        list_widget = getattr(self, "audio_list_widgets", {}).get(directory)
+        if list_widget is None:
+            return
+        for i in reversed(range(list_widget.count())):
+            if list_widget.item(i).text() in deleted:
+                list_widget.takeItem(i)
+        self.paint_end_times()
+        if switched_off:
+            settings[audio_lists.EVENT_ENABLE_KEYS[key]] = "False"
+            for chk, widget in self.event_switches():
+                if widget is list_widget:
+                    chk.setChecked(False)
 
-            # 3 Validate header
-            header = [h.strip() for h in rows[0]]
-            if header != EXPECTED_CSV_HEADER:
-                arabic_error(
-                    self,
-                    "خطأ",
-                    "ملف إدخال-مواقيت-الصلاة-للمستخدم.csv ليس مولد بالصغة المطلوبة التي هي\n\n"
-                    "على سبيل المثال:\n"
-                    "Month,Day,Fajr,Sunrise,Dhuhr,Asr,Maghrib,Isha\n"
-                    "1,1,06:10,08:10,12:15,13:50,16:09,17:55"
-                )
+    def on_delete_apply_finished(self, success, log_tail):
+        if not success:
+            arabic_error(self, "تعذّر تحديث جدول الأذان",
+                         "تم حذف الملفات، لكن تعذّر إعادة بناء الجدول بعد إيقاف الحدث.\n"
+                         "اضغط «حفظ وتطبيق الإعدادات» لإعادة المحاولة.")
+
+    def upload_audio_file(self):
+        folder = self.upload_folder_combo.currentData()
+        if not folder:
+            arabic_error(self, "لم يتم اختيار مجلد",
+                         "افتح القائمة واختر المجلد الذي سيُرفع إليه الملف.")
+            return
+        source, _ = QFileDialog.getOpenFileName(
+            self, "اختر الملف الصوتي", DESKTOP_DIR, "ملفات MP3 (*.mp3 *.MP3)")
+        if not source:
+            return
+        try:
+            target = audio_upload.target(MAIN_DIR, folder, os.path.basename(source))
+            question = audio_upload.exists_question(MAIN_DIR, folder, os.path.basename(source))
+        except audio_upload.UploadError as error:
+            arabic_error(self, "تعذّر رفع الملف", str(error))
+            return
+        if os.path.abspath(source) == os.path.abspath(target):
+            arabic_info(self, "الملف موجود", "هذا الملف موجود في المجلد المختار أصلًا.")
+            return
+        if question and not arabic_confirm(self, "الملف موجود", question):
+            return
+
+        self.upload_btn.setEnabled(False)
+        self.upload_btn.setText("جارٍ رفع الملف…")
+        self.upload_folder = folder
+        self.upload_worker = AudioCopyWorker(source, target)
+        self.upload_worker.finished_result.connect(self.on_audio_upload_finished)
+        self.upload_worker.start()
+
+    def on_audio_upload_finished(self, saved, error):
+        self.upload_btn.setEnabled(True)
+        self.upload_btn.setText("اختيار الملف الصوتي ورفعه")
+        if error:
+            arabic_error(self, "تعذّر رفع الملف", error)
+            return
+        directory = audio_lists.audio_dir(MAIN_DIR, self.upload_folder)
+        self.add_audio_list_item(directory, saved)
+        if self.remove_folder_combo.currentData() == self.upload_folder:
+            self.fill_remove_list()
+        arabic_info(self, "تم رفع الملف",
+                    f"تم رفع «{prayer_source.isolated(saved)}» إلى مجلد "
+                    f"«{audio_upload.FOLDER_LABELS.get(self.upload_folder, self.upload_folder)}».\n"
+                    "حدّده في قائمة ملفات المجلد ثم اضغط «حفظ وتطبيق الإعدادات» ليُشغَّل.")
+
+    def add_audio_list_item(self, directory, name):
+        """The new file in its event's list, unticked and in its sorted place, as the
+        list would show it if the app were opened now."""
+        list_widget = getattr(self, "audio_list_widgets", {}).get(os.path.normpath(directory))
+        if list_widget is None:
+            return
+        names = [list_widget.item(i).text() for i in range(list_widget.count())]
+        if name in names:
+            return
+        real = [list_widget.item(i) for i in range(list_widget.count())
+                if list_widget.item(i).flags() & Qt.ItemIsUserCheckable]
+        if not real:
+            # The "folder missing" row, now that the folder holds a file.
+            list_widget.clear()
+        item = QListWidgetItem(name)
+        flags = real[0].flags() if real else item.flags() | Qt.ItemIsUserCheckable
+        item.setFlags(flags | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Unchecked)
+        position = sum(1 for other in real if other.text() < name)
+        list_widget.insertItem(position, item)
+
+    def refresh_internet_banner(self):
+        message = self.internet.poll()
+        if message is None:
+            self.internet_bar.hide()
+            return
+        text, background = message
+        self.internet_banner.setText(text)
+        self.internet_bar.setStyleSheet(
+            f"#internetBar {{ background: {background}; }}"
+            " QLabel { color: white; padding: 4px; font-family: 'Amiri'; font-size: 20px;"
+            " font-weight: bold; }")
+        self.internet_close.setVisible(background == internet_status.OFFLINE_BG)
+        self.internet_bar.show()
+
+    def close_internet_banner(self):
+        self.internet.dismiss()
+        self.internet_bar.hide()
+
+    def build_os_timezone_section(self):
+        frame = self.create_section_frame(
+            "المنطقة الزمنية للجهاز", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
+
+        self.os_timezone_current = os_timezone.current()
+        current = QLabel(f"ساعة الجهاز الآن على: {self.os_timezone_label()}")
+        current.setStyleSheet("font-size: 18px; padding: 5px; font-weight: bold;")
+        layout.addWidget(current)
+        hint = QLabel(
+            "غيّرها عند نقل الجهاز إلى بلد آخر، ثم اختر ملف مواقيت الصلاة للمدينة الجديدة. "
+            "يُعاد تشغيل الجهاز بعد التغيير.\n"
+            "يُضبط التوقيت الصيفي تلقائيًا حسب هذه المنطقة، فلا حاجة لتفعيله."
+        )
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        combos = []
+        for label in ("الدولة:", "المدينة:"):
+            title = self.create_bold_label(label)
+            combo = RightAlignedComboBox()
+            combo.setLayoutDirection(Qt.RightToLeft)
+            combo.setStyleSheet(COMBO_STYLE)
+            combo.setFixedHeight(45)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            layout.addWidget(title)
+            layout.addWidget(combo, alignment=Qt.AlignLeading)
+            combos.append((title, combo))
+        (_, self.os_country_combo), (self.os_city_label, self.os_city_combo) = combos
+
+        for arabic_name, _code, cities in TIMEZONE_COUNTRIES:
+            self.os_country_combo.addItem(arabic_name, cities)
+        self.os_country_combo.currentIndexChanged.connect(self.populate_os_cities)
+        self.populate_os_cities()
+        for index, (_arabic, _code, cities) in enumerate(TIMEZONE_COUNTRIES):
+            for city_index, (_city, zone) in enumerate(cities):
+                if zone == self.os_timezone_current:
+                    self.os_country_combo.setCurrentIndex(index)
+                    self.populate_os_cities()
+                    self.os_city_combo.setCurrentIndex(city_index)
+
+        change_btn = QPushButton("تغيير المنطقة الزمنية وإعادة التشغيل")
+        change_btn.setFixedHeight(50)
+        change_btn.setCursor(Qt.PointingHandCursor)
+        change_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 7px;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #FB8C00; }
+            QPushButton:pressed { background-color: #EF6C00; }
+        """)
+        change_btn.clicked.connect(self.change_os_timezone)
+        self.add_update_row(layout, (change_btn, 1))
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def build_brightness_section(self):
+        """The backlight, shown live while the slider moves and kept only after a yes.
+        A tap on the groove moves it without a press and release, so a short pause after
+        the last move asks too."""
+        frame = self.create_section_frame(
+            "سطوع الشاشة", font_family="Amiri", font_size=22, bold=True
+        )
+        layout = frame.layout()
+        self.brightness_kept = brightness.confirmed(MAIN_DIR) or brightness.MAX_PERCENT
+
+        self.brightness_value = QLabel(f"السطوع: {self.brightness_kept}%")
+        self.brightness_value.setStyleSheet("font-size: 18px; padding: 5px; font-weight: bold;")
+        layout.addWidget(self.brightness_value)
+
+        self.brightness_slider = QSlider(Qt.Horizontal)
+        self.brightness_slider.setRange(brightness.MIN_PERCENT, brightness.MAX_PERCENT)
+        self.brightness_slider.setSingleStep(5)
+        self.brightness_slider.setPageStep(10)
+        self.brightness_slider.setValue(self.brightness_kept)
+        self.brightness_slider.setMinimumHeight(50)
+        self.brightness_slider.setStyleSheet("""
+            QSlider::groove:horizontal { height: 12px; background: #cfcfcf; border-radius: 6px; }
+            QSlider::sub-page:horizontal { background: #FF9800; border-radius: 6px; }
+            QSlider::handle:horizontal {
+                background: #4d4d4d; width: 36px; margin: -14px 0; border-radius: 18px;
+            }
+        """)
+        self.brightness_slider.valueChanged.connect(self.preview_brightness)
+        self.brightness_slider.sliderReleased.connect(self.ask_brightness)
+        layout.addWidget(self.brightness_slider)
+
+        self.brightness_ask_timer = QTimer(self)
+        self.brightness_ask_timer.setSingleShot(True)
+        self.brightness_ask_timer.setInterval(800)
+        self.brightness_ask_timer.timeout.connect(self.ask_brightness)
+
+        hint = QLabel("يتغيّر سطوع الشاشة فور تحريك المؤشر، ولا يُحفظ إلا بعد التأكيد.")
+        hint.setStyleSheet("font-size: 14px; color: #555; padding: 3px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        return frame
+
+    def preview_brightness(self, value):
+        self.brightness_value.setText(f"السطوع: {value}%")
+        try:
+            brightness.write(value)
+        except brightness.BrightnessError as error:
+            self.brightness_ask_timer.stop()
+            self.set_brightness_slider(self.brightness_kept)
+            arabic_error(self, "سطوع الشاشة", str(error))
+            return
+        if not self.brightness_slider.isSliderDown():
+            self.brightness_ask_timer.start()
+
+    def ask_brightness(self):
+        self.brightness_ask_timer.stop()
+        value = self.brightness_slider.value()
+        if value == self.brightness_kept:
+            return
+        if arabic_confirm(self, "سطوع الشاشة",
+                          brightness.question(self.brightness_kept, value)):
+            try:
+                self.brightness_kept = brightness.save(MAIN_DIR, value)
+            except OSError as error:
+                arabic_error(self, "سطوع الشاشة", f"تعذّر حفظ السطوع: {error}")
+            return
+        self.set_brightness_slider(self.brightness_kept)
+        try:
+            brightness.write(self.brightness_kept)
+        except brightness.BrightnessError as error:
+            arabic_error(self, "سطوع الشاشة", str(error))
+
+    def set_brightness_slider(self, value):
+        self.brightness_slider.blockSignals(True)
+        self.brightness_slider.setValue(value)
+        self.brightness_slider.blockSignals(False)
+        self.brightness_value.setText(f"السطوع: {value}%")
+
+    def os_timezone_label(self):
+        """The clock's zone by its Arabic country and city, as the lists below name it;
+        the zone id itself only for one the lists do not have."""
+        zone = self.os_timezone_current
+        if not zone:
+            return "غير معروفة"
+        if os_timezone.known(zone, TIMEZONE_COUNTRIES):
+            return os_timezone.name(zone, TIMEZONE_COUNTRIES)
+        return f"\u2066{zone}\u2069"
+
+    def populate_os_cities(self):
+        cities = self.os_country_combo.currentData() or []
+        self.os_city_combo.clear()
+        for arabic_name, zone in cities:
+            self.os_city_combo.addItem(arabic_name, zone)
+        multiple = len(cities) > 1
+        self.os_city_label.setVisible(multiple)
+        self.os_city_combo.setVisible(multiple)
+
+    def change_os_timezone(self):
+        zone = self.os_city_combo.currentData()
+        if not zone or zone == self.os_timezone_current:
+            arabic_info(self, "المنطقة الزمنية",
+                        "ساعة الجهاز على هذه المنطقة الزمنية أصلًا.")
+            return
+        offered = os_timezone.prayer_offer(
+            zone, TIMEZONE_COUNTRIES, MAIN_DIR,
+            self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "")) or []
+        preset = None
+        if offered:
+            hand_edits = prayer_source.may_hold_hand_edits(self.config["Settings"],
+                                                           PRAYER_CSV_FILE)
+            preset = self.ask_prayer_file(
+                os_timezone.question(zone, TIMEZONE_COUNTRIES, offered, hand_edits), offered)
+            if preset is None:
+                return
+        elif not arabic_confirm(self, "تغيير المنطقة الزمنية",
+                                os_timezone.question(zone, TIMEZONE_COUNTRIES)):
+            return
+        self.zone_busy = self.make_update_busy_dialog("جارٍ إعادة بناء جدول الأذان للمنطقة الجديدة…")
+        self.zone_busy.setWindowTitle("المنطقة الزمنية للجهاز")
+        self.zone_busy.show()
+        self.zone_worker = ZoneChangeWorker(zone, preset or None)
+        self.zone_worker.finished_result.connect(self.on_os_timezone_changed)
+        self.zone_worker.start()
+
+    def ask_prayer_file(self, question, offered):
+        """The question with the new country's city files in a list under it. The file
+        chosen, "" to keep the current one, or None for no."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("تغيير المنطقة الزمنية")
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+        dialog.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(dialog)
+        text = QLabel(question)
+        text.setWordWrap(True)
+        text.setStyleSheet("font-size: 18px; padding: 6px;")
+        # A wrapped label in a dialog is given room for fewer lines than it has; its
+        # height is asked for at the width it will really have.
+        text.setFixedWidth(500)
+        text.setMinimumHeight(text.heightForWidth(500))
+        layout.addWidget(text)
+        self.os_prayer_combo = RightAlignedComboBox()
+        self.os_prayer_combo.setLayoutDirection(Qt.RightToLeft)
+        self.os_prayer_combo.setStyleSheet(COMBO_STYLE)
+        self.os_prayer_combo.setFixedHeight(45)
+        for name in offered:
+            self.os_prayer_combo.addItem(name, name)
+        self.os_prayer_combo.addItem("إبقاء الملف الحالي", "")
+        layout.addWidget(self.os_prayer_combo)
+        buttons = QHBoxLayout()
+        go = QPushButton("متابعة")
+        cancel = QPushButton("إلغاء")
+        for button in (go, cancel):
+            button.setFixedHeight(50)
+            button.setStyleSheet("font-size: 18px; font-weight: bold;")
+            buttons.addWidget(button)
+        go.clicked.connect(dialog.accept)
+        cancel.clicked.connect(dialog.reject)
+        layout.addLayout(buttons)
+        dialog.setMinimumWidth(520)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        return self.os_prayer_combo.currentData()
+
+    def on_os_timezone_changed(self, error):
+        self.zone_busy.close()
+        if error:
+            arabic_error(self, "تعذّر تغيير المنطقة الزمنية", error)
+            return
+        arabic_info(self, "تم تغيير المنطقة الزمنية",
+                    "تم تغيير المنطقة الزمنية، ويُعاد تشغيل الجهاز الآن.")
+
+    def update_prayer_source_label(self):
+        lines = [f"الملف المرجعي: {PRAYER_CSV_FILE}"]
+
+        if os.path.isfile(PRAYER_CSV_FILE):
+            mtime = datetime.fromtimestamp(os.path.getmtime(PRAYER_CSV_FILE)).strftime("%Y-%m-%d %H:%M")
+            lines.append(f"آخر تحديث: {mtime}")
+        else:
+            lines.append("الملف غير موجود حاليًا")
+
+        recorded = self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "").strip()
+        chosen_source = current_prayer_source(recorded) or recorded
+        if chosen_source:
+            lines.append(f"تم اختياره من: {chosen_source}")
+        else:
+            lines.append(f"المصدر: الملف الافتراضي - {DEFAULT_PRAYERS_PRESET}")
+
+        self.prayer_source_label.setText("\n".join(lines))
+
+    def ensure_prayer_source_configured(self):
+        """Blocks (mandatory picker) only when the Desktop reference file is
+        missing/invalid: first run, or it was deleted/renamed since."""
+        if csv_is_valid_prayer_format(PRAYER_CSV_FILE):
+            return
+        if self.run_prayer_source_picker(mandatory=True) is None:
+            raise StartupAborted()
+
+    def run_prayer_source_picker(self, mandatory):
+        """Returns True on a successful pick, False if cancelled, or None if the user
+        chose to quit the application from the mandatory dialog."""
+        while True:
+            recorded = self.config["Settings"].get(PRAYER_SOURCE_LABEL_KEY, "").strip()
+            dialog = PrayerSourceDialog(self, mandatory=mandatory,
+                                        current_source=current_prayer_source(recorded))
+            result = dialog.exec_()
+            if dialog.user_quit:
+                return None
+            if result != QDialog.Accepted:
+                return False  # only reachable when not mandatory (user cancelled)
+            if self.resolve_and_apply_prayer_source(dialog.selected_path,
+                                                    confirmed=dialog.restore):
+                return True
+            if not mandatory:
+                return False
+            # mandatory + the chosen file failed validation/was declined -> pick again
+
+    def resolve_and_apply_prayer_source(self, source_path, confirmed=False):
+        same_file = os.path.abspath(source_path) == os.path.abspath(PRAYER_CSV_FILE)
+        if (not same_file and not confirmed
+                and prayer_source.may_hold_hand_edits(self.config["Settings"], PRAYER_CSV_FILE)):
+            if not arabic_confirm(
+                self, "تنبيه",
+                f"{prayer_source.HAND_EDITS_WARNING}\n\n"
+                f"الملف الذي سيتم استبداله:\n{PRAYER_CSV_FILE}\n\n"
+                "هل أنت متأكد من المتابعة؟"
+            ):
                 return False
 
-            # 4 Ensure at least one data row
-            if len(rows) < 2:
-                raise ValueError("no data rows")
-
-        except Exception:
-            arabic_error(
-                self,
-                "خطأ",
-                "ملف إدخال-مواقيت-الصلاة-للمستخدم.csv ليس مولد بالصغة المطلوبة التي هي\n\n"
-                "على سبيل المثال:\n"
-                "Month,Day,Fajr,Sunrise,Dhuhr,Asr,Maghrib,Isha\n"
-                "1,1,06:10,08:10,12:15,13:50,16:09,17:55"
-            )
+        try:
+            new_hash = prayer_source.install(source_path, PRAYER_CSV_FILE, MAIN_DIR)
+        except prayer_source.SourceError as refusal:
+            arabic_error(self, "خطأ", str(refusal))
             return False
+
+        prayer_source.record(self.config["Settings"], source_path, PRAYER_CSV_FILE, new_hash)
+        os.makedirs(os.path.dirname(SETTINGS_INI_FILE), exist_ok=True)
+        with open(SETTINGS_INI_FILE, "w", encoding="utf-8") as f:
+            self.config.write(f)
+
+        if hasattr(self, "prayer_source_label"):
+            self.update_prayer_source_label()
+        if hasattr(self, "prayer_time_labels"):
+            self.update_all_time_labels()
 
         return True
 
+    def validate_prayer_csv(self):
+        if not csv_is_valid_prayer_format(PRAYER_CSV_FILE):
+            arabic_error(
+                self,
+                "خطأ",
+                "ملف مواقيت الصلاة غير صالح أو غير موجود.\n"
+                "الرجاء اختيار ملف مواقيت الصلاة من قسم \"ملف مواقيت الصلاة الحالي\" أعلاه."
+            )
+            return False
+        return True
 
-    def create_section_frame(self, title, font_family="Rasheeq", font_size=24, bold=True):
+
+    def create_section_frame(self, title, font_family="Amiri", font_size=12, bold=True):
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #f9f9f9;
-                border: 1px solid #ddd;
-                border-radius: 10px;
-            }
-        """)
+        frame.setObjectName("section")
+        frame.setStyleSheet(section_style(SECTION_BORDER))
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(7)
         frame.setLayout(layout)
         frame.setLayoutDirection(Qt.RightToLeft)
 
@@ -1594,17 +3515,60 @@ class ControlApp(QMainWindow):
 
         # Keep visual styling separate
         lbl.setStyleSheet("""
-            background-color: #e0e0e0;    /* Light gray background */
+            background-color: %s;
             padding: 10px;
             border-radius: 8px;
-        """)
+        """ % TITLE_BACKGROUND)
         lbl.setAlignment(Qt.AlignCenter)
 
         layout.addWidget(lbl)
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         return frame
 
-    def create_arabic_section(self, title_text, font_family="DejaVu Sans", font_size=28, bold=True):
+    def build_time_audio_section(
+        self,
+        title,
+        enable_key,
+        time_key,
+        default_time,
+        audio_dir,
+        audio_cfg_key,
+        checkbox_text,
+        spin_label_text,
+        max_val=300
+    ):
+        frame, layout, _ = self.create_arabic_section(title)
+
+        chk = QCheckBox(checkbox_text)
+        chk.setChecked(self.config["Settings"].getboolean(enable_key))
+        chk.setStyleSheet("font-size: 20px; padding: 5px; font-weight: bold;")
+        chk.setLayoutDirection(Qt.RightToLeft)
+        layout.addWidget(chk)
+
+        spin = self.create_spinbox(
+            self.config["Settings"].get(time_key, default_time),
+            max_val=max_val
+        )
+
+        form = QFormLayout()
+        self.add_spinbox_row(form, spin_label_text, spin)
+        layout.addLayout(form)
+
+        time_label = self.time_row(layout, START_LABEL_TEXT)
+        self.end_labels[audio_cfg_key.removesuffix("_audio_checked")] = self.time_row(
+            layout, END_LABEL_TEXT)
+
+        audio_list = self.create_checkable_audio_list(audio_dir)
+        self.load_audio_checked_state(audio_list, audio_cfg_key)
+
+        layout.addWidget(self.create_bold_label("اختر الملفات الصوتية:"))
+        layout.addWidget(audio_list)
+
+        self.link_checkbox_to_list(chk, audio_list)
+
+        return frame, chk, spin, time_label, audio_list, form
+
+    def create_arabic_section(self, title_text, font_family="DejaVu Sans", font_size=25, bold=True):
         """
         Create a QFrame section with a styled Arabic title label.
         
@@ -1615,24 +3579,19 @@ class ControlApp(QMainWindow):
         title_label = QLabel(title_text)
         apply_arabic_font(title_label, family=font_family, size=font_size, bold=bold)
         title_label.setStyleSheet("""
-            background-color: #dcdcdc;       /* Light gray background */
+            background-color: %s;
             padding: 8px;
             border-radius: 6px;
-        """)
+        """ % TITLE_BACKGROUND)
 
         # Create the frame
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #f9f9f9;
-                border: 1px solid #ddd;
-                border-radius: 10px;
-            }
-        """)
+        frame.setObjectName("section")
+        frame.setStyleSheet(section_style(SECTION_BORDER))
         layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(7)
         frame.setLayout(layout)
         frame.setLayoutDirection(Qt.RightToLeft)
 
@@ -1646,16 +3605,17 @@ class ControlApp(QMainWindow):
     def create_sub_section_frame(self):
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
+        frame.setObjectName("subSection")
         frame.setStyleSheet("""
-            QFrame {
+            QFrame#subSection {
                 background-color: #ffffff;
                 border: 1px solid #ccc;
                 border-radius: 8px;
             }
         """)
         layout = QVBoxLayout()
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(5)
         frame.setLayout(layout)
         frame.setLayoutDirection(Qt.RightToLeft)
         return frame
@@ -1721,6 +3681,11 @@ class ControlApp(QMainWindow):
         self.tahajjud_spin.setValue(int(s[TAHAJJUD_TIME]))
         self.duha_spin.setValue(int(s[DUHA_TIME]))
         self.athkar_elsabah_spin.setValue(int(s[ATHKAR_ELSABAH_TIME]))
+        self.select_athkar_elsabah_mode(s.get(ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_MODE))
+        clock_hour, clock_minute = self.athkar_elsabah_clock_parts(
+            s.get(ATHKAR_ELSABAH_CLOCK, DEFAULT_ATHKAR_ELSABAH_CLOCK))
+        self.athkar_elsabah_hour_spin.setValue(clock_hour)
+        self.athkar_elsabah_min_spin.setValue(clock_minute)
         self.athkar_elmasa_spin.setValue(int(s[ATHKAR_ELMASA_TIME]))
         self.friday_quran_spin.setValue(int(s[FRIDAY_QURAN_TIME]))
         self.select_friday_quran_position(
@@ -1730,14 +3695,18 @@ class ControlApp(QMainWindow):
         for key, chk in self.prayer_checkboxes.items():
             chk.setChecked(s.getboolean(key))
 
+        self.internet_warning_chk.setChecked(s.getboolean(
+            internet_status.ENABLE_KEY, fallback=internet_status.DEFAULT_ENABLED))
+
         # Cron time
         try:
             hour, minute = s["listen_to_quran"].split(":")
             self.cron_hour_spin.setValue(int(hour))
             self.cron_min_spin.setValue(int(minute))
         except Exception:
-            self.cron_hour_spin.setValue(6)
-            self.cron_min_spin.setValue(30)
+            hour, minute = DEFAULT_CRON.split(":")
+            self.cron_hour_spin.setValue(int(hour))
+            self.cron_min_spin.setValue(int(minute))
 
         # Quran audio list
         for i in range(self.quran_audio_list.count()):
@@ -1747,6 +3716,11 @@ class ControlApp(QMainWindow):
         # Surat Al-Kahf audio list
         self.load_audio_checked_state(
             self.friday_quran_audio_list, "friday_quran_audio_checked")
+        if hasattr(self, "overlap_timer"):
+            self.overlap_timer.stop()
+            self.commit_timer.stop()
+            self.known_overlaps = self.current_overlaps()
+            self.good_timing = self.timing_snapshot()
 
 
     # ---------------- Config ----------------
@@ -1757,6 +3731,14 @@ class ControlApp(QMainWindow):
             self.config["Settings"] = {}
 
         s = self.config["Settings"]
+
+        # ---------------- The shipped defaults, for any key this file lacks ----------------
+        # Not the audio lists: those name files a device may not have, and a list naming
+        # none of its files would leave the event silent. They fall through to "every file
+        # in the folder" below, as they always have.
+        for key, value in read_default_settings().items():
+            if not key.endswith("_audio_checked"):
+                s.setdefault(key, value)
 
         # ---------------- Integer defaults ----------------
         for key, value in DEFAULTS_INT.items():
@@ -1769,8 +3751,15 @@ class ControlApp(QMainWindow):
         # ---------------- Quran cron time ----------------
         s.setdefault("listen_to_quran", DEFAULT_CRON)
 
+        # ---------------- Athkar Elsabah: a fixed time unless chosen otherwise ----------------
+        s.setdefault(ATHKAR_ELSABAH_MODE, DEFAULT_ATHKAR_ELSABAH_MODE)
+        s.setdefault(ATHKAR_ELSABAH_CLOCK, DEFAULT_ATHKAR_ELSABAH_CLOCK)
+
         # ---------------- Surat Al-Kahf position ----------------
         s.setdefault(FRIDAY_QURAN_POSITION, DEFAULT_FRIDAY_QURAN_POSITION)
+
+        for key in RETIRED_DST_KEYS:
+            s.pop(key, None)
 
         # ---------------- Audio lists defaults (checked) ----------------
         audio_defaults = {
@@ -1810,13 +3799,15 @@ class ControlApp(QMainWindow):
 
     def save_settings(self, show_message=True):
         # --- Validation for Duha ---
-        if self.duha_spin.value() <= 30:
+        if self.duha_spin.value() <= 20:
             arabic_warning(
                 self,
                 "تنبيه",
-                "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة"
+                "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 20 دقيقة"
             )
             return False  # indicate save failed
+
+        self.untick_events_without_audio()
 
         s = self.config["Settings"]
         s[TAHAJJUD_ENABLE] = str(self.tahajjud_chk.isChecked())
@@ -1825,12 +3816,16 @@ class ControlApp(QMainWindow):
         s[DUHA_TIME] = str(self.duha_spin.value())
         s[ATHKAR_ELSABAH_ENABLE] = str(self.athkar_elsabah_chk.isChecked())
         s[ATHKAR_ELSABAH_TIME] = str(self.athkar_elsabah_spin.value())
+        s[ATHKAR_ELSABAH_MODE] = self.selected_athkar_elsabah_mode()
+        s[ATHKAR_ELSABAH_CLOCK] = (f"{self.athkar_elsabah_hour_spin.value():02d}:"
+                                   f"{self.athkar_elsabah_min_spin.value():02d}")
         s[ATHKAR_ELMASA_ENABLE] = str(self.athkar_elmasa_chk.isChecked())
         s[ATHKAR_ELMASA_TIME] = str(self.athkar_elmasa_spin.value())
         s[QURAN_ENABLE] = str(self.cron_chk.isChecked())
         s[FRIDAY_QURAN_ENABLE] = str(self.friday_quran_chk.isChecked())
         s[FRIDAY_QURAN_TIME] = str(self.friday_quran_spin.value())
         s[FRIDAY_QURAN_POSITION] = self.selected_friday_quran_position()
+        s[internet_status.ENABLE_KEY] = str(self.internet_warning_chk.isChecked())
 
         for key, chk in self.prayer_checkboxes.items():
             s[key] = str(chk.isChecked())
@@ -1872,57 +3867,24 @@ class ControlApp(QMainWindow):
 
 
         try:
-            # Create fresh config with defaults
-            self.config = configparser.ConfigParser(interpolation=None)
-            self.config["Settings"] = {}
+            fresh = configparser.ConfigParser(interpolation=None)
+            fresh["Settings"] = settings_defaults.reset_values(
+                self.config["Settings"], DEFAULT_SETTINGS_FILE)
 
-            for k, v in DEFAULTS_INT.items():
-                self.config["Settings"][k] = str(v)
+            self.config = fresh
 
-            for k, v in DEFAULTS_BOOL.items():
-                self.config["Settings"][k] = str(v)
-
-            self.config["Settings"]["listen_to_quran"] = DEFAULT_CRON
-            self.config["Settings"]["quran_audio_checked"] = ""
-            self.config["Settings"][FRIDAY_QURAN_POSITION] = DEFAULT_FRIDAY_QURAN_POSITION
-            self.config["Settings"]["friday_quran_audio_checked"] = ""
-
-            # --- NEW: Check all section checkboxes ---
-            self.tahajjud_chk.setChecked(True)
-            self.duha_chk.setChecked(True)
-            self.athkar_elsabah_chk.setChecked(True)
-            self.athkar_elmasa_chk.setChecked(True)
-            self.cron_chk.setChecked(True)
-            self.friday_quran_chk.setChecked(True)
-
-            # --- NEW: Check all prayer checkboxes ---
-            for chk in self.prayer_checkboxes.values():
-                chk.setChecked(True)
-
-            # --- NEW: Check all items in all audio lists ---
-            def check_all_items(lst):
-                for i in range(lst.count()):
-                    item = lst.item(i)
-                    if item.flags() & Qt.ItemIsUserCheckable:
-                        item.setCheckState(Qt.Checked)
-
-            check_all_items(self.quran_audio_list)
-            check_all_items(self.tahajjud_audio_list)
-            check_all_items(self.duha_audio_list)
-            check_all_items(self.athkar_elsabah_audio_list)
-            check_all_items(self.athkar_elmasa_audio_list)
-            check_all_items(self.friday_quran_audio_list)
-
-            for lst in self.prayer_audio_lists.values():
-                check_all_items(lst)
-                # Ensure items are enabled now that checkbox is checked
-                for i in range(lst.count()):
-                    item = lst.item(i)
-                    flags = item.flags()
-                    item.setFlags(flags | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-
-            # --- NEW: Update config with all checked Quran items ---
-            self.save_quran_audio_checked_state()
+            audio_lists_by_key = {
+                "quran_audio_checked": self.quran_audio_list,
+                "tahajjud_audio_checked": self.tahajjud_audio_list,
+                "duha_audio_checked": self.duha_audio_list,
+                "athkar_elsabah_audio_checked": self.athkar_elsabah_audio_list,
+                "athkar_elmasa_audio_checked": self.athkar_elmasa_audio_list,
+                "friday_quran_audio_checked": self.friday_quran_audio_list,
+            }
+            for prayer_key, list_widget in self.prayer_audio_lists.items():
+                audio_lists_by_key[f"{prayer_key}_audio_checked"] = list_widget
+            for config_key, list_widget in audio_lists_by_key.items():
+                self.reset_audio_list(list_widget, config_key)
 
             # Ensure config directory exists
             os.makedirs(os.path.dirname(SETTINGS_INI_FILE), exist_ok=True)
@@ -1933,6 +3895,14 @@ class ControlApp(QMainWindow):
 
             # Reload UI from config
             self.apply_config_to_ui()
+
+            # Setup, told to apply the reset settings even on a device it has set up before.
+            subprocess.Popen(
+                ["/bin/bash", INIT_SCRIPT_FILE],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, "SCHEDULER_INIT_APPLY_SETTINGS": "1"},
+            )
 
             arabic_info(
                 self,
@@ -1950,21 +3920,29 @@ class ControlApp(QMainWindow):
 
 
     def restart_app(self):
-        """Run the apply_settings script silently (no popup)"""
-        try:
-            with open(APPLY_SETTINGS_LOG_FILE, "w") as log_file:
-                subprocess.Popen(
-                    ["/bin/bash", APPLY_SETTINGS_SCRIPT_FILE],
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT
-                )
-        except Exception as e:
-            # Only show error if the script fails to start
+        """Run apply_settings.sh off the UI thread and wait for its real result -
+        the success/failure popup is shown from on_apply_settings_finished once it
+        actually completes, instead of assuming success as soon as it's launched."""
+        self.apply_worker = ApplySettingsWorker()
+        self.apply_worker.finished_result.connect(self.on_apply_settings_finished)
+        self.apply_worker.start()
+
+    def on_apply_settings_finished(self, success, log_tail):
+        if success:
+            arabic_info(
+                self,
+                "تم الحفظ وتطبيق الإعدادات",
+                "تم حفظ الإعدادات وتطبيقها وإعادة تشغيل البرامج بنجاح"
+            )
+        else:
             arabic_error(
                 self,
-                "خطأ",
-                f"فشل تشغيل سكربت إعادة التشغيل:\n{e}"
+                "فشل تطبيق الإعدادات",
+                "تم حفظ الإعدادات، لكن فشل تطبيقها وإعادة تشغيل البرامج.\n\n"
+                f"آخر سطور من سجل التنفيذ:\n{log_tail}"
             )
+        # Cooldown: wait 2 seconds AFTER the popup closes to allow new clicks
+        QTimer.singleShot(2000, self.unlock_button)
 
 
     def save_and_apply_settings(self):
@@ -1981,28 +3959,26 @@ class ControlApp(QMainWindow):
 
         try:
             # 3. Validations
+            if self.overlap_timer.isActive() or self.commit_timer.isActive():
+                self.overlap_timer.stop()
+                self.commit_timer.stop()
+                if self.warn_new_overlaps():
+                    self.unlock_button()
+                    return
+
             if not self.validate_prayer_csv():
                 self.unlock_button()
                 return 
 
-            U = self.duha_spin.value()
-
-            if U < 30:
-                arabic_warning(
-                    self,
-                    "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة من صلاة الظهر"
-                )
+            if self.duha_time_is_makrooh():
                 self.unlock_button()
                 return
 
-            sunrise, dhuhr = self.get_today_sunrise_dhuhr()
-            if (dhuhr - U) <= (sunrise + 30):
-                arabic_warning(
-                    self,
-                    "تنبيه",
-                    "هذا الوقت مكروه لأداء صلاة الضحى، لذا يُرجى اختيار وقت أكبر من 30 دقيقة بعد طلوع الشمس"
-                )
+            if self.athkar_elsabah_conflicts_with_dhuhr():
+                self.unlock_button()
+                return
+
+            if not self.confirm_year_moves():
                 self.unlock_button()
                 return
 
@@ -2010,20 +3986,74 @@ class ControlApp(QMainWindow):
             # 4. Save and Apply
             if self.save_settings(show_message=False):
                 self.restart_app()
-                
-                arabic_info(
-                    self,
-                    "تم الحفظ وتطبيق الإعدادات",
-                    "تم حفظ الإعدادات وتطبيقها وإعادة تشغيل البرامج بنجاح"
-                )
-                
-                # 5. The Cooldown: Wait 2 seconds AFTER popup closes to allow new clicks
-                QTimer.singleShot(2000, self.unlock_button)
+                # Unlocking + the success/failure popup happen in
+                # on_apply_settings_finished once apply_settings.sh actually completes.
             else:
                 self.unlock_button()
 
         except Exception:
             self.unlock_button()
+
+    def spin_title(self, spin):
+        for form in self.findChildren(QFormLayout):
+            label = form.labelForField(spin)
+            if label is not None:
+                return label.text()
+        return ""
+
+    def eventFilter(self, obj, event):
+        """A tap on a number field opens the pad. A swipe that starts on one scrolls the
+        page as before."""
+        if isinstance(obj.parentWidget(), QSpinBox):
+            if event.type() == QEvent.MouseButtonPress:
+                self.pad_press = event.globalPos()
+            elif event.type() == QEvent.MouseButtonRelease:
+                spin = obj.parentWidget()
+                pressed = getattr(self, "pad_press", None)
+                self.pad_press = None
+                if spin.isEnabled() and pressed is not None and \
+                        (event.globalPos() - pressed).manhattanLength() <= TAP_SLOP:
+                    self.number_pad.open(spin, self.spin_title(spin))
+                    return True
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "number_pad", None) and self.number_pad.isVisible():
+            self.number_pad.setGeometry(self.rect())
+
+    def closeEvent(self, event):
+        """Closing Settings goes back to the time screen, as closing a phone app's settings
+        page does - bringing it back if it is not running, which it is not after an update
+        installed from here. Not while an update is still installing: the updater stops
+        and restarts the time app itself and checks it, and a copy started now would run
+        the old code in the middle of that."""
+        if getattr(self, "background", False):
+            # Kept, hidden, for the next ⚙ - see BackgroundSettings.
+            event.ignore()
+            self.hide()
+            self.internet_timer.stop()
+        else:
+            super().closeEvent(event)
+            if not event.isAccepted():
+                return
+        if not self.from_desktop and not self.busy() and not countdown_running():
+            launch_countdown()
+        if getattr(self, "on_hidden", None):
+            self.on_hidden()
+
+    def set_opened_from_desktop(self, from_desktop):
+        """Opened by the desktop's Settings icon it is an app of its own: closed with
+        «إغلاق», back to the desktop. Opened by the time screen's ⚙ it is that app's page:
+        «رجوع» leads back to the time screen."""
+        self.from_desktop = from_desktop
+        self.back_btn.setText("✖ إغلاق" if from_desktop else "→ رجوع")
+
+    def busy(self):
+        """An update or an apply still running in this window."""
+        return any(worker is not None and worker.isRunning()
+                   for worker in (getattr(self, "update_worker", None),
+                                  getattr(self, "apply_worker", None)))
 
     def unlock_button(self):
         """Cleanly resets the button state"""
@@ -2033,9 +4063,165 @@ class ControlApp(QMainWindow):
             if "حفظ" in btn.text():
                 btn.setEnabled(True)
 
+# ---------------- Kept ready for the time app's ⚙ ----------------
+# Starting this app takes over a second on a Pi before its window appears, too slow for a
+# button. So the time app starts it once with --background: the window is built hidden,
+# SIGUSR1 shows it, and closing hides it again. It is rebuilt before it is shown if what it
+# reads changed meanwhile - a save from the phone, a new audio file - and restarted if an
+# update replaced its code, so what it shows is never older than what is on disk.
+APPLICATIONS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CODE_FILES = [os.path.abspath(__file__)] + glob.glob(os.path.join(APPLICATIONS_DIR, "shared", "*.py"))
+DATA_PATHS = [SETTINGS_INI_FILE, PRAYER_CSV_FILE, DEFAULT_SETTINGS_FILE] + [
+    os.path.join(MAIN_DIR, "audio", event) for event in audio_lists.EVENT_DIRS]
+
+
+def _mtimes(paths):
+    stamps = []
+    for path in paths:
+        try:
+            stamps.append(os.path.getmtime(path))
+        except OSError:
+            stamps.append(None)
+    return tuple(stamps)
+
+
+def code_stamp():
+    return _mtimes(CODE_FILES)
+
+
+def data_stamp():
+    return _mtimes(DATA_PATHS)
+
+
+class BackgroundSettings:
+    def __init__(self, app, present_now, from_desktop=False):
+        self.app = app
+        self.code = code_stamp()
+        self.window = None
+        self.data = None
+        # Built ahead only when it can be built without asking anything: with no valid
+        # prayer-times file the window opens a picker, which belongs on screen.
+        if present_now or csv_is_valid_prayer_format(PRAYER_CSV_FILE):
+            self.build()
+        if present_now:
+            self.present(from_desktop)
+
+    def build(self):
+        if self.window is not None:
+            if self.window.isVisible() or self.window.busy():
+                return
+            self.window.deleteLater()
+        window = ControlApp()
+        window.background = True
+        window.on_hidden = self.hidden
+        window.internet_timer.stop()
+        self.window = window
+        self.data = data_stamp()
+
+    def present(self, from_desktop=False):
+        if code_stamp() != self.code:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "--background",
+                              "--present", *(["--desktop"] if from_desktop else [])],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.app.quit()
+            return
+        if self.window is None or (not self.window.isVisible() and data_stamp() != self.data):
+            self.build()
+        window = self.window
+        window.set_opened_from_desktop(from_desktop)
+        window.showFullScreen()
+        window.raise_()
+        window.activateWindow()
+        window.internet_timer.start(1000)
+        QTimer.singleShot(0, window.refresh_update_status)
+
+    def hidden(self):
+        # Rebuilt from what is on disk now, so the next ⚙ shows it at once.
+        QTimer.singleShot(1500, self.build)
+
+
+FROM_APP_SIGNAL = signal.SIGUSR1
+FROM_DESKTOP_SIGNAL = signal.SIGUSR2
+
+
+def on_show_request(handler):
+    """Calls handler(from_desktop) on the Qt thread each time the time screen's ⚙
+    (SIGUSR1) or the desktop's Settings icon (SIGUSR2) asks. A Python signal handler only
+    runs between bytecodes, so the event loop is kept turning by a short timer."""
+    asked = {FROM_APP_SIGNAL: threading.Event(), FROM_DESKTOP_SIGNAL: threading.Event()}
+    for signum, event in asked.items():
+        signal.signal(signum, lambda *_, event=event: event.set())
+    timer = QTimer()
+
+    def check():
+        for signum, event in asked.items():
+            if event.is_set():
+                event.clear()
+                handler(signum == FROM_DESKTOP_SIGNAL)
+
+    timer.timeout.connect(check)
+    timer.start(100)
+    return timer
+
+
+def other_settings_pids():
+    try:
+        done = subprocess.run(["pgrep", "-f", "^[^ ]*python3 .*scheduler_settings_gui/main\\.py"],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [int(pid) for pid in done.stdout.split() if int(pid) != os.getpid()]
+
+
+def show_running_copy():
+    """The desktop's Settings icon (--open): show the copy the time app keeps ready, as
+    its ⚙ does, rather than build a second one. False when there is none to show.
+
+    A copy from before 1.5.1 has no handler for this signal and is ended by it - one an
+    update left running until the next restart - so each is checked to have lived
+    through it."""
+    signalled = []
+    for pid in other_settings_pids():
+        try:
+            os.kill(pid, FROM_DESKTOP_SIGNAL)
+            signalled.append(pid)
+        except OSError:
+            pass
+    if not signalled:
+        return False
+    time.sleep(0.3)
+    return any(process_alive(pid) for pid in signalled)
+
+
+def process_alive(pid):
+    """Not ended, and not a zombie its parent - the time app - has yet to reap."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
+
+
 # ---------------- Run ----------------
 if __name__ == "__main__":
+    if "--open" in sys.argv:
+        if show_running_copy():
+            sys.exit(0)
+        sys.argv += ["--background", "--present", "--desktop"]
+
+    # Started with the desktop session, the app runs under the qt5ct platform theme, which
+    # sets its own font - Nunito Sans, with no Arabic - on the whole app once the event
+    # loop starts, over the Amiri below. Every label and checkbox that does not name a
+    # family of its own then falls back to DejaVu Sans. Not desktop-settings-aware, qt5ct
+    # leaves fonts and palette alone and still supplies the style.
+    apply_screen_scale(MAIN_DIR)
+    QApplication.setDesktopSettingsAware(False)
     app = QApplication(sys.argv)
+    app.setFont(QFont("Amiri"))
+    app.setDoubleClickInterval(DOUBLE_CLICK_INTERVAL_MS)
+    if "--debug" in sys.argv:
+        start_debug_log(app)
     # The task list on the panel does not read the window icon set above: on Wayland it is
     # handed a window's app_id and nothing else, and for an XWayland window that app_id is
     # the WM_CLASS Qt derives from argv[0] - "main.py", which is also what the countdown
@@ -2045,7 +4231,29 @@ if __name__ == "__main__":
     app.setApplicationName("scheduler_settings_gui")
     app.setDesktopFileName("scheduler_settings_gui")
 
-    window = ControlApp()
-    window.showMaximized()  # Must call setWindowIcon before show()
+    if "--background" in sys.argv:
+        try:
+            background = BackgroundSettings(app, present_now="--present" in sys.argv,
+                                            from_desktop="--desktop" in sys.argv)
+        except StartupAborted:
+            sys.exit(1)
+        show_timer = on_show_request(background.present)
+        sys.exit(app.exec_())
+
+    try:
+        window = ControlApp()
+    except StartupAborted:
+        sys.exit(1)
+
+    def show_window(from_desktop=False):
+        window.set_opened_from_desktop(from_desktop)
+        window.showFullScreen()
+        window.raise_()
+        window.activateWindow()
+
+    # The time app's ⚙ signals whatever Settings is running; one opened from the menu
+    # just comes to the front rather than being ended by a signal it does not handle.
+    show_timer = on_show_request(show_window)
+    show_window()  # Must call setWindowIcon before show()
     sys.exit(app.exec_())
 
