@@ -74,7 +74,7 @@ class VolumeDialog(QWidget):
         self.slider.setStyleSheet(
             f"QSlider::groove:horizontal {{ height: 12px; background: {SECONDARY};"
             " border-radius: 6px; }"
-            f" QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 6px; }}"
+            f" QSlider::add-page:horizontal {{ background: {ACCENT}; border-radius: 6px; }}"
             f" QSlider::handle:horizontal {{ background: {ACCENT}; border: 3px solid {TEXT};"
             " width: 34px; margin: -14px 0; border-radius: 20px; }")
         self.slider.valueChanged.connect(self.moved)

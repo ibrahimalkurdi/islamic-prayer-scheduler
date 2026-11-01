@@ -309,6 +309,16 @@ chk("as does the line under the buttons, at once",
     counter.mute_until.text().startswith("مستوى الصوت ⁦82%⁩ حتى"), True)
 dialog.slider.setValue(60)
 chk("a tap on the groove, with no drag, is set straight away", volume_calls[-1], (60, False))
+from volume_dialog import ACCENT as _ACCENT, SECONDARY as _SECONDARY
+dialog.slider.setValue(20)
+app.processEvents()
+_groove = dialog.slider.grab().toImage()
+_mid = _groove.height() // 2
+chk("right to left like the website: filled from the right edge to the handle, empty past it",
+    (_groove.pixelColor(int(_groove.width() * 0.95), _mid).name(),
+     _groove.pixelColor(int(_groove.width() * 0.05), _mid).name()),
+    (_ACCENT.lower(), _SECONDARY.lower()))
+dialog.slider.setValue(60)
 dialog.keep.setChecked(True)
 chk("ticking the box keeps it", volume_calls[-1], (60, True))
 chk("and the line goes: nothing is waiting to be put back", counter.mute_until.isHidden(), True)
