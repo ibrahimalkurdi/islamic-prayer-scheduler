@@ -181,27 +181,37 @@ button.icon-link {
     margin: 0 0 1rem;
 }
 
-/* The city's name as the list of every city the site carries. */
+/* The city's name as the list of every city the site carries, and the language beside
+   the icons, both a pill. The list fills the pill and the arrow is drawn over it without
+   taking the click, so a tap anywhere on the pill opens it, the arrow included; the ring
+   that shows it is focused is the pill's own, round as it is. */
 .city-pick {
+    position: relative;
     display: inline-flex;
     align-items: center;
-    gap: .25rem;
-    padding: .15rem .6rem;
     border: 1px solid var(--border);
     border-radius: 999px;
     background: var(--card);
 }
 
+.city-pick:focus-within { border-color: var(--accent); }
+
+.city-pick:has(select:focus-visible) { box-shadow: 0 0 0 2px var(--accent); }
+
 .city-pick select {
     appearance: none;
     -webkit-appearance: none;
     border: 0;
+    border-radius: inherit;
     background: transparent;
     color: var(--text);
     font: inherit;
     font-size: 1rem;
-    padding: 0 .1rem;
+    align-self: stretch;
+    padding-block: .15rem;
+    padding-inline: .7rem 1.6rem;
     cursor: pointer;
+    outline: none;
     /* The open list is drawn by the browser, on its own white unless told the page is
        dark - and the names are near-white, so only the highlighted row could be read. */
     color-scheme: dark;
@@ -218,12 +228,50 @@ button.icon-link {
 }
 
 .city-pick svg {
+    position: absolute;
+    inset-inline-end: .6rem;
     width: 14px;
     height: 14px;
     fill: none;
     stroke: currentColor;
     stroke-width: 2.5;
     color: var(--muted);
+    pointer-events: none;
+}
+
+/* Where the browser lets a page draw the open list itself, it is a rounded card in the
+   page's colours rather than the system's square one. Elsewhere - Safari's wheel, for one
+   - the system's own is kept. */
+@supports (appearance: base-select) {
+    .city-pick select,
+    .city-pick ::picker(select) { appearance: base-select; }
+
+    .city-pick select {
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .city-pick select::picker-icon { display: none; }
+
+    .city-pick ::picker(select) {
+        margin-block-start: .4rem;
+        padding: .3rem;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--card);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+    }
+
+    .city-pick option {
+        padding: .3rem .9rem;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+    .city-pick option::checkmark { display: none; }
+
+    .city-pick option:hover,
+    .city-pick option:focus-visible { background: #24324a; outline: none; }
 }
 
 .sub.above-diff { margin-bottom: .6rem; }
