@@ -196,6 +196,10 @@ button.icon-link {
 
 .city-pick:focus-within { border-color: var(--accent); }
 
+/* A phone flashes a square box over whatever is tapped, which shows past the pill's round
+   corners; the pill darkens instead, as the icons beside it do. */
+.city-pick:active { background: #24324a; }
+
 .city-pick:has(select:focus-visible) { box-shadow: 0 0 0 2px var(--accent); }
 
 .city-pick select {
@@ -212,6 +216,7 @@ button.icon-link {
     padding-inline: .7rem 1.6rem;
     cursor: pointer;
     outline: none;
+    -webkit-tap-highlight-color: transparent;
     /* The open list is drawn by the browser, on its own white unless told the page is
        dark - and the names are near-white, so only the highlighted row could be read. */
     color-scheme: dark;
