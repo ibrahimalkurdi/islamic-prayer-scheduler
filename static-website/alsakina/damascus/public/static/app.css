@@ -260,6 +260,10 @@ button.icon-link {
         border-radius: 12px;
         background: var(--card);
         box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+        /* Chrome lays the list out with room for a scrollbar while it places it, and
+           takes the room back a moment later - seen as the list shrinking after it
+           opens. It still scrolls when it is longer than the screen. */
+        scrollbar-width: none;
     }
 
     .city-pick option {
