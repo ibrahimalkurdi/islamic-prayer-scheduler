@@ -13,6 +13,7 @@ Run from the repo root. The browser half is skipped, not failed, where there is 
 import configparser
 import csv
 import json
+import re
 import os
 import shutil
 import struct
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import date as date_cls, timedelta
+from html.parser import HTMLParser
 from zoneinfo import ZoneInfo
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -391,6 +393,46 @@ for other in sakina_build.cities():
         check_true(f"it has {other}'s years", os.path.isdir(os.path.join(ALL_PUBLIC, "data", other)))
 check("no device takes it for its own city's site",
       sakina_build.ALL_URL in sakina_build.public_sites().values(), False)
+
+print("10. every word of Arabic on the public pages has its English beside it")
+
+
+class Untranslated(HTMLParser):
+    """Arabic text or an Arabic aria-label/title on an element that carries no English for
+    it - data-en for the text, data-en-label and data-en-title for the two attributes.
+    Text inside an element that has data-en is that element's, and is covered by it."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.open = []
+        self.found = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        for name, english in (("aria-label", "data-en-label"), ("title", "data-en-title")):
+            if ARABIC.search(attrs.get(name) or "") and english not in attrs:
+                self.found.append(f"<{tag}> {name}={attrs[name]!r}")
+        if tag not in VOID:
+            self.open.append((tag, "data-en" in attrs))
+
+    def handle_endtag(self, tag):
+        while self.open:
+            if self.open.pop()[0] == tag:
+                break
+
+    def handle_data(self, data):
+        if self.open and self.open[-1][0] == "script":
+            return
+        if ARABIC.search(data) and not any(covered for _, covered in self.open):
+            self.found.append(data.strip())
+
+
+ARABIC = re.compile("[\u0600-\u06FF]")
+VOID = {"meta", "link", "input", "br", "img", "path"}
+for page in ("index.html", os.path.join("countdown", "index.html")):
+    reader = Untranslated()
+    reader.feed(open(os.path.join(OUT, page), encoding="utf-8").read())
+    check(f"{page}: nothing left in Arabic only", reader.found, [])
 
 shutil.rmtree(ROOT, ignore_errors=True)
 

@@ -191,9 +191,192 @@ context.localStorage = { getItem() { throw new Error("blocked"); },
 check("blocked storage shows the site's own city", Site.shownCity().id, "berlin");
 check("and refuses the choice rather than reloading into it", Site.chooseCity("damascus"), false);
 
-if (failures.length) {
-    console.log(`FAILED (${failures.length} of ${checks} checks)`);
-    console.log(failures.join("\n"));
-    process.exit(1);
+/* The pages themselves, run as built: a page and app.js in one context, as a browser
+   loads them, over a stand-in document that keeps only what the pages ask of it. The
+   clock is read through Date and the timers are fired by hand, so hours pass in a line.
+   `marked` stands in for the elements a page's markup carries data-en on. */
+const RealDate = Date;
+
+function element() {
+    const classes = new Set();
+    const listeners = {};
+    const node = {
+        children: [], style: {}, dataset: {}, value: "", text: "", attributes: {},
+        classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c),
+                     contains: (c) => classes.has(c),
+                     toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+        get textContent() { return node.text; },
+        set textContent(v) { node.text = v; if (v === "") node.children = []; },
+        setAttribute: (name, value) => { node.attributes[name] = value; },
+        addEventListener: (type, fn) => (listeners[type] = listeners[type] || []).push(fn),
+        fire: (type, event) => (listeners[type] || []).forEach((fn) => fn(event)),
+        appendChild: (child) => { node.children.push(child); return child; },
+        add: (option) => node.children.push(option),
+    };
+    return new Proxy(node, { get: (target, key) => (key in target ? target[key] : () => element()) });
 }
-console.log(`ALL PASS (${checks} checks, ${compared} second-by-second samples)`);
+
+async function openPage(file, at, stored = {}, marked = {}) {
+    const page = { clock: at.getTime(), timers: [], found: {}, storage: new Map(Object.entries(stored)),
+                   reloaded: 0 };
+    class FakeDate extends RealDate {
+        constructor(...args) { if (args.length) super(...args); else super(page.clock); }
+        static now() { return page.clock; }
+    }
+    page.doc = {
+        querySelector: (sel) => (page.found[sel] = page.found[sel] || element()),
+        querySelectorAll: (sel) => marked[sel] || [], createElement: () => element(),
+        addEventListener: () => {}, body: element(), documentElement: element(), title: "",
+    };
+    page.$ = page.doc.querySelector;
+    page.$("#badge-row").classList.add("hidden");
+    page.$("#lang-pick").classList.add("hidden");
+    page.$("#lang-confirm").classList.add("hidden");
+
+    const ctx = {
+        console, URL, URLSearchParams, Date: FakeDate, document: page.doc, Option: function Option(text, value) {
+            Object.assign(this, { text, value });
+        },
+        navigator: {},
+        localStorage: { getItem: (key) => (page.storage.has(key) ? page.storage.get(key) : null),
+                        setItem: (key, value) => page.storage.set(key, String(value)),
+                        removeItem: (key) => page.storage.delete(key) },
+        setInterval: (fn, ms) => page.timers.push({ fn, ms }), setTimeout: () => 0,
+        clearTimeout() {}, clearInterval() {},
+        location: { href: "https://alsakina.pages.dev/", search: "", pathname: "/",
+                    hostname: "alsakina.pages.dev", reload: () => { page.reloaded += 1; } },
+        history: { replaceState: (s, t, url) => {
+            ctx.location.href = String(url);
+            ctx.location.search = new URL(String(url)).search;
+        } },
+        fetch: async (url) => {
+            const file = path.join(sitePath, new URL(url, "https://x/").pathname);
+            if (!fs.existsSync(file)) return { ok: false, status: 404, json: async () => null };
+            const body = fs.readFileSync(file, "utf8");
+            return { ok: true, status: 200, json: async () => JSON.parse(body) };
+        },
+    };
+    ctx.window = ctx;
+    Object.assign(ctx, { DEVICE: false, DATA: "/data/{year}.json", VERSION: "test", CITY: "berlin",
+                         PLACE: "برلين", CITIES: [BERLIN, DAMASCUS] });
+    vm.createContext(ctx);
+    page.ctx = ctx;
+
+    page.settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise(setImmediate); };
+    page.tick = async (when) => {
+        page.clock = when.getTime();
+        page.timers.filter((t) => t.ms === 1000).forEach((t) => t.fn());
+        await page.settle();
+    };
+    page.rows = () => page.$("#rows").children;
+
+    const html = fs.readFileSync(path.join(sitePath, file), "utf8");
+    const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+    vm.runInContext(fs.readFileSync(path.join(sitePath, "static", "app.js"), "utf8"), ctx);
+    vm.runInContext(inline, ctx, { filename: file });
+    await page.settle();
+    return page;
+}
+
+/* 8. The daily list left open across midnight. A list on today goes over to the new day
+   and keeps the period in force painted; a date the reader browsed to stays put. */
+async function pageAcrossMidnight() {
+    const page = await openPage("index.html", new RealDate(2026, 2, 10, 23, 59, 30));
+    const pick = () => page.$("#pick").value;
+    const lit = () => page.rows().filter((r) => r.classList.contains("running")).length;
+    const pill = () => !page.$("#badge-row").classList.contains("hidden");
+
+    check("before midnight the list is on its day", pick(), "2026-03-10");
+    check("with Isha lit", lit(), 1);
+    check("and the pill showing", pill(), true);
+
+    await page.tick(new RealDate(2026, 2, 11, 0, 0, 1));
+    check("after midnight the list has gone over to the new day", pick(), "2026-03-11");
+    check("with the evening's Isha still lit", lit(), 1);
+    check("and the pill still showing", pill(), true);
+    check("the address names no date, so a reload opens on its own day", page.ctx.location.search, "");
+
+    page.$("#pick").fire("change", { target: { value: "2026-03-05" } });
+    await page.settle();
+    await page.tick(new RealDate(2026, 2, 12, 0, 0, 1));
+    check("a browsed date stays where it was put", pick(), "2026-03-05");
+    check("and stays in the address", page.ctx.location.search, "?date=2026-03-05");
+
+    page.$("#today").fire("click", {});
+    await page.settle();
+    await page.tick(new RealDate(2026, 2, 13, 13, 0, 0));
+    check("a list left on today and looked at the next afternoon is on that day", pick(), "2026-03-13");
+    check("with Dhuhr lit", lit(), 1);
+    check("and the pill showing", pill(), true);
+}
+
+/* 9. English. Arabic until a phone chooses otherwise, asked first; then both pages read
+   in English, left to right, with the prayers and cities under their English names. */
+async function pagesInEnglish() {
+    const names = (page) => page.rows().map((row) => row.children[0].textContent).join(" · ");
+    const noon = new RealDate(2026, 2, 10, 13, 0, 0);
+
+    const arabic = await openPage("index.html", noon);
+    check("Arabic at first", arabic.$("#lang").value, "ar");
+    check("the language is offered", arabic.$("#lang-pick").classList.contains("hidden"), false);
+    check("the prayers under their Arabic names", names(arabic),
+          "صلاة الفجر · الشروق · صلاة الضحى · صلاة الظهر · صلاة العصر · صلاة المغرب · صلاة العشاء");
+    check("and the city", arabic.$("#place").textContent, "برلين");
+
+    arabic.$("#lang").value = "en";
+    arabic.$("#lang").fire("change", {});
+    check("choosing English asks first", arabic.$("#lang-confirm").classList.contains("hidden"), false);
+    check("and changes nothing yet", arabic.storage.size + arabic.reloaded, 0);
+    arabic.$("#lang-no").fire("click", {});
+    check("no closes the question", arabic.$("#lang-confirm").classList.contains("hidden"), true);
+    check("and puts the list back on Arabic", arabic.$("#lang").value, "ar");
+    check("still nothing stored", arabic.storage.size + arabic.reloaded, 0);
+
+    arabic.$("#lang").value = "en";
+    arabic.$("#lang").fire("change", {});
+    arabic.$("#lang-yes").fire("click", {});
+    check("yes keeps English on the phone", arabic.storage.get("sakina-lang"), "en");
+    check("and reloads the page in it", arabic.reloaded, 1);
+
+    const title = element();
+    title.dataset.en = "Prayer Times";
+    const english = await openPage("index.html", noon, { "sakina-lang": "en" }, { "[data-en]": [title] });
+    check("the page reads left to right", english.doc.documentElement.dir, "ltr");
+    check("in English", english.doc.documentElement.lang, "en");
+    check("its text swapped for the English beside it", title.innerHTML, "Prayer Times");
+    check("the list shows English", english.$("#lang").value, "en");
+    check("the prayers under their English names", names(english),
+          "Fajr · Sunrise · Duha · Dhuhr · Asr · Maghrib · Isha");
+    check("the city under its English name", english.$("#place").textContent, "Berlin");
+
+    english.$("#lang").value = "ar";
+    english.$("#lang").fire("change", {});
+    english.$("#lang-yes").fire("click", {});
+    check("going back to Arabic stores nothing", english.storage.size, 0);
+
+    const countdown = await openPage("countdown/index.html", noon, { "sakina-lang": "en" });
+    check("the countdown follows", countdown.$("#name").textContent, "Dhuhr");
+
+    const Site9 = vm.runInContext("Site", english.ctx);
+    english.storage.set("sakina-lang", "en");
+    check("a prayer the table does not name keeps its own name",
+          Site9.prayerName({ name: "x", display: "صلاة" }), "صلاة");
+    check("a city of two words", Site9.cityName({ id: "new-york", place: "نيويورك" }), "New York");
+    english.ctx.DEVICE = true;
+    check("a device's own pages stay Arabic", Site9.lang(), "ar");
+    english.ctx.DEVICE = false;
+    english.ctx.localStorage = { getItem() { throw new Error("blocked"); },
+                                 setItem() { throw new Error("blocked"); },
+                                 removeItem() { throw new Error("blocked"); } };
+    check("blocked storage reads Arabic", Site9.lang(), "ar");
+    check("and refuses the choice rather than reloading into it", Site9.chooseLang("en"), false);
+}
+
+pageAcrossMidnight().then(pagesInEnglish).catch((e) => failures.push(`  the page did not run: ${e.stack}`)).then(() => {
+    if (failures.length) {
+        console.log(`FAILED (${failures.length} of ${checks} checks)`);
+        console.log(failures.join("\n"));
+        process.exit(1);
+    }
+    console.log(`ALL PASS (${checks} checks, ${compared} second-by-second samples)`);
+});

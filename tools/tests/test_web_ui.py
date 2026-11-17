@@ -760,7 +760,7 @@ check_true("a finger iPhone Safari cancels after it was held still opens the vol
            and 'addEventListener("touchstart"' not in page)
 check_true("the volume is a slider with a box beside it to keep it",
            '<input type="range" id="volume" min="0" max="100"' in page
-           and '<input type="checkbox" id="volume-keep">تثبيت هذا المستوى دائمًا' in page)
+           and '<input type="checkbox" id="volume-keep"><span data-en="Always keep this level">تثبيت هذا المستوى دائمًا</span>' in page)
 check_true("the finger that opened it, lifted over the backdrop, does not close it again",
            "if (event.target === panel && backdropPressed) close();" in page)
 check_true("set when the finger lifts off the slider, kept only when the box is ticked",
@@ -770,7 +770,7 @@ check_true("a percentage in Arabic text stays one left-to-right run, not %50",
            "const percent = (level) => Site.ltr(`${level}%`);" in page
            and "`${state.restore}%" not in page and "`${state.default}%" not in page)
 check_true("a button puts the default back, and keeps it",
-           '<button class="ghost" id="volume-reset">إعادة إلى &#x2066;50%&#x2069;</button>' in page
+           '<button class="ghost" id="volume-reset" data-en="Reset to 50%">إعادة إلى &#x2066;50%&#x2069;</button>' in page
            and 'reset.addEventListener("click", () => setVolume(Number(reset.dataset.level || 50), true));'
            in page)
 check_true("under the speaker, when a volume set for a while goes back, as the mute's line does",
