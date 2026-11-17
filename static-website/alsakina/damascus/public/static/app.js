@@ -82,7 +82,7 @@ const Site = (() => {
         const baked = await bakedYear(when.getFullYear());
         const key = `${when.getMonth() + 1}-${when.getDate()}`;
         const periods = baked && baked.days[key];
-        if (!periods) throw new Error("لا توجد مواقيت لهذا اليوم");
+        if (!periods) throw new Error(tr("لا توجد مواقيت لهذا اليوم", "No prayer times for this day"));
         return {
             date: isoDate(when),
             periods: periods,
@@ -115,6 +115,13 @@ const Site = (() => {
             if (start && end && start <= at && at < end) return period;
         }
         return null;
+    }
+
+    /* The date a list should show once the clock has moved on from `was`. A list left on
+       the day that was today goes over to the new one at midnight, as the device's own
+       list does; a date the reader browsed to stays where it was put. */
+    function dateToShow(shown, was, at) {
+        return shown === was ? isoDate(at) : shown;
     }
 
     /* Prayer times read as a 12-hour clock, the way they are spoken here - the same
@@ -307,6 +314,61 @@ const Site = (() => {
         window.PLACE = city.place;
     }
 
+    /* The public pages can be read in English instead, chosen on the daily list and kept
+       on the phone for every app on it. Arabic is never stored, so it is what a phone
+       that never chose sees. A device's own pages are Arabic only. */
+    const LANG_KEY = "sakina-lang";
+
+    function lang() {
+        if (window.DEVICE) return "ar";
+        try {
+            return localStorage.getItem(LANG_KEY) === "en" ? "en" : "ar";
+        } catch (e) {
+            return "ar";
+        }
+    }
+
+    function chooseLang(code) {
+        try {
+            if (code === "en") localStorage.setItem(LANG_KEY, "en");
+            else localStorage.removeItem(LANG_KEY);
+        } catch (e) {
+            return false;
+        }
+        return true;
+    }
+
+    const tr = (ar, en) => (lang() === "en" ? en : ar);
+
+    /* The data names each period in Arabic; these are the names the English pages use. */
+    const PRAYER_EN = {
+        "الفجر": "Fajr", "الشروق": "Sunrise", "الضحى": "Duha", "الظهر": "Dhuhr",
+        "العصر": "Asr", "المغرب": "Maghrib", "العشاء": "Isha",
+    };
+
+    const prayerName = (period) => tr(period.display, PRAYER_EN[period.name] || period.display);
+
+    const cityName = (city) => tr(city.place, city.id.split("-")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" "));
+
+    const placeName = () => (shownCity() ? cityName(shownCity()) : window.PLACE);
+
+    /* The pages are written in Arabic, each piece of text carrying its English beside it:
+       data-en for the text, data-en-label and data-en-title for what a reader is told
+       about an icon. Run once, before anything else is drawn. */
+    function applyLang() {
+        if (lang() !== "en" || typeof document === "undefined") return;
+        document.documentElement.lang = "en";
+        document.documentElement.dir = "ltr";
+        for (const node of document.querySelectorAll("[data-en]")) node.innerHTML = node.dataset.en;
+        for (const node of document.querySelectorAll("[data-en-label]")) {
+            node.setAttribute("aria-label", node.dataset.enLabel);
+        }
+        for (const node of document.querySelectorAll("[data-en-title]")) {
+            node.setAttribute("title", node.dataset.enTitle);
+        }
+    }
+
     /* say() for a .note element: the sentence, and the link under it when there is one. */
     function noteSayer(selector, extraClass = "") {
         return (kind, text, target, linkText) => {
@@ -323,12 +385,14 @@ const Site = (() => {
     }
 
     return { pad, isoDate, parseLocal, now, dayData, spanAt, runningPeriod, eveningBefore,
-             clock12, ltr, fail, json, ownerHost, noteSayer, canAskDevice,
+             dateToShow, clock12, ltr, fail, json, ownerHost, noteSayer, canAskDevice,
              isIosSafari, installedApp, deviceAnswers, deviceJson, localNetworkAllowed,
-             devicePage, backToAppHint, cities, homeCity, shownCity, chooseCity, applyCity };
+             devicePage, backToAppHint, cities, homeCity, shownCity, chooseCity, applyCity,
+             lang, chooseLang, tr, prayerName, cityName, placeName, applyLang };
 })();
 
 Site.applyCity();
+Site.applyLang();
 Site.backToAppHint();
 
 /* A static copy keeps working with no network: sw.js, written by the static build, holds

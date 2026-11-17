@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>اوقات الصلاة</title>
+<title data-en="Prayer Times">اوقات الصلاة</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="/static/icon-32.png" sizes="32x32">
 <link rel="icon" href="/static/icon-256.png" sizes="256x256">
@@ -15,16 +15,23 @@
 <body>
 
 <header class="top">
-    <h1>اوقات الصلاة</h1>
+    <h1 data-en="Prayer Times">اوقات الصلاة</h1>
     <nav class="top-icons">
+        <span class="city-pick lang-pick hidden" id="lang-pick"><select id="lang"
+              aria-label="اللغة" data-en-label="Language"><option value="ar">AR</option><option
+              value="en">EN</option></select><svg viewBox="0 0 24 24" aria-hidden="true"><path
+              d="M6 9l6 6 6-6"/></svg></span>
         <button class="icon-link speaker hidden" id="mute" type="button" aria-label="كتم الصوت"
-                aria-haspopup="dialog" title="اضغط لكتم الصوت، واضغط مطوّلًا لضبط مستواه"></button>
+                data-en-label="Mute" aria-haspopup="dialog"
+                title="اضغط لكتم الصوت، واضغط مطوّلًا لضبط مستواه"
+                data-en-title="Tap to mute, press and hold to set the volume"></button>
         <a class="icon-link hidden" id="to-settings" href="settings/" aria-label="الاعدادات"
-           title="الاعدادات"><svg viewBox="0 0 24 24" aria-hidden="true">
+           title="الاعدادات" data-en-label="Settings" data-en-title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
         </svg></a>
         <a class="icon-link" href="countdown/" aria-label="الوقت المتبقي للصلاة"
-           title="الوقت المتبقي للصلاة"><svg viewBox="0 0 24 24" aria-hidden="true">
+           title="الوقت المتبقي للصلاة" data-en-label="Countdown"
+           data-en-title="Countdown"><svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/>
         </svg></a>
     </nav>
@@ -33,17 +40,30 @@
 <p class="volume-state hidden" id="volume-state"></p>
 <div class="note hidden" id="speaker-note"></div>
 <p class="sub hidden" id="place"></p>
-<p class="city-diff hidden" id="city-diff">هذه المدينة مختلفة عن المضبوطة في الجهاز. للإبقاء عليها نفسها بدّل إلى <a href="#" id="city-home"></a></p>
+<p class="city-diff hidden" id="city-diff"
+   data-en="This city differs from the one set on the device. To keep them the same, switch to <a href=&quot;#&quot; id=&quot;city-home&quot;></a>">هذه المدينة مختلفة عن المضبوطة في الجهاز. للإبقاء عليها نفسها بدّل إلى <a href="#" id="city-home"></a></p>
 
 <div class="guide confirm hidden" id="city-confirm" role="dialog" aria-modal="true"
      aria-labelledby="city-confirm-title">
     <div class="guide-card">
-        <h2 id="city-confirm-title">تغيير المدينة</h2>
-        <p>هل تريد تغيير المدينة من <b id="city-from"></b> إلى <b id="city-to"></b>؟</p>
-        <p class="confirm-note hidden" id="city-device-note">ملاحظة: هذا التغيير لا يغيّر ملف الإعدادات في الجهاز، ولتغييره يجب تعديله من الجهاز نفسه.</p>
+        <h2 id="city-confirm-title" data-en="Change city">تغيير المدينة</h2>
+        <p data-en="Change the city from <b id=&quot;city-from&quot;></b> to <b id=&quot;city-to&quot;></b>?">هل تريد تغيير المدينة من <b id="city-from"></b> إلى <b id="city-to"></b>؟</p>
+        <p class="confirm-note hidden" id="city-device-note" data-en="Note: this does not change the device's settings file; to change that, change it on the device itself.">ملاحظة: هذا التغيير لا يغيّر ملف الإعدادات في الجهاز، ولتغييره يجب تعديله من الجهاز نفسه.</p>
         <div class="confirm-actions">
-            <button class="yes" id="city-yes">نعم</button>
-            <button class="ghost" id="city-no">لا</button>
+            <button class="yes" id="city-yes" data-en="Yes">نعم</button>
+            <button class="ghost" id="city-no" data-en="No">لا</button>
+        </div>
+    </div>
+</div>
+
+<div class="guide confirm hidden" id="lang-confirm" role="dialog" aria-modal="true"
+     aria-labelledby="lang-confirm-title">
+    <div class="guide-card">
+        <h2 id="lang-confirm-title" data-en="Change language">تغيير اللغة</h2>
+        <p data-en="Switch the page from English to Arabic?">هل تريد تغيير لغة الصفحة من العربية إلى الإنجليزية؟</p>
+        <div class="confirm-actions">
+            <button class="yes" id="lang-yes" data-en="Yes">نعم</button>
+            <button class="ghost" id="lang-no" data-en="No">لا</button>
         </div>
     </div>
 </div>
@@ -51,35 +71,36 @@
 <div class="guide confirm hidden" id="volume-panel" role="dialog" aria-modal="true"
      aria-labelledby="volume-title">
     <div class="guide-card">
-        <h2 id="volume-title">مستوى الصوت</h2>
+        <h2 id="volume-title" data-en="Volume">مستوى الصوت</h2>
         <div class="volume-row">
-            <input type="range" id="volume" min="0" max="100" step="1" aria-label="مستوى الصوت">
+            <input type="range" id="volume" min="0" max="100" step="1" aria-label="مستوى الصوت" data-en-label="Volume">
             <output id="volume-value" for="volume">--%</output>
         </div>
-        <label class="volume-keep"><input type="checkbox" id="volume-keep">تثبيت هذا المستوى دائمًا</label>
+        <label class="volume-keep"><input type="checkbox" id="volume-keep"><span data-en="Always keep this level">تثبيت هذا المستوى دائمًا</span></label>
         <p class="confirm-note" id="volume-note"></p>
         <div class="confirm-actions">
-            <button class="ghost" id="volume-reset">إعادة إلى &#x2066;50%&#x2069;</button>
-            <button class="ghost" id="volume-close">إغلاق</button>
+            <button class="ghost" id="volume-reset" data-en="Reset to 50%">إعادة إلى &#x2066;50%&#x2069;</button>
+            <button class="ghost" id="volume-close" data-en="Close">إغلاق</button>
         </div>
     </div>
 </div>
 
 <div class="install app-install hidden" id="app-install">
-    <button class="install-button" id="app-install-button">ثبّت التطبيق</button>
+    <button class="install-button" id="app-install-button" data-en="Install the app">ثبّت التطبيق</button>
 </div>
 
 <div class="guide hidden" id="ios-guide" role="dialog" aria-modal="true"
      aria-labelledby="ios-guide-title">
     <div class="guide-card">
-        <h2 id="ios-guide-title">ثبّت التطبيق في خطوتين</h2>
+        <h2 id="ios-guide-title" data-en="Install the app in two steps">ثبّت التطبيق في خطوتين</h2>
         <ol>
             <li>
                 <span class="guide-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 3l-4 4 1.4 1.4L11 6.8V15h2V6.8l1.6 1.6L16 7z"/>
                     <path d="M6 10h3v2H7v8h10v-8h-2v-2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1z"/>
                 </svg></span>
-                <span>اضغط زر <b>المشاركة</b> في أسفل Safari.
+                <span data-en="Tap <b>Share</b> at the bottom of Safari.
+                    <small>If it is not there, tap <b>⋯</b> first.</small>">اضغط زر <b>المشاركة</b> في أسفل Safari.
                     <small>إن لم تجده، فاضغط <b>⋯</b> أولًا.</small></span>
             </li>
             <li>
@@ -87,11 +108,12 @@
                     <path d="M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/>
                     <path d="M11 7.5h2V11h3.5v2H13v3.5h-2V13H7.5v-2H11z"/>
                 </svg></span>
-                <span>اختر <b>إضافة إلى الشاشة الرئيسية</b>، ثم <b>إضافة</b>.
+                <span data-en="Choose <b>Add to Home Screen</b>, then <b>Add</b>.
+                    <small>If it is not there, scroll the list down.</small>">اختر <b>إضافة إلى الشاشة الرئيسية</b>، ثم <b>إضافة</b>.
                     <small>إن لم تظهر، فمرّر القائمة إلى الأسفل.</small></span>
             </li>
         </ol>
-        <button class="ghost" id="ios-guide-close">حسنًا</button>
+        <button class="ghost" id="ios-guide-close" data-en="OK">حسنًا</button>
     </div>
     <div class="guide-arrow" aria-hidden="true"><svg viewBox="0 0 24 24">
         <path d="M11 4h2v12l4.5-4.5 1.4 1.4L12 19.8l-6.9-6.9 1.4-1.4L11 16z"/>
@@ -100,7 +122,7 @@
 
 <div class="list-nav">
     <input type="date" id="pick">
-    <button class="ghost" id="today">اليوم</button>
+    <button class="ghost" id="today" data-en="Today">اليوم</button>
 </div>
 
 <div class="badge-row hidden" id="badge-row"><span class="badge" id="badge">--:--</span></div>
@@ -109,8 +131,8 @@
 <div class="note bad hidden" id="error"></div>
 
 <div class="install hidden" id="install">
-    <a class="install-button" id="install-link" href="#">ثبّت التطبيق على هاتفك</a>
-    <p>يفتح مواقيت الصلاة والعداد حتى خارج شبكة الواي فاي، والإعدادات من داخلها.</p>
+    <a class="install-button" id="install-link" href="#" data-en="Install the app on your phone">ثبّت التطبيق على هاتفك</a>
+    <p data-en="Opens the prayer times and the countdown even away from the wifi, and the settings on it.">يفتح مواقيت الصلاة والعداد حتى خارج شبكة الواي فاي، والإعدادات من داخلها.</p>
 </div>
 
 <p class="version hidden" id="version"></p>
@@ -127,9 +149,9 @@ function requestedDate() {
 
 if (window.PLACE) {
     const place = document.querySelector("#place");
-    place.textContent = window.PLACE;
+    place.textContent = Site.placeName();
     place.classList.remove("hidden");
-    document.title = `${document.title} - ${window.PLACE}`;
+    document.title = `${document.title} - ${Site.placeName()}`;
 }
 
 /* The name becomes a list of every city the site carries. Choosing one asks first, then
@@ -142,9 +164,9 @@ if (Site.cities().length > 1) {
     const fromDevice = Boolean(Site.ownerHost());
     const select = document.createElement("select");
     select.id = "city";
-    select.setAttribute("aria-label", "المدينة");
+    select.setAttribute("aria-label", Site.tr("المدينة", "City"));
     for (const city of Site.cities()) {
-        select.add(new Option(city.place, city.id, false, city === current));
+        select.add(new Option(Site.cityName(city), city.id, false, city === current));
     }
     const pick = document.createElement("span");
     pick.className = "city-pick";
@@ -162,9 +184,9 @@ if (Site.cities().length > 1) {
     };
     select.addEventListener("change", () => {
         if (select.value === current.id) return;
-        document.querySelector("#city-from").textContent = current.place;
+        document.querySelector("#city-from").textContent = Site.cityName(current);
         document.querySelector("#city-to").textContent =
-            Site.cities().find((city) => city.id === select.value).place;
+            Site.cityName(Site.cities().find((city) => city.id === select.value));
         confirm.classList.remove("hidden");
     });
     document.querySelector("#city-yes").addEventListener("click", () => show(select.value));
@@ -178,7 +200,7 @@ if (Site.cities().length > 1) {
         document.querySelector("#city-device-note").classList.remove("hidden");
         if (current !== home) {
             const back = document.querySelector("#city-home");
-            back.textContent = home.place;
+            back.textContent = Site.cityName(home);
             back.addEventListener("click", (event) => {
                 event.preventDefault();
                 show(home.id);
@@ -189,7 +211,34 @@ if (Site.cities().length > 1) {
     }
 }
 
+/* The language beside the icons, on the public pages only. Like the city, choosing it
+   asks first, then reloads the page in it. */
+if (!window.DEVICE) {
+    const current = Site.lang();
+    const select = document.querySelector("#lang");
+    const confirm = document.querySelector("#lang-confirm");
+    select.value = current;
+    document.querySelector("#lang-pick").classList.remove("hidden");
+    const keep = () => {
+        select.value = current;
+        confirm.classList.add("hidden");
+    };
+    select.addEventListener("change", () => {
+        if (select.value !== current) confirm.classList.remove("hidden");
+    });
+    document.querySelector("#lang-yes").addEventListener("click", () => {
+        if (Site.chooseLang(select.value)) location.reload();
+        else keep();
+    });
+    document.querySelector("#lang-no").addEventListener("click", keep);
+    confirm.addEventListener("click", (event) => { if (event.target === confirm) keep(); });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !confirm.classList.contains("hidden")) keep();
+    });
+}
+
 let shown = requestedDate();
+let today = Site.isoDate(Site.now());
 /* Kept from the last render so the badge can tick every second without asking the device
    for anything, and so a colour change can be noticed as it happens rather than at the
    next full redraw. */
@@ -226,7 +275,7 @@ async function render() {
         if (style) {
             row.style.background = style.flat
                 ? style.from
-                : `linear-gradient(to left, ${style.from}, ${style.to})`;
+                : `linear-gradient(to ${Site.tr("left", "right")}, ${style.from}, ${style.to})`;
             row.style.color = style.text;
             row.style.borderColor = style.border;
             row.style.boxShadow = `0 0 16px ${style.glow}`;
@@ -239,14 +288,14 @@ async function render() {
 
         const name = document.createElement("span");
         name.className = "name";
-        name.textContent = period.display;
+        name.textContent = Site.prayerName(period);
         row.appendChild(name);
 
         const right = document.createElement("span");
         if (span && span.makrooh && running) {
             const tag = document.createElement("span");
             tag.className = "tag";
-            tag.textContent = day.makrooh_label;
+            tag.textContent = Site.tr(day.makrooh_label, "Makrooh");
             right.appendChild(tag);
             right.appendChild(document.createTextNode(" "));
         }
@@ -294,7 +343,7 @@ function paintBadge(now) {
 
     const style = currentDay.cards.badge[state.color];
     badge.style.background =
-        `linear-gradient(to bottom left, ${style.from}, ${style.to})`;
+        `linear-gradient(to bottom ${Site.tr("left", "right")}, ${style.from}, ${style.to})`;
     badge.style.borderColor = style.border;
     badge.style.color = style.text;
     badge.style.boxShadow = `0 0 26px ${style.glow}`;
@@ -304,7 +353,8 @@ function paintBadge(now) {
 function show(date) {
     shown = date;
     const url = new URL(location.href);
-    url.searchParams.set("date", date);
+    if (date === Site.isoDate(Site.now())) url.searchParams.delete("date");
+    else url.searchParams.set("date", date);
     history.replaceState(null, "", url);
     render().catch((e) => Site.fail(e.message));
 }
@@ -321,9 +371,17 @@ render().catch((e) => Site.fail(e.message));
 /* The badge counts down in minutes, so it is repainted every second from the data
    already in hand - no request. The same tick notices when the running period or its
    colour has changed and redraws the list then, which is what keeps the highlight as
-   sharp as the app's without polling the device for it. */
+   sharp as the app's without polling the device for it - and turns a list left on today
+   over to the new day at midnight, or it would stay on the day just ended with nothing
+   in force. */
 setInterval(() => {
     const now = Site.now();
+    const next = Site.dateToShow(shown, today, now);
+    today = Site.isoDate(now);
+    if (next !== shown) {
+        show(next);
+        return;
+    }
     const state = runningState(now);
     const key = state ? `${state.period.name}/${state.color}` : null;
 
@@ -395,17 +453,20 @@ function showMute(state) {
     const button = document.querySelector("#mute");
     button.innerHTML = state.muted ? SPEAKER_OFF : SPEAKER_ON;
     button.classList.toggle("muted", !!state.muted);
-    button.setAttribute("aria-label", state.muted ? "إلغاء كتم الصوت" : "كتم الصوت");
+    button.setAttribute("aria-label", state.muted ? Site.tr("إلغاء كتم الصوت", "Unmute")
+                                                  : Site.tr("كتم الصوت", "Mute"));
 
     let label = "";
     if (state.muted && state.flag_until) {
-        label = `الصوت مكتوم حتى ${Site.ltr(Site.clock12(Site.parseLocal(state.flag_until)))}`;
+        const until = Site.ltr(Site.clock12(Site.parseLocal(state.flag_until)));
+        label = Site.tr(`الصوت مكتوم حتى ${until}`, `Muted until ${until}`);
     } else if (state.muted) {
-        label = "الصوت مكتوم";
+        label = Site.tr("الصوت مكتوم", "Muted");
     }
     const line = document.querySelector("#mute-state");
     if (!state.sink_reachable) {
-        label += (label ? " — " : "") + "تعذّر الوصول إلى مكبر الصوت";
+        label += (label ? " — " : "") + Site.tr("تعذّر الوصول إلى مكبر الصوت",
+                                                "The speaker cannot be reached");
         /* wpctl's own line, in English: in the title for whoever can act on it, and in
            logs/web_ui.log. */
         line.title = state.reason || "";
@@ -424,8 +485,10 @@ const percent = (level) => Site.ltr(`${level}%`);
 function showVolumeLine(state) {
     const line = document.querySelector("#volume-state");
     const until = state && state.reachable && state.until;
+    const at = until && Site.ltr(Site.clock12(Site.parseLocal(state.until)));
     line.textContent = until
-        ? `مستوى الصوت ${percent(state.volume)} حتى ${Site.ltr(Site.clock12(Site.parseLocal(state.until)))}`
+        ? Site.tr(`مستوى الصوت ${percent(state.volume)} حتى ${at}`,
+                  `Volume ${percent(state.volume)} until ${at}`)
         : "";
     line.classList.toggle("hidden", !until);
 }
@@ -433,7 +496,8 @@ function showVolumeLine(state) {
 function showVolume(state) {
     showVolumeLine(state);
     if (state.default != null) {
-        document.querySelector("#volume-reset").textContent = `إعادة إلى ${percent(state.default)}`;
+        document.querySelector("#volume-reset").textContent =
+            Site.tr(`إعادة إلى ${percent(state.default)}`, `Reset to ${percent(state.default)}`);
         document.querySelector("#volume-reset").dataset.level = state.default;
     }
     const slider = document.querySelector("#volume");
@@ -443,24 +507,29 @@ function showVolume(state) {
         !state.reachable;
     if (!state.reachable) {
         document.querySelector("#volume-value").textContent = "--%";
-        note.textContent = "تعذّر الوصول إلى مكبر الصوت";
+        note.textContent = Site.tr("تعذّر الوصول إلى مكبر الصوت", "The speaker cannot be reached");
         return;
     }
     slider.value = state.volume;
     document.querySelector("#volume-value").textContent = `${state.volume}%`;
     if (state.until) {
-        note.textContent = `يعود إلى ${percent(state.restore)} عند ` +
-            Site.ltr(Site.clock12(Site.parseLocal(state.until)));
+        const at = Site.ltr(Site.clock12(Site.parseLocal(state.until)));
+        note.textContent = Site.tr(`يعود إلى ${percent(state.restore)} عند ${at}`,
+                                   `Goes back to ${percent(state.restore)} at ${at}`);
     } else {
-        note.textContent = `أي تغيير يبقى ${state.minutes} دقيقة ثم يعود المستوى السابق، ` +
-            "إلا إذا حدّدت «تثبيت هذا المستوى دائمًا».";
+        note.textContent = Site.tr(
+            `أي تغيير يبقى ${state.minutes} دقيقة ثم يعود المستوى السابق، ` +
+                "إلا إذا حدّدت «تثبيت هذا المستوى دائمًا».",
+            `Any change lasts ${state.minutes} minutes, then the level before comes back, ` +
+                "unless you tick “Always keep this level”.");
     }
 }
 
 /* `call(path, options)` reaches the device: from its own page, or from the app it handed
    out. `unreachable(error)` is told when a tap's request fails, `reached()` when it
    succeeds. */
-const VOLUME_NEEDS_UPDATE = "ضبط مستوى الصوت غير متاح على هذا الجهاز قبل تحديث برنامجه.";
+const VOLUME_NEEDS_UPDATE = Site.tr("ضبط مستوى الصوت غير متاح على هذا الجهاز قبل تحديث برنامجه.",
+                                    "Setting the volume needs this device's software updated first.");
 
 function speaker(call, unreachable, reached = () => {}) {
     const button = document.querySelector("#mute");
@@ -606,14 +675,15 @@ if (window.DEVICE) {
     const button = document.querySelector("#mute");
     if (Site.canAskDevice()) {
         const say = Site.noteSayer("#speaker-note");
-        const away = "أنت خارج شبكة الواي فاي الخاصة بالجهاز، التحكم في الصوت غير متاح.";
+        const away = Site.tr("أنت خارج شبكة الواي فاي الخاصة بالجهاز، التحكم في الصوت غير متاح.",
+                             "You are away from the device's wifi, so the sound cannot be controlled.");
         let polling = null;
         const refresh = speaker((path, options) => Site.deviceJson(owner, path, options),
             async () => {
                 /* A device that answers but refused is on a release from before the app
                    could reach it: its own page still can. */
                 if (await Site.deviceAnswers(owner)) location.href = target;
-                else say("bad", away, target, "حاول فتحها على أي حال");
+                else say("bad", away, target, Site.tr("حاول فتحها على أي حال", "Try opening it anyway"));
             },
             () => follow());
         function follow() {
@@ -676,8 +746,8 @@ if (window.DEVICE) {
     }).catch(() => {});
 }
 
-/* And a full redraw on the minute regardless, so a day that rolls over at midnight is
-   picked up even though nothing about the running period changed. */
+/* And a full redraw on the minute regardless, so a list that is on today is redrawn
+   even when nothing about the running period changed. */
 setInterval(() => {
     if (shown === Site.isoDate(Site.now())) render().catch(() => {});
     refreshVersion();

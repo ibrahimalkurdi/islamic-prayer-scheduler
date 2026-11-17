@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>الوقت المتبقي للصلاة</title>
+<title data-en="Countdown">الوقت المتبقي للصلاة</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="/static/icon-32.png" sizes="32x32">
 <link rel="icon" href="/static/icon-256.png" sizes="256x256">
@@ -15,7 +15,8 @@
 <body class="full">
 
 <main class="counter" id="counter">
-    <a class="corner back-corner" href="../" aria-label="اوقات الصلاة">→</a>
+    <a class="corner back-corner" href="../" aria-label="اوقات الصلاة"
+       data-en-label="Prayer Times" data-en="←">→</a>
 
     <div class="notice" id="notice"></div>
     <div class="name" id="name"></div>
@@ -96,7 +97,7 @@ function paint(at) {
     const minutes = Math.floor((remaining % 3600) / 60);
     document.querySelector("#digits").textContent =
         `${Site.pad(hours)}:${Site.pad(minutes)}`;
-    document.querySelector("#name").textContent = period.display;
+    document.querySelector("#name").textContent = Site.prayerName(period);
 
     const span = Site.spanAt(period, now);
     const color = span ? span.color : "beige";
@@ -106,7 +107,8 @@ function paint(at) {
     counter.style.backgroundColor = day.countdown.fill[color] || day.countdown.default;
     counter.style.color = day.countdown.text;
     document.querySelector("#notice").textContent =
-        span && span.makrooh ? day.makrooh_notice : "";
+        span && span.makrooh
+            ? Site.tr(day.makrooh_notice, "(Makrooh time for voluntary prayers)") : "";
 
     if (!refreshAt) refreshAt = nextBoundary(now);
 }
